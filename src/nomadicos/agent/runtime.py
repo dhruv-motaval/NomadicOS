@@ -296,9 +296,30 @@ class AgentRuntime:
                     # Chat, not a task: nothing effectful happens, so the Security
                     # Gate is not involved (I5 untouched — there is no action to
                     # mediate). The model answers directly, without tool proposals.
+                    # When context exists (history/memory), synthesis quality
+                    # matters more than speed — escalate to the reasoning tier;
+                    # a 4B model parrots context instead of reading it.
+                    chat_model = model
+                    if getattr(self, "_conversation_log", None) or self._memory_context:
+                        try:
+                            decision = await self.selector_agent.select_for_role(
+                                goal, "synthesizer"
+                            )
+                            if decision.model_id != model_id:
+                                chat_model = model_latency.wrap(
+                                    await self.handler_agent.ensure_model(
+                                        decision.model_id
+                                    )
+                                )
+                                logger.info(
+                                    "chat escalated to %s for context synthesis",
+                                    decision.model_id,
+                                )
+                        except Exception:  # noqa: BLE001 — escalation best effort
+                            logger.debug("chat escalation skipped", exc_info=True)
                     budget.check_model_call()
                     reply = await self._chat_reply(
-                        model, goal, getattr(self, "_conversation_log", None)
+                        chat_model, goal, getattr(self, "_conversation_log", None)
                     )
                     status = TaskStatus.SUCCESS
                     return
@@ -622,9 +643,10 @@ class AgentRuntime:
         )
         if conversation:
             prompt += (
-                "Recent conversation with the owner (use this for follow-up "
-                "references like 'that file'; if the owner asks where a file "
-                "is and a path appears below, state the exact full path):\n"
+                "Recent conversation with the owner (this is your memory - use "
+                "the FACTS in it to answer; if the owner asks where a file is "
+                "and a path appears below, state the exact full path; do not "
+                "invent paths):\n"
                 + _format_conversation(conversation)
                 + "\n"
             )
