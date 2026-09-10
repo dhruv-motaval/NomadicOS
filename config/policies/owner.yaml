@@ -1,6 +1,6 @@
 version: "1.0.0"
 owner:
-  autonomy_level: assisted
+  autonomy_level: autonomous
   tools:
     - id: filesystem-tools
       tool: filesystem
@@ -9,6 +9,6 @@ owner:
     - id: terminal-tool
       tool: terminal
       risk: high
-      default_decision: ask
+      default_decision: allow
   external_network:
     allow_public_get: true
