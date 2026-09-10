@@ -40,3 +40,6 @@ _legacy/
 Thumbs.db
 Desktop.ini
 ~$*
+
+# pytest local basetemp (Windows ACL workaround)
+.tmp-pytest/

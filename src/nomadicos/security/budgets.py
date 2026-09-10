@@ -42,6 +42,15 @@ class TaskBudgetTracker:
                 context={"retries": self._retries},
             )
 
+    def spend_all_retries(self) -> None:
+        """Exhaust the retry budget without raising (I10).
+
+        Used when a refusal cannot change within the task (e.g. Security Gate
+        ASK with no approver present): the loop must stop retrying, but the
+        task should end with its truthful report rather than a budget crash.
+        """
+        self._retries = self.budget.max_retries
+
     def check_model_call(self) -> None:
         self._model_calls += 1
         if self._model_calls > self.budget.max_model_calls:

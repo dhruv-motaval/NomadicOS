@@ -234,6 +234,12 @@ class AgentRuntime:
                     )
                     if not gate_result.success:
                         failed.append(f"{tool_name}: {gate_result.error}")
+                        if "requires user confirmation" in (gate_result.error or ""):
+                            # ASK cannot flip to ALLOW mid-task — there is no
+                            # approver inside this execution. Retrying the same
+                            # refused proposal wastes budget (fail fast, BP §70).
+                            budget.spend_all_retries()
+                            break
                         budget.check_retry()
                         continue
 
@@ -385,9 +391,11 @@ class AgentRuntime:
         prompt = (
             "You are NomadicOS, a local-first AI assistant. The user's goal "
             "could not be executed with your tools (filesystem read/write in "
-            "the task workspace only — no apps, no browser, no computer "
+            "the task workspace only - no apps, no browser, no computer "
             "control). In ONE short sentence, tell the user what you cannot "
-            "do yet and what they can try instead. Do not output JSON.\n"
+            "do and why. STATE ONLY THE FACTS FROM THE FAILURE BELOW. Never "
+            "invent actions, suggestions, or remedies that were not performed. "
+            "Do not output JSON.\n"
             f"Failure: {failure}\n"
             f"Goal: {goal}"
         )

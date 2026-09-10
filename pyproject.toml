@@ -38,7 +38,7 @@ packages = ["src/nomadicos"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
-addopts = "-q"
+addopts = "-q --basetemp=.tmp-pytest"
 markers = [
     "hardware: requires real models/GPU/hardware — excluded from shared CI (ADR-0024)",
     "security: security invariant tests — a regression must fail CI (BP §294)",
