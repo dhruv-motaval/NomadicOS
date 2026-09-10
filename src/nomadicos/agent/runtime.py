@@ -164,6 +164,12 @@ class AgentRuntime:
         self._memory = memory
         self._memory_context = memory_context or []
         self._skills = skills
+        # Pipeline agents: model selection + handling are explicit agent steps
+        # (BP §364) — constructed lazily since they wrap this runtime.
+        from nomadicos.agent.pipeline_agents import ModelHandlerAgent, SelectorAgent
+
+        self.selector_agent = SelectorAgent(self)
+        self.handler_agent = ModelHandlerAgent(self)
 
     async def execute_task(
         self,
@@ -185,14 +191,16 @@ class AgentRuntime:
             task_id=task_id,
         )
 
-        # 1. Model selection (BP §97, §320): capability + history + hardware.
+        # 1. Model selection + handling as agents (BP §97, §320, §364).
         if model_id is None:
-            task_family = self._task_family(goal)
-            model_id, _, _, selection_reason = self._selector.select(task_family=task_family)
+            decision = await self.selector_agent.select(goal)
+            task_family = decision.task_family
+            model_id = decision.model_id
+            selection_reason = {**decision.reason, "task_family": task_family}
         else:
             task_family = "general"
             selection_reason = {"pinned": True}
-        model = await self._manager.ensure_loaded(model_id)
+        model = await self.handler_agent.ensure_model(model_id)
         logger.info(
             "task started model=%s task_family=%s selection_reason=%s",
             model_id,

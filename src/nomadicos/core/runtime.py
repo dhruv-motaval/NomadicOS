@@ -1,9 +1,9 @@
-"""Runtime composition root (BP §234, §237; ADR-0015/0023): wires all subsystems.
+﻿"""Runtime composition root (BP Â§234, Â§237; ADR-0015/0023): wires all subsystems.
 
-Persistence posture (BP §237): PostgreSQL is canonical; when the database is
+Persistence posture (BP Â§237): PostgreSQL is canonical; when the database is
 reachable the runtime persists audit/experiences/memory and enables the
 Network Gateway tools. When unreachable it degrades to in-memory stores
-(never permissive — features that need persistence are simply unavailable).
+(never permissive â€” features that need persistence are simply unavailable).
 """
 
 import asyncio
@@ -38,9 +38,9 @@ logger = get_logger("core.runtime")
 
 
 class Runtime:
-    """Wires the subsystems; `run_goal` executes one task end-to-end (BP §78)."""
+    """Wires the subsystems; `run_goal` executes one task end-to-end (BP Â§78)."""
 
-    # Repo root: resolved from this file (…/src/nomadicos/core/runtime.py),
+    # Repo root: resolved from this file (â€¦/src/nomadicos/core/runtime.py),
     # so the CLI works from ANY working directory (ADR-0015).
     REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -48,30 +48,30 @@ class Runtime:
         configure_logging()
         self.config = config or load_config(self.REPO_ROOT / "config" / "config.yaml")
 
-        # --- Constitution (BP §4): policy load is fail-closed (ADR-0013).
+        # --- Constitution (BP Â§4): policy load is fail-closed (ADR-0013).
         self.policy = PolicyEngine()
         policy_dir = self.REPO_ROOT / "config" / "policies"
         if policy_dir.exists():
             self.policy.load_directory(policy_dir)
 
         # --- Persistence: PostgreSQL canonical, in-memory degraded fallback
-        # (BP §1.2, §237; ADR-0009/0010).
+        # (BP Â§1.2, Â§237; ADR-0009/0010).
         self.db = None
         self._init_persistence()
 
-        # --- Constitution enforcement stack (BP §98).
+        # --- Constitution enforcement stack (BP Â§98).
         self.permissions = PermissionEngine()
         self.gate = SecurityGate(self.policy, self.permissions, self.audit)
         self.manager = ModelManager(max_resident=2)
         self.lifecycle = Lifecycle(EventBus())
 
         # --- Models: default fake for CI; real Ollama fleet via
-        # `register_ollama_models()` (ADR-0001, BP §148).
+        # `register_ollama_models()` (ADR-0001, BP Â§148).
         from nomadicos.models.fake import FakeLocalModel
 
         self.manager.register(FakeLocalModel("fake/general"), status=ModelStatus.ENABLED)
 
-        # --- Selection (BP §97/§320) + tools (BP §13).
+        # --- Selection (BP Â§97/Â§320) + tools (BP Â§13).
         self.performance = ModelPerformanceTracker()
         self.selector = ModelSelector(
             self.manager,
@@ -85,19 +85,68 @@ class Runtime:
         self.gateway.register(TerminalTool(workspace_root=self.workspace_root))
         self._network_gateway: NetworkGateway | None = None
 
-        # --- Memory (BP §16, §376-420): persistent when DB reachable.
+        # --- Memory (BP Â§16, Â§376-420): persistent when DB reachable.
         self.memory = self._init_memory()
 
-        # --- Experience (BP §18) + Evaluation (BP §100).
+        # --- Experience (BP Â§18) + Evaluation (BP Â§100).
         self.experience_store = self._experience_store()
         self.recorder = ExperienceRecorder(self.experience_store)
         self.evaluator = EvaluationEngine()
         from nomadicos.agent.skills import SkillStore
 
         self._skill_store = SkillStore(self.REPO_ROOT / "data" / "skills")
+        self._orchestration_enabled = False  # owner opt-in (ADR-0030 staged rollout)
         self._emergency_stopped = False
         self._fleet: Any = None
         self._fleet_watch_task: Any = None
+
+    @staticmethod
+    def _looks_decomposable(goal: str) -> bool:
+        """Cheap heuristic: multi-step goals read as action chains."""
+        import re as _re
+
+        action_hits = len(_re.findall(r"\band\b|,|then|after that|;", goal.lower()))
+        return action_hits >= 2
+
+    def _agent_factory(self, base_runtime: Any) -> Any:
+        """Runtime factory for orchestrator roles: same subsystems, and each
+        execute_task call re-selects the model for the (sub)goal via the
+        selector agent â€” workers follow their subtask, planner/synthesizer get
+        the reasoning tier (BP Â§364)."""
+
+        def factory(agent_id: str, role: Any) -> Any:
+            from nomadicos.agent.runtime import AgentRuntime
+
+            runtime = AgentRuntime(
+                selector=base_runtime._selector,
+                manager=base_runtime._manager,
+                gateway=base_runtime._gateway,
+                audit_sink=base_runtime._audit,
+                recorder=base_runtime._recorder,
+                evaluator=base_runtime._evaluator,
+                memory=base_runtime._memory,
+                skills=base_runtime._skills,
+                budget=base_runtime._budget_cfg,
+            )
+            original_execute = runtime.execute_task
+            role_name = role.name
+
+            async def execute_with_role_model(
+                goal: str, identity: Any, **kwargs: Any
+            ) -> Any:
+                if kwargs.get("model_id") is None:
+                    decision = (
+                        await runtime.selector_agent.select(goal)
+                        if role_name == "worker"
+                        else await runtime.selector_agent.select_for_role(goal, role_name)
+                    )
+                    kwargs["model_id"] = decision.model_id
+                return await original_execute(goal, identity, **kwargs)
+
+            runtime.execute_task = execute_with_role_model  # type: ignore[method-assign]
+            return runtime
+
+        return factory
 
     # -------------------------------------------------------------- persistence
 
@@ -131,7 +180,7 @@ class Runtime:
             MigrationRunner(
                 self._pg_client, self.REPO_ROOT / "src/nomadicos/postgres/migrations"
             ).run()
-        except Exception as exc:  # noqa: BLE001 — BP §237 degrade, never crash
+        except Exception as exc:  # noqa: BLE001 â€” BP Â§237 degrade, never crash
             logger.warning(
                 "persistence degraded: PostgreSQL unavailable (%s)", type(exc).__name__
             )
@@ -166,10 +215,10 @@ class Runtime:
         self.manager.register(model, status=status or ModelStatus.ENABLED)
 
     async def register_ollama_models(self) -> int:
-        """Discover + register the local Ollama fleet (BP §148, ADR-0001 alt).
+        """Discover + register the local Ollama fleet (BP Â§148, ADR-0001 alt).
 
-        Once real models are registered, CI fakes are demoted (BP §148: real
-        evidence wins; fakes are placeholders, BP §211)."""
+        Once real models are registered, CI fakes are demoted (BP Â§148: real
+        evidence wins; fakes are placeholders, BP Â§211)."""
         from nomadicos.models.ollama_adapter import OllamaModel
 
         try:
@@ -191,7 +240,7 @@ class Runtime:
         return len(fleet)
 
     async def sync_fleet(self, *, force: bool = True) -> dict[str, int]:
-        """BP §8.4/§148: reconcile the model registry with the live Ollama server.
+        """BP Â§8.4/Â§148: reconcile the model registry with the live Ollama server.
 
         Detects models the owner added, removed, or re-pulled with new weights,
         and adapts selection automatically (no restart)."""
@@ -209,7 +258,7 @@ class Runtime:
         }
 
     def start_fleet_watch(self, interval_minutes: float = 5.0) -> None:
-        """BP §148: background fleet sync (new/removed/re-pulled models)."""
+        """BP Â§148: background fleet sync (new/removed/re-pulled models)."""
         import asyncio
 
         if self._fleet_watch_task is not None:
@@ -224,7 +273,7 @@ class Runtime:
                 logger.info("fleet watch synced counts=%s", counts)
             except asyncio.CancelledError:
                 raise
-            except Exception as exc:  # noqa: BLE001 — never die on sync errors
+            except Exception as exc:  # noqa: BLE001 â€” never die on sync errors
                 logger.warning("fleet watch failed: %s", type(exc).__name__)
 
     async def aclose(self) -> None:
@@ -241,7 +290,7 @@ class Runtime:
     # ------------------------------------------------------------------ network
 
     def enable_network(self) -> None:
-        """BP §23-24/§48: register web.fetch behind the Network Gateway."""
+        """BP Â§23-24/Â§48: register web.fetch behind the Network Gateway."""
         if self._network_gateway is not None:
             return
         from nomadicos.network.base import HttpxTransport
@@ -273,7 +322,7 @@ class Runtime:
     # ----------------------------------------------------------------- task run
 
     def recent_tasks(self, limit: int = 10) -> list[dict[str, Any]]:
-        """Recent task history for the CLI /sessions view (BP §206)."""
+        """Recent task history for the CLI /sessions view (BP Â§206)."""
         if not self._pg_available:
             return []
         return self._pg_client.execute(
@@ -287,8 +336,9 @@ class Runtime:
         return asyncio.run(self.run_goal(goal, user_id=user_id))
 
     async def run_goal(self, goal: str, *, user_id: str = "local-owner") -> TaskReport:
-        """BP §78: user task → memory context → model selection → tools →
-        verify → experience → report."""
+        """BP Â§78: user task â†’ memory context â†’ model selection â†’ tools â†’
+        verify â†’ experience â†’ report."""
+        from nomadicos.agent.runtime import TaskReport
         from nomadicos.core.lifecycle import TaskStatus
         from nomadicos.security.permissions import SubjectIdentity
 
@@ -304,7 +354,7 @@ class Runtime:
         memory_engine = self.memory
         memory_context = await memory_engine.search(goal, limit=3) if goal.strip() else []
 
-        # Persist the session + task (BP §19, §206) so experiences/audit FKs hold.
+        # Persist the session + task (BP Â§19, Â§206) so experiences/audit FKs hold.
         session_id: str | None = None
         task_id: str | None = None
         if self._pg_available:
@@ -321,7 +371,7 @@ class Runtime:
                         user_id, goal, session_id=uuid_mod.UUID(session_id)
                     )
                 )
-            except Exception as exc:  # noqa: BLE001 — degrade (BP §237)
+            except Exception as exc:  # noqa: BLE001 â€” degrade (BP Â§237)
                 logger.warning("task persistence degraded: %s", type(exc).__name__)
 
         runtime = AgentRuntime(
@@ -337,9 +387,40 @@ class Runtime:
             skills=self._skill_store,
         )
         identity = SubjectIdentity(user_id=user_id, session_id=session_id, task_id=task_id)
+
+        # Multi-agent orchestration (ADR-0030): planner â†’ waves â†’ synthesizer,
+        # each agent with its own model selection (BP Â§364). Only for goals
+        # that actually decompose (â‰¥2 action verbs / conjunctions); everything
+        # else runs single-agent â€” cheaper and equally verified.
+        if self._orchestration_enabled and self._looks_decomposable(goal):
+            from nomadicos.agent.orchestrator import Orchestrator
+
+            planner_decision = await runtime.selector_agent.select_for_role(goal, "planner")
+            planner_model = await runtime.handler_agent.ensure_model(
+                planner_decision.model_id
+            )
+            orchestrator = Orchestrator(
+                planner=planner_model,
+                audit_sink=self.audit,
+                runtime_factory=self._agent_factory(runtime),
+            )
+            result = await orchestrator.orchestrate(goal, identity)
+            from nomadicos.agent.runtime import TaskReport
+
+            return TaskReport(
+                task_id=task_id or "orchestrated",
+                goal=goal,
+                status=result.final_status,  # type: ignore[arg-type]
+                requested=goal,
+                completed=[r.description for r in result.subtask_results],
+                failed=[r.error for r in result.subtask_results if r.error],
+                duration_seconds=round(result.duration_seconds, 2),
+                reply=result.synthesis,
+            )
+
         report = await runtime.execute_task(goal, identity)
 
-        # Persist task-level memory (BP §166: source + scope always present).
+        # Persist task-level memory (BP Â§166: source + scope always present).
         summary = f"{goal[:120]} -> {report.status.value}"
         await memory_engine.store(
             summary,
@@ -354,7 +435,7 @@ class Runtime:
 
     @staticmethod
     def _load_dotenv() -> None:
-        """Minimal .env loader (repo root) — sets only unset variables (BP §103)."""
+        """Minimal .env loader (repo root) â€” sets only unset variables (BP Â§103)."""
         import os
 
         path = Runtime.REPO_ROOT / ".env"
