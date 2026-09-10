@@ -1,0 +1,501 @@
+"""AgentRuntime: the canonical execution loop (BP §185, §50; Milestone §78).
+
+    while not task.finished:
+        observe → plan/decide (model proposes structured tool call)
+        → security.authorize → tools.execute → observe evidence
+        → verify → record step → recover_or_finish
+
+Budgets (BP §72) are enforced here, outside the model (I10). Every action is
+mediated by the Security Gate (I5). Reports distinguish requested/done/
+verified/failed/uncertainty (BP §180-181).
+"""
+
+import json
+import re
+import time
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from nomadicos.agent.selector import ModelSelector
+from nomadicos.audit.base import (
+    AuditEvent,
+    AuditEventCategory,
+    AuditSink,
+)
+from nomadicos.core.errors import (
+    BudgetExceeded,
+    NomadicError,
+    PermissionDenied,
+    SecurityPolicyViolation,
+    TaskTimeout,
+    ToolExecutionError,
+    VerificationFailed,
+)
+from nomadicos.core.events import EventBus, TraceContext
+from nomadicos.core.lifecycle import TaskStatus
+from nomadicos.core.logging import get_logger
+from nomadicos.evaluation.engine import EvaluationEngine
+from nomadicos.experience.recorder import ExperienceRecorder, Outcome
+from nomadicos.models.base import LocalModel
+from nomadicos.security.budgets import TaskBudget, TaskBudgetTracker
+from nomadicos.security.permissions import SubjectIdentity
+from nomadicos.tools.base import ToolResult
+from nomadicos.tools.gateway import ToolGateway
+
+logger = get_logger("agent.runtime")
+
+# Whole-message small-talk patterns (anchored): greetings, thanks, identity.
+# A greeting embedded in a real request ("hi, open chrome") does NOT match.
+_CONVERSATIONAL_PATTERNS = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"^\s*hi+\s*(there|all|everyone|team|guys|friend)?\s*[!.,?]*\s*$",
+        r"^\s*hey+\s*(there|all|everyone|team|guys|friend)?\s*[!.,?]*\s*$",
+        r"^\s*hello+\s*(there|all|everyone|team|guys|friend)?\s*[!.,?]*\s*$",
+        r"^\s*yo\s*[!.]*\s*$",
+        r"^\s*sup\s*[!.?]*\s*$",
+        r"^\s*namaste\s*[!.]*\s*$",
+        r"^\s*good\s+(morning|afternoon|evening|day)\s*[!.]*\s*$",
+        r"^\s*thanks?( you)?( a lot)?( so much)?\s*[!.]*\s*$",
+        r"^\s*thank\s+you\s*[!.]*\s*$",
+        r"^\s*(who|what)\s+are\s+you\s*[?.!]*\s*$",
+        r"^\s*how\s+are\s+you\s*[?.!]*\s*$",
+        r"^\s*what\s+can\s+you\s+do\s*[?.!]*\s*$",
+        r"^\s*help\s*[!.?]*\s*$",
+        r"^\s*(ok|okay|nice|cool|great|awesome|wow|lol|good|bad|sure|yes|no)\s*[!.?]*\s*$",
+    )
+)
+
+# Informational questions / chat starters: "what is X", "tell me about Y".
+# The action-verb veto below keeps question-shaped requests ("can you open…")
+# in the task pipeline.
+_QUESTION_STARTER = re.compile(
+    r"^\s*(what|who|where|when|why|which|whose|how)\b.*$",
+    re.IGNORECASE,
+)
+_CHAT_STARTER = re.compile(
+    r"^\s*(tell me|explain|describe|define|do you know|give me)\b.*$",
+    re.IGNORECASE,
+)
+
+# Explicit action verbs make ANY message a task, even question-shaped ones
+# ("can you open chrome…"): the agent owns machine effects, not chit-chat.
+_ACTION_VERB = re.compile(
+    r"\b(open|run|execute|launch|start|stop|kill|write|create|delete|remove|"
+    r"list|read|make|copy|move|rename|edit|install|download|upload|play|"
+    r"search|find|close|print|restart|shutdown)\b",
+    re.IGNORECASE,
+)
+
+# "How do I …?" asks for instructions, never for action — even with verbs.
+_HOW_TO_QUESTION = re.compile(
+    r"^\s*how\s+(do|does|did|can|could|to|should|would)\b.*$",
+    re.IGNORECASE,
+)
+
+
+class TaskReport(BaseModel):
+    """BP §180: requested vs done vs verified vs failed vs uncertainty."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_id: str
+    goal: str
+    status: TaskStatus
+    requested: str
+    completed: list[str] = Field(default_factory=list)
+    verification: list[str] = Field(default_factory=list)
+    failed: list[str] = Field(default_factory=list)
+    uncertainty: list[str] = Field(default_factory=list)
+    experience_id: str | None = None
+    duration_seconds: float = 0.0
+    reply: str | None = None  # conversational answer (no tool work needed)
+
+    def render(self) -> str:
+        if self.reply is not None:
+            if self.status is TaskStatus.SUCCESS:
+                return self.reply
+            return f"[{self.status.value}] {self.reply}"
+        completed_lines = [f"- {c}" for c in self.completed] or ["- nothing"]
+        lines = [
+            f"Task {self.task_id}: {self.status.value}",
+            f"Requested: {self.requested}",
+            "Completed:",
+            *completed_lines,
+        ]
+        if self.verification:
+            lines.append("Verification: " + "; ".join(self.verification))
+        if self.failed:
+            lines.append("Failed: " + "; ".join(self.failed))
+        if self.uncertainty:
+            lines.append("Uncertainty: " + "; ".join(self.uncertainty))
+        return "\n".join(lines)
+
+
+class AgentRuntime:
+    """Owns task execution. The model proposes structured tool calls; the
+    Security Gate authorizes; the Tool Gateway executes; evidence verifies."""
+
+    def __init__(
+        self,
+        *,
+        selector: ModelSelector,
+        manager: Any,  # ModelManager
+        gateway: ToolGateway,
+        audit_sink: AuditSink,
+        recorder: ExperienceRecorder,
+        evaluator: EvaluationEngine,
+        bus: EventBus | None = None,
+        budget: TaskBudget | None = None,
+        memory: Any | None = None,  # MemoryEngine (BP §376-420)
+        memory_context: list | None = None,  # pre-retrieved memories for this goal
+    ) -> None:
+        self._selector = selector
+        self._manager = manager
+        self._gateway = gateway
+        self._audit = audit_sink
+        self._recorder = recorder
+        self._evaluator = evaluator
+        self._bus = bus
+        self._budget_cfg = budget or TaskBudget()
+        self._memory = memory
+        self._memory_context = memory_context or []
+
+    async def execute_task(
+        self,
+        goal: str,
+        identity: SubjectIdentity,
+        *,
+        model_id: str | None = None,
+        max_steps: int = 8,
+    ) -> TaskReport:
+        """Run one task through the canonical loop (BP §185, §78)."""
+        started = time.monotonic()
+        budget = TaskBudgetTracker(self._budget_cfg)
+        import uuid
+        task_id = identity.task_id or str(uuid.uuid4())
+        trace = TraceContext(
+            request_id=identity.run_id or task_id,
+            user_id=identity.user_id,
+            session_id=identity.session_id,
+            task_id=task_id,
+        )
+
+        # 1. Model selection (BP §97, §320): capability + history + hardware.
+        if model_id is None:
+            model_id, _, _, selection_reason = self._selector.select(task_family="general")
+        else:
+            selection_reason = {"pinned": True}
+        model = await self._manager.ensure_loaded(model_id)
+        logger.info("task started model=%s selection_reason=%s", model_id, selection_reason)
+
+        completed: list[str] = []
+        verification_notes: list[str] = []
+        failed: list[str] = []
+        evidence_bundles: list[tuple[str, Any]] = []
+        status = TaskStatus.RUNNING
+        reply: str | None = None
+
+        await self._audit_task(trace, task_id, "TASK_START", model_id)
+
+        try:
+            if self._is_conversational(goal):
+                # Chat, not a task: nothing effectful happens, so the Security
+                # Gate is not involved (I5 untouched — there is no action to
+                # mediate). The model answers directly, without tool proposals.
+                budget.check_model_call()
+                reply = await self._chat_reply(model, goal)
+                status = TaskStatus.SUCCESS
+            else:
+                # 2. Execution loop (BP §185).
+                for step in range(1, max_steps + 1):
+                    budget.check_step()
+                    trace = trace.child(step_id=f"step-{step}")
+
+                    # 2a. Model proposes a structured tool call (BP §86).
+                    budget.check_model_call()
+                    proposal = await self._propose(model, goal, completed)
+
+                    if proposal.get("finished"):
+                        reply = proposal.get("reply") or reply
+                        break  # goal reached declared (verification still applies)
+
+                    tool_name = proposal.get("tool", "")
+                    arguments = proposal.get("arguments", {})
+
+                    if not tool_name and proposal.get("reply"):
+                        reply = proposal["reply"]  # conversational answer, no tool work
+                        break
+
+                    # 2b. Security Gate mediation (BP §73, I5).
+                    gate_result = await self._mediated_execute(
+                        tool_name, arguments, identity, budget
+                    )
+                    if not gate_result.success:
+                        failed.append(f"{tool_name}: {gate_result.error}")
+                        budget.check_retry()
+                        continue
+
+                    # 2c. Verification (BP §28, §144: evidence, not claims).
+                    evidence_kind = self._gateway.get(tool_name).spec.evidence_kind
+                    if evidence_kind in ("filesystem", "terminal"):
+                        evidence = self._evidence_from(tool_name, gate_result)
+                        if arguments.get("action"):
+                            evidence.facts["action"] = arguments["action"]
+                        try:
+                            verdict = await self._evaluator.verify(evidence_kind, evidence)
+                            evidence_bundles.append((evidence_kind, evidence))
+                            logger.debug(
+                                "verifier verdict checks=%s",
+                                [(c.name, c.passed) for c in verdict.checks],
+                            )
+                            verification_notes.append(verdict.summary)
+                        except VerificationFailed as exc:
+                            verification_notes.append(f"no verifier: {exc}")
+
+                    completed.append(f"{tool_name} {json.dumps(arguments)[:120]}")
+                    await self._audit_task(trace, task_id, "STEP_DONE", model_id)
+
+                if completed:
+                    # Steps ran; failures make it partial (truthful report, BP §180).
+                    status = TaskStatus.PARTIALLY_COMPLETED if failed else TaskStatus.SUCCESS
+                elif reply is not None:
+                    # Answered conversationally but nothing was materially done.
+                    status = TaskStatus.PARTIALLY_COMPLETED
+                else:
+                    # The model claimed finished without executing anything —
+                    # never a success (BP §366: claims are not evidence).
+                    status = TaskStatus.FAILED
+                    failed.append(
+                        "model declared the goal finished without executing any steps"
+                    )
+                # (a plain-language explanation is added post-mortem below)
+        except (BudgetExceeded, TaskTimeout, NomadicError) as exc:
+            status = TaskStatus.FAILED
+            failed.append(str(exc))
+        except Exception as exc:  # noqa: BLE001 — surfaced in the truthful report
+            status = TaskStatus.FAILED
+            failed.append(f"unexpected {type(exc).__name__}: {exc}")
+
+        # Post-mortem: on total failure with zero executed steps, fetch a
+        # plain-language explanation for the user. Best effort and truthful —
+        # the FAILED status is never softened (BP §366).
+        if status is TaskStatus.FAILED and not completed and reply is None and failed:
+            reply = await self._explain_failure(model, goal, failed[0])
+
+        # 3. Evaluation (BP §100) + Experience (BP §95, §18) on every exit path.
+        duration = time.monotonic() - started
+        record = await self._evaluator.evaluate_run(
+            task_id=task_id,
+            run_id=identity.run_id or task_id,
+            evidence_bundles=evidence_bundles,
+            steps_taken=len(completed),
+            retries_used=int(budget.snapshot()["retries"]),
+            duration_seconds=duration,
+        )
+        outcome = (
+            Outcome.SUCCESS
+            if status is TaskStatus.SUCCESS
+            else Outcome.PARTIAL
+            if status is TaskStatus.PARTIALLY_COMPLETED
+            else Outcome.FAILURE
+        )
+        experience = await self._recorder.finish(
+            task_id=task_id,
+            session_id=identity.session_id,
+            outcome=outcome,
+            summary=f"{goal[:200]} -> {record.verdict_summary[:180]}",
+            model_id=model_id,
+            tool_calls=int(budget.snapshot()["tool_calls"]),
+            steps=len(completed),
+            verified=record.verified,
+            evidence={"score": record.score},
+        )
+        await self._audit_task(trace, task_id, "TASK_END", model_id)
+
+        report = TaskReport(
+            task_id=task_id,
+            goal=goal,
+            status=status,
+            requested=goal,
+            completed=completed,
+            verification=verification_notes,
+            failed=list(dict.fromkeys(failed)),  # dedupe repeated refusals
+            experience_id=str(experience.experience_id),
+            duration_seconds=round(duration, 2),
+            reply=reply,
+        )
+        logger.info(
+            "task finished task=%s status=%s verified=%s",
+            task_id,
+            status.value,
+            record.verified,
+        )
+        return report
+
+    # ------------------------------------------------------------------ helpers
+
+    @staticmethod
+    def _is_conversational(goal: str) -> bool:
+        """Informational/chat detection: greetings, questions, explain-starters.
+
+        Any explicit action verb ('open chrome', 'list files') forces the task
+        pipeline even if the message is question-shaped. Small models cannot
+        be trusted to follow reply-vs-tool prompt rules reliably, so this
+        classification is deterministic here in the runtime."""
+        text = goal.strip()
+        if not text:
+            return False
+        if _HOW_TO_QUESTION.match(text):
+            return True  # asks for instructions, not for the action itself
+        if _ACTION_VERB.search(text):
+            return False
+        if text.endswith("?"):
+            return True  # question without any action verb ("local what?")
+        return (
+            any(p.match(text) for p in _CONVERSATIONAL_PATTERNS)
+            or _QUESTION_STARTER.match(text) is not None
+            or _CHAT_STARTER.match(text) is not None
+        )
+
+    async def _chat_reply(self, model: LocalModel, goal: str) -> str:
+        """Direct conversational answer — no tools, no gate (nothing effectful)."""
+        from nomadicos.models.base import GenerateRequest
+
+        prompt = (
+            "You are NomadicOS, a local-first AI assistant. Reply briefly and "
+            "conversationally. Do not use tools. Do not output JSON.\n"
+            f"Message: {goal}"
+        )
+        result = await model.generate(
+            GenerateRequest(prompt=prompt, max_output_tokens=256)
+        )
+        return result.text.strip() or "…"
+
+    async def _explain_failure(
+        self, model: LocalModel, goal: str, failure: str
+    ) -> str | None:
+        """Plain-language explanation when the goal could not be executed.
+
+        Best effort: any error here leaves ``reply`` unset (truthful report
+        only, no invented explanation — BP §366)."""
+        from nomadicos.models.base import GenerateRequest
+
+        prompt = (
+            "You are NomadicOS, a local-first AI assistant. The user's goal "
+            "could not be executed with your tools (filesystem read/write in "
+            "the task workspace only — no apps, no browser, no computer "
+            "control). In ONE short sentence, tell the user what you cannot "
+            "do yet and what they can try instead. Do not output JSON.\n"
+            f"Failure: {failure}\n"
+            f"Goal: {goal}"
+        )
+        try:
+            result = await model.generate(
+                GenerateRequest(prompt=prompt, max_output_tokens=128)
+            )
+            text = result.text.strip()
+            return text or None
+        except Exception:  # noqa: BLE001 — explanation is best effort
+            return None
+
+    async def _propose(
+        self, model: LocalModel, goal: str, completed: list[str]
+    ) -> dict[str, Any]:
+        """Model proposes a structured tool call (BP §86). Invalid proposals are
+        rejected — never executed raw (BP §86, §142). Tool schemas are surfaced
+        so the model can emit compliant arguments (BP §141)."""
+        from nomadicos.models.base import GenerateRequest
+
+        tool_docs: list[dict[str, Any]] = []
+        for name in self._gateway.registered_tools():
+            spec = self._gateway.get(name).spec
+            tool_docs.append(
+                {
+                    "tool": name,
+                    "arguments": spec.arguments_schema.get("properties", {}),
+                    "required": spec.arguments_schema.get("required", []),
+                }
+            )
+
+        prompt = (
+            "You are NomadicOS's task executor. Decide the next step for the goal. "
+            "Reply with ONE JSON object, nothing else:\n"
+            '{"tool": "<tool name>", "arguments": {...}, "finished": false|true}\n'
+            "Use finished=true ONLY when the goal is already accomplished by the "
+            "completed steps listed — never before any step ran.\n"
+            "If the goal needs no tool (chat/question) OR is impossible with the "
+            "available tools, answer directly instead of calling a tool:\n"
+            '{"reply": "<your answer, or what you cannot do and why>", "finished": true}\n'
+            "Never invent tool arguments for goals that need no tool.\n"
+            f"Goal: {goal}\n"
+            f"Already completed steps: {completed[-3:]}\n"
+            "Available tools with argument schemas: "
+            f"{json.dumps(tool_docs)}"
+        )
+        if self._memory_context:
+            memories = [
+                {"content": m.content, "source": m.source, "verified": m.verified}
+                for m in self._memory_context
+            ]
+            # BP §385/§352: memory is evidence to reason over, not authority —
+            # and revalidation is the caller's discipline.
+            prompt += (
+                "\nRelevant past experience/memory (evidence, revalidate before "
+                f"relying on it): {json.dumps(memories)}"
+            )
+        result = await model.generate(GenerateRequest(prompt=prompt, max_output_tokens=512))
+        try:
+            start = result.text.index("{")
+            end = result.text.rindex("}") + 1
+            return json.loads(result.text[start:end])
+        except (ValueError, json.JSONDecodeError):
+            return {"finished": True}  # no valid proposal → stop gracefully
+
+    async def _mediated_execute(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        identity: SubjectIdentity,
+        budget: TaskBudgetTracker,
+    ) -> ToolResult:
+        try:
+            return await self._gateway.execute(tool_name, arguments, identity, budget)
+        except ToolExecutionError as exc:
+            return ToolResult.failure(str(exc))
+        except (PermissionDenied, SecurityPolicyViolation) as exc:
+            return ToolResult.failure(
+                f"security refusal: {exc}", evidence={"decision": "REFUSED"}
+            )
+
+    @staticmethod
+    def _evidence_from(tool_name: str, result: ToolResult) -> Any:
+        from nomadicos.evaluation.base import Evidence
+
+        facts = dict(result.evidence)
+        if result.data and isinstance(result.data, dict):
+            for key in ("exit_code", "stdout", "path", "exists", "action", "entries", "content"):
+                if key in result.data:
+                    facts[key] = result.data[key]
+        return Evidence(
+            kind="filesystem" if tool_name == "filesystem" else "terminal", facts=facts
+        )
+
+    async def _audit_task(
+        self, trace: TraceContext, task_id: str, event: str, model_id: str | None
+    ) -> None:
+        await self._audit.append(
+            AuditEvent(
+                category=AuditEventCategory.TASK_EVENT,
+                user_id=trace.user_id,
+                session_id=trace.session_id,
+                task_id=trace.task_id,
+                run_id=trace.run_id,
+                subject=model_id,
+                decision=event,
+            )
+        )
+
+
+__all__ = ["AgentRuntime", "TaskReport"]

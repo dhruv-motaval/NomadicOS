@@ -1,0 +1,14 @@
+version: "1.0.0"
+owner:
+  autonomy_level: assisted
+  tools:
+    - id: filesystem-tools
+      tool: filesystem
+      risk: medium
+      default_decision: allow
+    - id: terminal-tool
+      tool: terminal
+      risk: high
+      default_decision: ask
+  external_network:
+    allow_public_get: true

@@ -1,0 +1,42 @@
+# --- Python / tooling (ADR-0023: uv, ruff, mypy, pytest) ---
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.uv-cache/
+
+# --- Secrets & environment ---
+.env
+*.local
+
+# --- Data directories (ADR-0008, ADR-0009: never in Git, never synced) ---
+data/
+postgres-data/
+vector-data/
+
+# --- Model artifacts (ADR-0005: supply-chain boundary) ---
+models/
+*.gguf
+*.safetensors
+*.bin
+*.onnx
+
+# --- Runtime artifacts ---
+logs/
+artifacts/
+downloads/
+.quarantine/
+screenshots/
+backups/
+*.sqlite
+*.db
+
+# --- Legacy builds (ADR-0022: archived, not part of the active architecture) ---
+_legacy/
+
+# --- OS noise ---
+Thumbs.db
+Desktop.ini
+~$*

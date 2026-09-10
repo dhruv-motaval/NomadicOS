@@ -1,0 +1,15 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.4.10
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+  - repo: local
+    hooks:
+      - id: security-tests
+        name: security tests (BP §294)
+        entry: pytest tests/security -m "security or not security" -q
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

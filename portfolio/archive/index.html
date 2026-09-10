@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>NomadicOS — Portfolio Index</title>
+<style>
+  body{margin:0;background:#0b1020;color:#dbe4ff;font:15px/1.6 'Segoe UI',system-ui,sans-serif}
+  .wrap{max-width:860px;margin:0 auto;padding:40px 24px}
+  h1{font-size:28px;margin:0 0 4px}
+  .tag{color:#7dd3fc;font-size:15px;margin-bottom:6px}
+  .sub{color:#8ea0c9;font-size:13px;margin-bottom:28px}
+  .card{background:#121a33;border:1px solid #26304f;border-radius:12px;padding:18px 22px;margin-bottom:16px;display:block;color:#dbe4ff;text-decoration:none}
+  .card:hover{border-color:#7dd3fc}
+  .card h3{margin:0 0 6px;color:#7dd3fc;font-size:17px}
+  .card p{margin:0;color:#8ea0c9;font-size:13.5px}
+  .pill{display:inline-block;background:#1b2547;border-radius:99px;padding:2px 12px;font-size:12px;margin:3px 6px 3px 0;color:#a5b4fc}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:20px 0 28px}
+  .stat{background:#121a33;border:1px solid #26304f;border-radius:12px;padding:14px;text-align:center}
+  .stat b{display:block;font-size:24px;color:#7dd3fc}
+  .stat span{font-size:12px;color:#8ea0c9}
+</style></head>
+<body><div class="wrap">
+  <h1>NomadicOS</h1>
+  <div class="tag">Local-first autonomous AI operating environment — your machine, your models, your data.</div>
+  <div class="sub">Architecture portfolio bundle · v0.1.0 · proprietary (shown for review)</div>
+
+  <div class="grid">
+    <div class="stat"><b>14</b><span>build phases</span></div>
+    <div class="stat"><b>82</b><span>source modules</span></div>
+    <div class="stat"><b>243</b><span>tests passing</span></div>
+    <div class="stat"><b>29</b><span>architecture ADRs</span></div>
+  </div>
+
+  <a class="card" href="nomadicos-architecture.html">
+    <h3>Interactive Architecture Explorer</h3>
+    <p>29 components · 10 layers · 14-step task lifecycle — click anything to see what it does, how, the technology and why, blueprint references, and security invariants. Works offline.</p>
+  </a>
+
+  <a class="card" href="NomadicOS_Canonical_Blueprint.md">
+    <h3>Canonical Blueprint (v0.1)</h3>
+    <p>The complete 420-section architecture specification — the source of truth every component was built and tested against.</p>
+  </a>
+
+  <a class="card" href="ADR_INDEX.md">
+    <h3>29 Architecture Decision Records</h3>
+    <p>Runtime choice, security model, persistence, licensing — every major decision with alternatives and rationale.</p>
+  </a>
+
+  <a class="card" href="PRODUCT_ROADMAP.md">
+    <h3>Product Roadmap</h3>
+    <p>Packaging, installer, EULA, and hardening plan for the commercial release (v0.2 → v1.0).</p>
+  </a>
+
+  <a class="card" href="metrics.json">
+    <h3>Verified Metrics (machine-generated)</h3>
+    <p>Test counts, live validations, and model fleet — produced by the test suite, not hand-written.</p>
+  </a>
+
+  <div style="margin-top:24px">
+    <span class="pill">local-only inference</span>
+    <span class="pill">fail-closed security gate</span>
+    <span class="pill">evidence-verified execution</span>
+    <span class="pill">append-only audit (DB-enforced)</span>
+    <span class="pill">cross-session memory</span>
+    <span class="pill">self-improvement with rollback</span>
+    <span class="pill">model fleet self-adaptation</span>
+  </div>
+</div></body></html>

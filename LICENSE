@@ -1,0 +1,38 @@
+NomadicOS v0.1 — Proprietary Software License
+
+Copyright (c) 2026 the NomadicOS author. All rights reserved.
+
+1. Ownership
+   This software and its source code, architecture documents, and associated
+   materials ("the Software") are the private property of the author.
+
+2. Private use
+   The author may use, modify, and run the Software freely on personal
+   hardware for any purpose.
+
+3. Portfolio presentation
+   The author may reference the Software publicly (e.g., resumes, interviews,
+   portfolio pages) and demonstrate it privately, including granting
+   time-limited read access to specific reviewers (recruiters, interviewers)
+   at the author's discretion.
+
+4. No redistribution
+   No other party may copy, distribute, sublicense, publish, or create
+   derivative works from the Software without prior written permission from
+   the author.
+
+5. Commercial rights reserved
+   The author retains the exclusive right to sell, commercially license,
+   dual-license, or transfer the Software (wholly or in part) at any time.
+   Nothing in this license limits that right, and acceptance of this license
+   by any party does not create any claim to future commercial terms.
+
+6. No warranty
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR
+   OTHER LIABILITY ARISING FROM THE SOFTWARE.
+
+6. Model artifacts
+   Third-party model weights (e.g., Gemma, Llama) are governed by their own
+   upstream terms and are downloaded by the user directly; they are not part
+   of the Software.

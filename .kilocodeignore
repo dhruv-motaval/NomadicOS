@@ -1,0 +1,40 @@
+# Kilocode indexing exclusions (analysis §3.2, confirmed 2026-09-04).
+# Keep the agent's context lean: the blueprint is referenced by section ID (BP §NNN),
+# never re-read wholesale. Legacy builds are archived and never imported (ADR-0022).
+
+# Archived legacy architecture — never import (ADR-0022)
+_legacy/
+
+# Data, models, runtime artifacts — heavy and generated
+data/
+postgres-data/
+vector-data/
+models/
+logs/
+artifacts/
+downloads/
+.quarantine/
+screenshots/
+backups/
+.venv/
+**/__pycache__/
+*.gguf
+*.safetensors
+*.bin
+*.sqlite
+*.db
+.env
+
+# Cache dirs
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# Scratch material excluded from indexing
+docs/scratch/
+
+# NOTE: keep indexed (they ARE the spec & small):
+#   NomadicOS_v0.1_Canonical_Blueprint.md
+#   docs/architecture/**  (addendum, ADRs, this file's siblings)
+#   AGENTS.md, .kilo/rules/**
