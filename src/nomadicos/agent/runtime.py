@@ -141,6 +141,22 @@ class TaskReport(BaseModel):
         return "\n".join(lines)
 
 
+def _format_conversation(entries: list) -> str:
+    """Human-readable conversation lines — 4B models quote plain paths far
+    more reliably than JSON with escaped backslashes."""
+    lines = []
+    for e in entries:
+        if not isinstance(e, dict):
+            lines.append(str(e)[:200])
+            continue
+        did = "; ".join(e.get("completed", []) or []) or (e.get("reply") or "").strip()
+        lines.append(
+            f'- Owner asked: "{e.get("goal", "")}" -> status: {e.get("status", "")}'
+            + (f" -> {did}" if did else "")
+        )
+    return "\n".join(lines)
+
+
 class _LatencyProbe:
     """Accumulates wall-clock time spent inside model.generate calls (I10:
     measured, not assumed). Transparent proxy over the LocalModel."""
@@ -607,7 +623,10 @@ class AgentRuntime:
         if conversation:
             prompt += (
                 "Recent conversation with the owner (use this for follow-up "
-                f"references like 'that file'): {json.dumps(conversation)}\n"
+                "references like 'that file'; if the owner asks where a file "
+                "is and a path appears below, state the exact full path):\n"
+                + _format_conversation(conversation)
+                + "\n"
             )
         prompt += f"Message: {goal}"
         result = await model.generate(
@@ -824,8 +843,10 @@ class AgentRuntime:
             )
         if self._conversation_log:
             prompt += (
-                "\nRecent conversation with the owner (context for follow-ups "
-                f"like 'that file'): {json.dumps(self._conversation_log)}"
+                "\nRecent conversation with the owner (use this for follow-up "
+                "references like 'that file'; if the owner asks where a file is "
+                "and a path appears below, state the exact full path):\n"
+                + _format_conversation(self._conversation_log)
             )
         result = await model.generate(GenerateRequest(prompt=prompt, max_output_tokens=1024))
         raw = result.text
