@@ -36,6 +36,10 @@ class SkillStore:
         self._root = Path(root)
         self._root.mkdir(parents=True, exist_ok=True)
 
+    @property
+    def root(self) -> Path:
+        return self._root
+
     def save(
         self, goal: str, content: str, *, proposal: dict | None = None
     ) -> Path:

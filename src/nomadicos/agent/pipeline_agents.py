@@ -88,6 +88,28 @@ class SelectorAgent:
 
     # ----------------------------------------------------- role-aware choice
 
+    async def strongest(self, *, tool_use: bool = False) -> str:
+        """The most capable model available (size-based proxy until Phase 13
+        benchmarks) — used to ESCALATE on attempt 2 when the family default
+        was insufficient (owner spec: switch to more powerful when needed)."""
+        import re as _re
+
+        from nomadicos.core.errors import ModelUnavailable
+
+        best: str | None = None
+        best_score = -1.0
+        for d in self._rt._manager.list_available():
+            if tool_use and not d.capabilities.tool_use:
+                continue
+            size_match = _re.search(r"(\d+(?:\.\d+)?)b\b", d.model_id.lower())
+            params = float(size_match.group(1)) if size_match else 7.0
+            score = params + (2 if d.capabilities.tool_use else 0)
+            if score > best_score:
+                best, best_score = d.model_id, score
+        if best is None:
+            raise ModelUnavailable("no local models available")
+        return best
+
     async def select_for_role(self, goal: str, role_name: str) -> SelectionDecision:
         """Per-agent model choice (BP §364): planner/synthesizer need the
         strongest reasoner (reasoning family); workers follow the goal."""

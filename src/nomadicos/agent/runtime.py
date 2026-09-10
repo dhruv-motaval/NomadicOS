@@ -425,14 +425,25 @@ class AgentRuntime:
                 break
             if attempt_no < max_attempts:
                 logger.info(
-                    "attempt %d failed (%s) â€” learning and retrying with fresh knowledge",
+                    "attempt %d failed (%s) — learning and retrying with fresh knowledge",
                     attempt_no,
                     (failed[0][:120] if failed else "unknown"),
                 )
                 try:
                     await self._learn_skill(model, goal, failed)
-                except Exception:  # noqa: BLE001 â€” learning is best effort
+                except Exception:  # noqa: BLE001 — learning is best effort
                     logger.debug("skill learning failed", exc_info=True)
+                # Escalation (owner spec): attempt 2 switches to the strongest
+                # tool-capable model available — more thinking when needed.
+                try:
+                    strongest = await self.selector_agent.strongest(tool_use=True)
+                    if strongest != model_id:
+                        model = await self.handler_agent.ensure_model(strongest)
+                        model = model_latency.wrap(model)
+                        model_id = strongest
+                        logger.info("escalated to strongest model: %s", strongest)
+                except Exception:  # noqa: BLE001 — escalation is best effort
+                    logger.debug("escalation skipped", exc_info=True)
 
         # Post-mortem: on total failure with zero executed steps, fetch a
         # plain-language explanation for the user. Best effort and truthful â€”
@@ -440,7 +451,17 @@ class AgentRuntime:
         if status is TaskStatus.FAILED and not completed and reply is None and failed:
             reply = await self._explain_failure(model, goal, failed[0])
 
-        # 3. Evaluation (BP Â§100) + Experience (BP Â§95, Â§18) on every exit path.
+        # Self-implementation (owner vision: the toolbox grows): a successful
+        # task that wrote+ran a script may deserve a permanent generated tool.
+        # One bounded model call, best effort, all local (I11) — the script is
+        # saved under data/scripts/ where the owner can read or delete it (I4).
+        if status is TaskStatus.SUCCESS and any("filesystem" in c for c in completed):
+            try:
+                await self._learn_tool(model, goal, completed)
+            except Exception:  # noqa: BLE001 — tool learning is best effort
+                logger.debug("tool learning failed", exc_info=True)
+
+        # 3. Evaluation (BP §100) + Experience (BP §95, §18) on every exit path.
         duration = time.monotonic() - started
         record = await self._evaluator.evaluate_run(
             task_id=task_id,
@@ -628,6 +649,49 @@ class AgentRuntime:
         text = result.text.strip()
         if text and "SKIP" not in text.upper()[:20]:
             self._skills.save(goal, text)
+
+    async def _learn_tool(
+        self, model: LocalModel, goal: str, completed: list[str]
+    ) -> None:
+        """Persist a reusable script born from this task (self-implementation).
+
+        One bounded model call: if the completed steps show a script was
+        written+run and it is REUSABLE, output it with the nomadicos-tool
+        header. Saved under data/scripts/ (local, owner-inspectable, gated).
+        Best effort: any error or SKIP means no tool is created."""
+        if self._skills is None:
+            return
+        from nomadicos.models.base import GenerateRequest
+        from nomadicos.tools.generated import parse_script_header, save_generated_script
+
+        prompt = (
+            "A task just succeeded on this Windows machine. If the completed "
+            "steps included a script/automation that is REUSABLE for similar "
+            "future goals, output that script so it becomes a permanent tool. "
+            "Format: first line exactly '# nomadicos-tool', second line "
+            "'# description: <one line>', third line "
+            "'# arguments_schema: <json schema, may be {}>', then the Python "
+            "code. The script must print ONE JSON line: "
+            '{"summary": "...", "data": {...}}. '
+            "Max 150 lines. Windows/PowerShell environment. If nothing here is "
+            "reusable, output only: SKIP\n"
+            f"Goal: {goal}\n"
+            f"Completed steps: {json.dumps(completed[-6:])}"
+        )
+        result = await model.generate(
+            GenerateRequest(prompt=prompt, max_output_tokens=1600)
+        )
+        text = result.text.strip()
+        if not text or text.upper().startswith("SKIP"):
+            return
+        # unwrap markdown fences if present
+        if text.startswith("```"):
+            text = text.strip("`")
+            if text.lstrip().startswith("python"):
+                text = text.lstrip()[6:]
+        path = save_generated_script(self._skills.root, goal, text)  # noqa: SLF001
+        if path and parse_script_header(path) is not None:
+            logger.info("learned new tool script: %s", path.name)
 
     async def _propose(
         self,

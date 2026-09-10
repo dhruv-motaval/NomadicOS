@@ -83,6 +83,12 @@ class Runtime:
         Path(self.workspace_root).mkdir(parents=True, exist_ok=True)
         self.gateway.register(FilesystemTool(workspace_root=self.workspace_root))
         self.gateway.register(TerminalTool(workspace_root=self.workspace_root))
+        # Growing toolbox: scripts the agent itself wrote in past tasks
+        # (owner-vision: self-implementing; still gated, still audited).
+        from nomadicos.tools.generated import load_generated_tools
+
+        for generated in load_generated_tools(self.REPO_ROOT / "data" / "scripts"):
+            self.gateway.register(generated)
         self._network_gateway: NetworkGateway | None = None
 
         # --- Memory (BP Â§16, Â§376-420): persistent when DB reachable.
