@@ -68,6 +68,14 @@ class TaskRepository:
         )
         return rows[0] if rows else None
 
+    async def recent(self, limit: int = 3) -> list[dict[str, Any]]:
+        """Most recent tasks (cross-session conversation seeding, BP §376)."""
+        return self._client.execute(
+            "SELECT goal, status FROM nomadicos.tasks "
+            "ORDER BY created_at DESC LIMIT %s",
+            (limit,),
+        )
+
     async def set_status(self, task_id: UUID, status: TaskStatus) -> None:
         terminal = {
             TaskStatus.SUCCESS,

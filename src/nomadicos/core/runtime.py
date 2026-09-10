@@ -348,11 +348,32 @@ class Runtime:
         return asyncio.run(self.run_goal(goal, user_id=user_id))
 
     async def run_goal(self, goal: str, *, user_id: str = "local-owner") -> TaskReport:
-        """BP Â§78: user task â†’ memory context â†’ model selection â†’ tools â†’
-        verify â†’ experience â†’ report."""
+        """BP §78: user task → memory context → model selection → tools →
+        verify → experience → report."""
         from nomadicos.agent.runtime import TaskReport
         from nomadicos.core.lifecycle import TaskStatus
         from nomadicos.security.permissions import SubjectIdentity
+
+        # Cross-session conversation seeding (BP §376): recent tasks from
+        # PostgreSQL become the opening context of this session's memory.
+        if self._pg_available and not self._conversation:
+            try:
+                from nomadicos.postgres.repositories import TaskRepository
+
+                tasks = TaskRepository(self._pg_client)
+                recent = await tasks.recent(limit=3)
+                self._conversation = [
+                    {
+                        "goal": str(t.get("goal", ""))[:200],
+                        "status": str(t.get("status", "")),
+                        "completed": [],
+                        "reply": "",
+                    }
+                    for t in recent
+                    if t.get("goal")
+                ]
+            except Exception as exc:  # noqa: BLE001 — seeding is best effort
+                logger.debug("conversation seeding skipped: %s", type(exc).__name__)
 
         if self._emergency_stopped:
             return TaskReport(
@@ -447,8 +468,12 @@ class Runtime:
         )
         del self._conversation[:-8]
 
-        # Persist task-level memory (BP Â§166: source + scope always present).
+        # Persist task-level memory (BP §166) — artifact paths included so
+        # future sessions can answer "where is that file".
+        artifact_facts = "; ".join(report.completed[:2])
         summary = f"{goal[:120]} -> {report.status.value}"
+        if artifact_facts:
+            summary += f" | artifacts: {artifact_facts[:200]}"
         await memory_engine.store(
             summary,
             scope=MemoryScope.PROJECT,
