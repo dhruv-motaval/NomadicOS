@@ -432,7 +432,9 @@ class AgentRuntime:
                     (failed[0][:120] if failed else "unknown"),
                 )
                 try:
-                    await self._learn_skill(model, goal, failed)
+                    await self._learn_skill(
+                        model, goal, failed, task_failed=(status is TaskStatus.FAILED)
+                    )
                 except Exception:  # noqa: BLE001 — learning is best effort
                     logger.debug("skill learning failed", exc_info=True)
                 # Escalation (owner spec): attempt 2 switches to the strongest
@@ -626,22 +628,35 @@ class AgentRuntime:
         except Exception:  # noqa: BLE001 â€” explanation is best effort
             return None
 
-    async def _learn_skill(self, model: LocalModel, goal: str, failed: list[str]) -> None:
+    async def _learn_skill(
+        self, model: LocalModel, goal: str, failed: list[str], *, task_failed: bool = False
+    ) -> None:
         """Distill a failure into a telegraphic skill note (caveman/ponytail style).
 
         The local model reads the local failure and writes the minimal facts
         that make the next attempt succeed. Everything stays on this machine
-        (I11). Skipped entirely when no SkillStore is configured."""
+        (I11). Skipped entirely when no SkillStore is configured.
+
+        Anti-fabrication guard (BP §366): a FAILED task cannot produce success
+        transcripts — notes claiming success are rejected, never stored."""
         if self._skills is None:
             return
         from nomadicos.models.base import GenerateRequest
 
+        failed_context = (
+            "IMPORTANT: the task FAILED. Write only NEXT-ATTEMPT instructions "
+            "derived from the failures. Do NOT write any transcript of commands "
+            "that were run, and NEVER claim anything succeeded.\n"
+            if task_failed
+            else ""
+        )
         prompt = (
-            "A task failed on this Windows machine. Write a skill note so the "
-            "next attempt succeeds. CAVEMAN style: max 8 short lines, only "
-            "concrete facts - exact commands, exact paths, what worked vs "
-            "failed on THIS machine. No explanation, no prose, no markdown "
-            "headers. If nothing useful can be learned, output only: SKIP\n"
+            "A task on this Windows machine needs a skill note so the next "
+            "attempt succeeds. CAVEMAN style: max 8 short lines, only concrete "
+            "facts - exact commands, exact paths, what failed on THIS machine. "
+            "No explanation, no prose, no markdown headers. "
+            + failed_context
+            + "If nothing useful can be learned, output only: SKIP\n"
             f"Goal: {goal}\n"
             f"Failures: {json.dumps(failed[:3])}"
         )
@@ -649,8 +664,22 @@ class AgentRuntime:
             GenerateRequest(prompt=prompt, max_output_tokens=256)
         )
         text = result.text.strip()
-        if text and "SKIP" not in text.upper()[:20]:
-            self._skills.save(goal, text)
+        if not text or "SKIP" in text.upper()[:20]:
+            return
+        if task_failed:
+            fabricated = re.search(
+                r"created successfully|tested and runs|compiled successfully|"
+                r"runs gui|worked|success",
+                text,
+                flags=re.IGNORECASE,
+            )
+            if fabricated:
+                logger.warning(
+                    "rejected fabricated skill note (failure task, success claim): %s",
+                    fabricated.group(0),
+                )
+                return
+        self._skills.save(goal, text)
 
     async def _learn_tool(
         self, model: LocalModel, goal: str, completed: list[str]
