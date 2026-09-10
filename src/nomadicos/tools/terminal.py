@@ -9,6 +9,7 @@ Security properties:
 
 import asyncio
 import os
+import re
 import time
 from typing import Any
 
@@ -41,13 +42,24 @@ BLOCKED_COMMAND_NAMES = {
     "format", "shutdown", "taskkill", "reg", "bcdedit", "vssadmin", "cipher",
 }
 
+# cmd.exe builtins: not executables, so create_subprocess_exec can't find them.
+# They are routed through `cmd /c` with each token kept as a separate argv
+# element (still no shell string concatenation — BP §194 holds), and shell
+# metacharacters inside tokens are rejected outright (no command chaining).
+CMD_BUILTINS = {
+    "start", "dir", "type", "mkdir", "del", "copy", "move", "echo",
+    "rmdir", "ren", "cls", "md", "rd", "title", "ver", "vol",
+}
+_SHELL_META = re.compile(r"[&|<>^%]")
+
 
 def build_command(arguments: dict[str, Any]) -> list[str]:
-    """Structured command array (BP §194). No shell."""
+    """Structured command array (BP §194). No shell string concatenation."""
     command = str(arguments["command"]).strip()
     if not command:
         raise ValidationError("command must be non-empty")
-    first = command.split()[0].lower()
+    tokens = command.split()
+    first = tokens[0].lower()
     if first.endswith(".exe"):
         first = first[:-4]
     if first in BLOCKED_COMMAND_NAMES:
@@ -56,7 +68,15 @@ def build_command(arguments: dict[str, Any]) -> list[str]:
             context={"reason": "administrative system command"},
         )
     args = [str(a) for a in arguments.get("args", [])]
-    return [command, *args]
+    if first in CMD_BUILTINS:
+        for token in [*tokens, *args]:
+            if _SHELL_META.search(token):
+                raise ValidationError(
+                    f"shell metacharacters are not allowed in builtins: {token}",
+                    context={"reason": "command chaining is blocked (BP §194)"},
+                )
+        return ["cmd", "/c", *tokens, *args]
+    return [*tokens, *args]
 
 
 class TerminalTool(Tool):

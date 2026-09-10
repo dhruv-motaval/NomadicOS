@@ -57,3 +57,26 @@ def test_dry_run_default_unsupported() -> None:
 
     result = asyncio.run(tool.dry_run({}, ToolContext(user_id="u")))
     assert result.success is False
+
+def test_builtin_start_routes_through_cmd() -> None:
+    from nomadicos.tools.terminal import build_command
+
+    argv = build_command({"command": "start chrome"})
+    assert argv == ["cmd", "/c", "start", "chrome"]
+
+
+def test_builtin_metacharacters_rejected() -> None:
+    import pytest
+
+    from nomadicos.core.errors import ValidationError
+    from nomadicos.tools.terminal import build_command
+
+    with pytest.raises(ValidationError):
+        build_command({"command": "start chrome & calc"})
+
+
+def test_multiword_exe_command_is_tokenized() -> None:
+    from nomadicos.tools.terminal import build_command
+
+    argv = build_command({"command": "git commit", "args": ["-m", "hi"]})
+    assert argv == ["git", "commit", "-m", "hi"]

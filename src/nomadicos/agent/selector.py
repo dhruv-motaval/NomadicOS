@@ -178,6 +178,12 @@ class ModelSelector:
                 score += 0.4  # structured output matters for every family
             if task_family == "vision" and getattr(caps, "vision", False):
                 score += 1.5  # hard requirement practically
+        # Thinking/reasoning channel (qwen3 hybrid, gpt-oss levels): only these
+        # can "think before answering" — they win the reasoning family.
+        low = model_id.lower()
+        is_thinker = "oss" in low or low.startswith("ollama/qwen3:") or "/qwen3:" in low
+        if task_family == "reasoning" and is_thinker:
+            score += 1.0
         return score
 
     # ---------------------------------------------------------------- filters

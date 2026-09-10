@@ -92,8 +92,8 @@ class Runtime:
         self.experience_store = self._experience_store()
         self.recorder = ExperienceRecorder(self.experience_store)
         self.evaluator = EvaluationEngine()
-        from nomadicos.agent.skills import SkillStore
         from nomadicos.agent.machine_profile import ensure_profile
+        from nomadicos.agent.skills import SkillStore
 
         self._skill_store = SkillStore(self.REPO_ROOT / "data" / "skills")
         try:
