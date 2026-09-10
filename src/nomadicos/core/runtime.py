@@ -93,8 +93,13 @@ class Runtime:
         self.recorder = ExperienceRecorder(self.experience_store)
         self.evaluator = EvaluationEngine()
         from nomadicos.agent.skills import SkillStore
+        from nomadicos.agent.machine_profile import ensure_profile
 
         self._skill_store = SkillStore(self.REPO_ROOT / "data" / "skills")
+        try:
+            self._machine_profile = ensure_profile(self.REPO_ROOT / "data")
+        except Exception:  # noqa: BLE001 — profile is best effort, table still applies
+            self._machine_profile = ""
         self._orchestration_enabled = False  # owner opt-in (ADR-0030 staged rollout)
         self._emergency_stopped = False
         self._fleet: Any = None
@@ -385,6 +390,7 @@ class Runtime:
             memory_context=memory_context,
             budget=TaskBudget(max_steps=8),
             skills=self._skill_store,
+            machine_profile=self._machine_profile,
         )
         identity = SubjectIdentity(user_id=user_id, session_id=session_id, task_id=task_id)
 

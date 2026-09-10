@@ -183,6 +183,7 @@ class AgentRuntime:
         memory: Any | None = None,  # MemoryEngine (BP §376-420)
         memory_context: list | None = None,  # pre-retrieved memories for this goal
         skills: SkillStore | None = None,  # machine-local learned skills
+        machine_profile: str | None = None,  # environment facts for every task
     ) -> None:
         self._selector = selector
         self._manager = manager
@@ -195,6 +196,7 @@ class AgentRuntime:
         self._memory = memory
         self._memory_context = memory_context or []
         self._skills = skills
+        self._machine_profile = machine_profile or ""
         # Pipeline agents: model selection + handling are explicit agent steps
         # (BP §364) — constructed lazily since they wrap this runtime.
         from nomadicos.agent.pipeline_agents import ModelHandlerAgent, SelectorAgent
@@ -630,6 +632,8 @@ class AgentRuntime:
             )
         if self._skills is not None:
             notes = self._skills.find(goal)
+        if self._skills is not None:
+            notes = self._skills.find(goal)
             if notes:
                 # Machine-local learned facts (I11: generated and stored locally).
                 prompt += (
@@ -641,6 +645,8 @@ class AgentRuntime:
                     '"arguments": {"command": "<the exact command from the fact>"}, '
                     '"finished": false}. Do NOT invent variations of it.'
                 )
+        if self._machine_profile:
+            prompt += "\n" + self._machine_profile
         result = await model.generate(GenerateRequest(prompt=prompt, max_output_tokens=1024))
         # Strip reasoning blocks — qwen/gpt-oss families may emit them around
         # the JSON; a leaked think-block previously broke extraction and the

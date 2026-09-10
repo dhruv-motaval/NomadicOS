@@ -44,11 +44,12 @@ def test_find_best_match_first(tmp_path: Path) -> None:
 class _MinimalRuntime:
     """Only the surface _learn_skill/_propose touch — no heavy ctor."""
 
-    def __init__(self, model, store, gateway=None):
+    def __init__(self, model, store, gateway=None, machine_profile: str = ""):
         self._skills = store
         self._model = model
         self._gateway = gateway
         self._memory_context: list = []
+        self._machine_profile = machine_profile
 
 
 def _make_gateway():
