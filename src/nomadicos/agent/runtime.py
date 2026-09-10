@@ -280,14 +280,21 @@ class AgentRuntime:
                     reply = await self._chat_reply(model, goal)
                     status = TaskStatus.SUCCESS
                     return
-                # 2. Execution loop (BP Â§185).
+                # 2. Execution loop (BP §185) — with a working memory: the
+                # model's own reasoning is carried across steps.
+                reasoning_history: list[str] = []
                 for step in range(1, max_steps + 1):
                     budget.check_step()
                     run_trace = attempt_trace.child(step_id=f"step-{step}")
 
-                    # 2a. Model proposes a structured tool call (BP Â§86).
+                    # 2a. Model proposes a structured tool call (BP §86).
                     budget.check_model_call()
-                    proposal = await self._propose(model, goal, completed)
+                    proposal = await self._propose(
+                        model, goal, completed, reasoning_history
+                    )
+                    step_reasoning = proposal.pop("_reasoning", None)
+                    if step_reasoning:
+                        reasoning_history.append(step_reasoning)
 
                     # Proposal routing (unified):
                     # 1) tool present  â†’ execute, REGARDLESS of the finished
@@ -623,11 +630,19 @@ class AgentRuntime:
             self._skills.save(goal, text)
 
     async def _propose(
-        self, model: LocalModel, goal: str, completed: list[str]
+        self,
+        model: LocalModel,
+        goal: str,
+        completed: list[str],
+        reasoning_history: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Model proposes a structured tool call (BP Â§86). Invalid proposals are
-        rejected â€” never executed raw (BP Â§86, Â§142). Tool schemas are surfaced
-        so the model can emit compliant arguments (BP Â§141)."""
+        """Model proposes a structured tool call (BP §86) — with room to THINK.
+
+        The model may reason before the JSON ('REASON:' lines or a native
+        think channel). That reasoning is captured and carried into the next
+        proposal: the loop gets a working memory instead of memoryless
+        JSON blank-filling. Invalid proposals are rejected, never executed
+        raw (BP §86, §142); schemas are surfaced for compliance (BP §141)."""
         from nomadicos.models.base import GenerateRequest
 
         tool_docs: list[dict[str, Any]] = []
@@ -643,10 +658,12 @@ class AgentRuntime:
 
         prompt = (
             "You are NomadicOS's task executor. Decide the next step for the goal. "
-            "Reply with ONE JSON object, nothing else:\n"
+            "THINK FIRST: start your reply with 'REASON:' followed by 1-2 short "
+            "sentences planning the step (skip only if truly obvious). Then output "
+            "the decision as ONE JSON object, nothing after it:\n"
             '{"tool": "<tool name>", "arguments": {...}, "finished": false|true}\n'
             "Use finished=true ONLY when the goal is already accomplished by the "
-            "completed steps listed â€” never before any step ran.\n"
+            "completed steps listed — never before any step ran.\n"
             "If the goal needs no tool (pure chat/question), answer directly instead "
             "of calling a tool:\n"
             '{"reply": "<your answer>", "finished": true}\n'
@@ -656,22 +673,23 @@ class AgentRuntime:
             "above can achieve the goal.\n"
             f"Goal: {goal}\n"
             f"Already completed steps: {completed[-3:]}\n"
-            "Available tools with argument schemas: "
-            f"{json.dumps(tool_docs)}"
         )
+        if reasoning_history:
+            prompt += (
+                "\nYour reasoning so far (continue this line of thought, do not "
+                f"repeat it): {json.dumps(reasoning_history[-2:])}\n"
+            )
         if self._memory_context:
             memories = [
                 {"content": m.content, "source": m.source, "verified": m.verified}
                 for m in self._memory_context
             ]
-            # BP Â§385/Â§352: memory is evidence to reason over, not authority â€”
+            # BP §385/§352: memory is evidence to reason over, not authority —
             # and revalidation is the caller's discipline.
             prompt += (
                 "\nRelevant past experience/memory (evidence, revalidate before "
                 f"relying on it): {json.dumps(memories)}"
             )
-        if self._skills is not None:
-            notes = self._skills.find(goal)
         if self._skills is not None:
             notes = self._skills.find(goal)
             if notes:
@@ -688,22 +706,51 @@ class AgentRuntime:
         if self._machine_profile:
             prompt += "\n" + self._machine_profile
         result = await model.generate(GenerateRequest(prompt=prompt, max_output_tokens=1024))
-        # Strip reasoning blocks â€” qwen/gpt-oss families may emit them around
-        # the JSON; a leaked think-block previously broke extraction and the
-        # proposal silently became "finished".
-        text = re.sub(r"<think>.*?</think>", "", result.text, flags=re.DOTALL)
+        raw = result.text
+
+        # Capture the model's reasoning: native think channels first, then the
+        # REASON: preamble. This is the loop's working memory (BP §190: learned
+        # reasoning is evidence, never authority).
+        reasoning: str | None = None
+        think = re.search(r"<think>(.*?)</think>", raw, flags=re.DOTALL)
+        if think:
+            reasoning = think.group(1).strip()[:400]
+        if not reasoning:
+            reason_match = re.search(
+                r"REASON:\s*(.+?)(?=\n\s*\{)", raw, flags=re.DOTALL | re.IGNORECASE
+            )
+            if reason_match:
+                reasoning = reason_match.group(1).strip()[:400]
+
+        # Strip think blocks, then robustly extract the JSON object (reasoning
+        # text may contain braces, so scan every '{' left to right).
+        text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
         text = re.sub(r"\[\[\[thinking.*?\]\]\]", "", text, flags=re.DOTALL | re.IGNORECASE)
-        try:
-            start = text.index("{")
-            end = text.rindex("}") + 1
-            proposal = json.loads(text[start:end])
-            if not isinstance(proposal, dict):
-                raise ValueError("proposal is not an object")
-            return proposal
-        except (ValueError, json.JSONDecodeError):
-            # Malformed proposal â‰  finished. Signal malformed so the loop
-            # counts it as a failed step and retries (truthful, BP Â§366).
-            return {"malformed": True}
+        proposal = self._extract_json(text)
+        if proposal is None:
+            # Malformed proposal ≠ finished. Signal malformed so the loop
+            # counts it as a failed step and retries (truthful, BP §366).
+            proposal = {"malformed": True}
+        if reasoning:
+            proposal["_reasoning"] = reasoning
+        return proposal
+
+    @staticmethod
+    def _extract_json(text: str) -> dict[str, Any] | None:
+        """Robust JSON object extraction: reasoning text may contain braces,
+        so scan every '{' left to right and take the first parseable dict."""
+        for start in (i for i, ch in enumerate(text) if ch == "{"):
+            for end in range(len(text) - 1, start, -1):
+                if text[end] != "}":
+                    continue
+                try:
+                    parsed = json.loads(text[start : end + 1])
+                    if isinstance(parsed, dict):
+                        return parsed
+                except json.JSONDecodeError:
+                    continue
+                break
+        return None
 
     async def _mediated_execute(
         self,

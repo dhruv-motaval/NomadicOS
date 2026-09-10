@@ -1,4 +1,4 @@
-"""Tests for machine-local skill learning (caveman/ponytail notes)."""
+﻿"""Tests for machine-local skill learning (caveman/ponytail notes)."""
 from __future__ import annotations
 
 import asyncio
@@ -42,7 +42,7 @@ def test_find_best_match_first(tmp_path: Path) -> None:
 
 
 class _MinimalRuntime:
-    """Only the surface _learn_skill/_propose touch — no heavy ctor."""
+    """Only the surface _learn_skill/_propose touch â€” no heavy ctor."""
 
     def __init__(self, model, store, gateway=None, machine_profile: str = ""):
         self._skills = store
@@ -57,7 +57,7 @@ def _make_gateway():
         def registered_tools(self):
             return []
 
-        def get(self, name):  # pragma: no cover — never called (no tools)
+        def get(self, name):  # pragma: no cover â€” never called (no tools)
             raise KeyError(name)
 
     return G()
@@ -114,6 +114,8 @@ def test_skill_injection_into_propose(tmp_path: Path) -> None:
     _loaded(model)
     model._responses = [json.dumps({"finished": True})]
     rt = _MinimalRuntime(model, store, _make_gateway())
+    rt._extract_json = AgentRuntime._extract_json
+    rt._extract_json = AgentRuntime._extract_json
 
     holder: dict = {}
     orig_generate = model.generate

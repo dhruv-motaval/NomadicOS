@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from nomadicos.agent.machine_profile import build_profile, ensure_profile
+from nomadicos.agent.runtime import AgentRuntime
 
 
 def test_profile_contains_common_apps() -> None:
@@ -31,7 +32,6 @@ def test_ensure_profile_writes_once(tmp_path: Path) -> None:
 
 
 def test_profile_injected_into_propose(tmp_path: Path) -> None:
-    from nomadicos.agent.runtime import AgentRuntime
     from nomadicos.models.fake import FakeLocalModel
 
     profile = build_profile(installed_apps=[])
@@ -55,6 +55,7 @@ def test_profile_injected_into_propose(tmp_path: Path) -> None:
                 raise KeyError(name)
 
         _gateway = _G()
+        _extract_json = staticmethod(AgentRuntime._extract_json)
 
     rt = _Minimal()
     holder: dict = {}
