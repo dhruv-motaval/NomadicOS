@@ -92,6 +92,9 @@ class Runtime:
         self.experience_store = self._experience_store()
         self.recorder = ExperienceRecorder(self.experience_store)
         self.evaluator = EvaluationEngine()
+        from nomadicos.agent.skills import SkillStore
+
+        self._skill_store = SkillStore(self.REPO_ROOT / "data" / "skills")
         self._emergency_stopped = False
         self._fleet: Any = None
         self._fleet_watch_task: Any = None
@@ -331,6 +334,7 @@ class Runtime:
             memory=memory_engine,
             memory_context=memory_context,
             budget=TaskBudget(max_steps=8),
+            skills=self._skill_store,
         )
         identity = SubjectIdentity(user_id=user_id, session_id=session_id, task_id=task_id)
         report = await runtime.execute_task(goal, identity)

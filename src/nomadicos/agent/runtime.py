@@ -18,6 +18,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from nomadicos.agent.selector import ModelSelector
+from nomadicos.agent.skills import SkillStore
 from nomadicos.audit.base import (
     AuditEvent,
     AuditEventCategory,
@@ -150,6 +151,7 @@ class AgentRuntime:
         budget: TaskBudget | None = None,
         memory: Any | None = None,  # MemoryEngine (BP §376-420)
         memory_context: list | None = None,  # pre-retrieved memories for this goal
+        skills: SkillStore | None = None,  # machine-local learned skills
     ) -> None:
         self._selector = selector
         self._manager = manager
@@ -161,6 +163,7 @@ class AgentRuntime:
         self._budget_cfg = budget or TaskBudget()
         self._memory = memory
         self._memory_context = memory_context or []
+        self._skills = skills
 
     async def execute_task(
         self,
@@ -308,6 +311,15 @@ class AgentRuntime:
         if status is TaskStatus.FAILED and not completed and reply is None and failed:
             reply = await self._explain_failure(model, goal, failed[0])
 
+        # Learning loop: a failed/partial task teaches the machine something
+        # for next time — a telegraphic skill note saved locally (I11). Best
+        # effort only; never blocks or alters the truthful report.
+        if status in (TaskStatus.FAILED, TaskStatus.PARTIALLY_COMPLETED) and failed:
+            try:
+                await self._learn_skill(model, goal, failed)
+            except Exception:  # noqa: BLE001 — learning is best effort
+                logger.debug("skill learning failed", exc_info=True)
+
         # 3. Evaluation (BP §100) + Experience (BP §95, §18) on every exit path.
         duration = time.monotonic() - started
         record = await self._evaluator.evaluate_run(
@@ -426,6 +438,32 @@ class AgentRuntime:
         except Exception:  # noqa: BLE001 — explanation is best effort
             return None
 
+    async def _learn_skill(self, model: LocalModel, goal: str, failed: list[str]) -> None:
+        """Distill a failure into a telegraphic skill note (caveman/ponytail style).
+
+        The local model reads the local failure and writes the minimal facts
+        that make the next attempt succeed. Everything stays on this machine
+        (I11). Skipped entirely when no SkillStore is configured."""
+        if self._skills is None:
+            return
+        from nomadicos.models.base import GenerateRequest
+
+        prompt = (
+            "A task failed on this Windows machine. Write a skill note so the "
+            "next attempt succeeds. CAVEMAN style: max 8 short lines, only "
+            "concrete facts - exact commands, exact paths, what worked vs "
+            "failed on THIS machine. No explanation, no prose, no markdown "
+            "headers. If nothing useful can be learned, output only: SKIP\n"
+            f"Goal: {goal}\n"
+            f"Failures: {json.dumps(failed[:3])}"
+        )
+        result = await model.generate(
+            GenerateRequest(prompt=prompt, max_output_tokens=256)
+        )
+        text = result.text.strip()
+        if text and "SKIP" not in text.upper()[:20]:
+            self._skills.save(goal, text)
+
     async def _propose(
         self, model: LocalModel, goal: str, completed: list[str]
     ) -> dict[str, Any]:
@@ -471,6 +509,14 @@ class AgentRuntime:
                 "\nRelevant past experience/memory (evidence, revalidate before "
                 f"relying on it): {json.dumps(memories)}"
             )
+        if self._skills is not None:
+            notes = self._skills.find(goal)
+            if notes:
+                # Machine-local learned facts (I11: generated and stored locally).
+                prompt += (
+                    "\nKnown-good notes for this machine from previous runs "
+                    f"(follow them): {json.dumps(notes)}"
+                )
         result = await model.generate(GenerateRequest(prompt=prompt, max_output_tokens=512))
         try:
             start = result.text.index("{")
