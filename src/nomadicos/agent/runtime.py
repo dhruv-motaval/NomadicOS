@@ -187,11 +187,18 @@ class AgentRuntime:
 
         # 1. Model selection (BP §97, §320): capability + history + hardware.
         if model_id is None:
-            model_id, _, _, selection_reason = self._selector.select(task_family="general")
+            task_family = self._task_family(goal)
+            model_id, _, _, selection_reason = self._selector.select(task_family=task_family)
         else:
+            task_family = "general"
             selection_reason = {"pinned": True}
         model = await self._manager.ensure_loaded(model_id)
-        logger.info("task started model=%s selection_reason=%s", model_id, selection_reason)
+        logger.info(
+            "task started model=%s task_family=%s selection_reason=%s",
+            model_id,
+            task_family,
+            selection_reason,
+        )
 
         completed: list[str] = []
         verification_notes: list[str] = []
@@ -376,6 +383,25 @@ class AgentRuntime:
         return report
 
     # ------------------------------------------------------------------ helpers
+
+    @staticmethod
+    def _task_family(goal: str) -> str:
+        """Route the goal to a selection family so the right class of model
+        serves it (BP §320). Cheap keyword routing; the selector still scores
+        candidates within the family. Action verbs → automation (needs reliable
+        tool-argument generation, i.e. the biggest brain available)."""
+        text = goal.lower()
+        if _ACTION_VERB.search(text) or any(
+            w in text
+            for w in ("code", "script", "function", "program", "debug", "refactor")
+        ):
+            return "automation"
+        if any(
+            w in text
+            for w in ("why", "reason", "explain", "compare", "analyze", "plan")
+        ):
+            return "reasoning"
+        return "general"
 
     @staticmethod
     def _is_conversational(goal: str) -> bool | None:

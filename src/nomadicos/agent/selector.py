@@ -70,7 +70,7 @@ class ModelSelector:
                 continue
             if not self._hardware_fits(descriptor.model_id):
                 continue
-            score, reason = self._score(descriptor.model_id, task_family, project_context)
+            score, reason = self._score(descriptor, task_family, project_context)
             candidates.append(SelectionCandidate(descriptor.model_id, score, reason))
 
         if not candidates:
@@ -96,12 +96,13 @@ class ModelSelector:
     # ---------------------------------------------------------------- scoring
 
     def _score(
-        self, model_id: str, task_family: str, project_context: str | None
+        self, descriptor: Any, task_family: str, project_context: str | None
     ) -> tuple[float, dict[str, Any]]:
         """BP §320: capability score + historical success; project-specific
         experience wins over global score (BP §148, §320)."""
+        model_id = descriptor.model_id
         history = self._history_score(model_id, task_family, project_context)
-        capability = self._capability_score(model_id, task_family)
+        capability = self._capability_score(model_id, task_family, descriptor)
         # BP §320: capability + history composite; project bonus may apply.
         score = (
             self._policy.capability_weight * capability
@@ -137,9 +138,14 @@ class ModelSelector:
                 return max(global_score, project_score)
         return global_score
 
-    @staticmethod
-    def _capability_score(model_id: str, task_family: str) -> float:
-        """Benchmark scores arrive in Phase 13; family-fit baseline until then."""
+    def _capability_score(
+        self, model_id: str, task_family: str, descriptor: Any = None
+    ) -> float:
+        """BP §320: family fit + model capability. Until Phase 13 benchmarks
+        arrive, intelligence is estimated from model size (params ≈ capability)
+        plus verified capability flags — NOT a static constant, so bigger
+        reasoners actually win planning/reasoning families while small models
+        stay attractive only where speed matters more than depth."""
         family_fit = {
             "coding": 7.0,
             "reasoning": 7.0,
@@ -148,7 +154,31 @@ class ModelSelector:
             "automation": 6.0,
             "general": 6.5,
         }
-        return family_fit.get(task_family, 6.0)
+        score = family_fit.get(task_family, 6.0)
+
+        caps = getattr(descriptor, "capabilities", None) if descriptor else None
+        # Size-based intelligence estimate (BP §148 metadata until benchmarks).
+        # Derive params from model id (e.g. "14b", "30b-a3b") — discovered
+        # Ollama models carry the size in their name.
+        import re as _re
+
+        size_match = _re.search(r"(\d+(?:\.\d+)?)b\b", model_id.lower())
+        params_b = float(size_match.group(1)) if size_match else 7.0
+        # Diminishing returns: 4b→~6.6, 8b→~7.2, 14b→~7.9, 30b→~8.5
+        size_score = min(6.0 + (params_b ** 0.5) * 0.55, 9.5)
+
+        if task_family == "general":
+            # Speed-first: chat and greetings want the small fast model;
+            # deep reasoning is routed to its own family.
+            return round(6.5 - 0.06 * params_b, 3)
+
+        score = (score + size_score) / 2
+        if caps is not None:
+            if getattr(caps, "tool_use", False):
+                score += 0.4  # structured output matters for every family
+            if task_family == "vision" and getattr(caps, "vision", False):
+                score += 1.5  # hard requirement practically
+        return score
 
     # ---------------------------------------------------------------- filters
 
