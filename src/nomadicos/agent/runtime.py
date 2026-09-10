@@ -203,7 +203,12 @@ class AgentRuntime:
         await self._audit_task(trace, task_id, "TASK_START", model_id)
 
         try:
-            if self._is_conversational(goal):
+            intent = self._is_conversational(goal)
+            if intent is None:
+                # Ambiguous phrasing/language: let the model classify it.
+                budget.check_model_call()
+                intent = await self._classify_intent(model, goal)
+            if intent:
                 # Chat, not a task: nothing effectful happens, so the Security
                 # Gate is not involved (I5 untouched — there is no action to
                 # mediate). The model answers directly, without tool proposals.
@@ -389,11 +394,35 @@ class AgentRuntime:
             return False
         if text.endswith("?"):
             return True  # question without any action verb ("local what?")
-        return (
-            any(p.match(text) for p in _CONVERSATIONAL_PATTERNS)
-            or _QUESTION_STARTER.match(text) is not None
-            or _CHAT_STARTER.match(text) is not None
+        if any(p.match(text) for p in _CONVERSATIONAL_PATTERNS):
+            return True
+        if _QUESTION_STARTER.match(text) is not None:
+            return True
+        if _CHAT_STARTER.match(text) is not None:
+            return True
+        return None  # ambiguous (any language/phrasing) — let the model decide
+
+    async def _classify_intent(self, model: LocalModel, goal: str) -> bool:
+        """Model-driven chat/task classification for ambiguous messages.
+
+        Understands any language the model knows (Hinglish included). Defaults
+        to task on failure — preserving pre-classifier behavior (BP §185)."""
+        from nomadicos.models.base import GenerateRequest
+
+        prompt = (
+            "Classify the user message. Reply with ONE word:\n"
+            "- task: the user wants the assistant to PERFORM/CHANGE something "
+            "on this machine (run, write, create, open, install, fix...)\n"
+            "- chat: a question, greeting, or conversation\n"
+            f"Message: {goal}"
         )
+        try:
+            result = await model.generate(
+                GenerateRequest(prompt=prompt, max_output_tokens=8)
+            )
+            return result.text.strip().lower() != "task"
+        except Exception:  # noqa: BLE001 — classification failure ⇒ task (old behavior)
+            return False
 
     async def _chat_reply(self, model: LocalModel, goal: str) -> str:
         """Direct conversational answer — no tools, no gate (nothing effectful)."""
@@ -514,8 +543,10 @@ class AgentRuntime:
             if notes:
                 # Machine-local learned facts (I11: generated and stored locally).
                 prompt += (
-                    "\nKnown-good notes for this machine from previous runs "
-                    f"(follow them): {json.dumps(notes)}"
+                    "\nMACHINE FACTS - these are verified commands that WORK on "
+                    "this machine. Use them EXACTLY as written, word for word:\n"
+                    + "\n".join(notes)
+                    + "\nDo NOT invent new commands when a fact above covers the goal."
                 )
         result = await model.generate(GenerateRequest(prompt=prompt, max_output_tokens=512))
         try:
