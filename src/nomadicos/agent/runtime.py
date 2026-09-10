@@ -1,13 +1,13 @@
-"""AgentRuntime: the canonical execution loop (BP §185, §50; Milestone §78).
+﻿"""AgentRuntime: the canonical execution loop (BP Â§185, Â§50; Milestone Â§78).
 
     while not task.finished:
-        observe → plan/decide (model proposes structured tool call)
-        → security.authorize → tools.execute → observe evidence
-        → verify → record step → recover_or_finish
+        observe â†’ plan/decide (model proposes structured tool call)
+        â†’ security.authorize â†’ tools.execute â†’ observe evidence
+        â†’ verify â†’ record step â†’ recover_or_finish
 
-Budgets (BP §72) are enforced here, outside the model (I10). Every action is
+Budgets (BP Â§72) are enforced here, outside the model (I10). Every action is
 mediated by the Security Gate (I5). Reports distinguish requested/done/
-verified/failed/uncertainty (BP §180-181).
+verified/failed/uncertainty (BP Â§180-181).
 """
 
 import json
@@ -69,7 +69,7 @@ _CONVERSATIONAL_PATTERNS = tuple(
 )
 
 # Informational questions / chat starters: "what is X", "tell me about Y".
-# The action-verb veto below keeps question-shaped requests ("can you open…")
+# The action-verb veto below keeps question-shaped requests ("can you openâ€¦")
 # in the task pipeline.
 _QUESTION_STARTER = re.compile(
     r"^\s*(what|who|where|when|why|which|whose|how)\b.*$",
@@ -81,7 +81,7 @@ _CHAT_STARTER = re.compile(
 )
 
 # Explicit action verbs make ANY message a task, even question-shaped ones
-# ("can you open chrome…"): the agent owns machine effects, not chit-chat.
+# ("can you open chromeâ€¦"): the agent owns machine effects, not chit-chat.
 _ACTION_VERB = re.compile(
     r"\b(open|run|execute|launch|start|stop|kill|write|create|delete|remove|"
     r"list|read|make|copy|move|rename|edit|install|download|upload|play|"
@@ -89,7 +89,7 @@ _ACTION_VERB = re.compile(
     re.IGNORECASE,
 )
 
-# "How do I …?" asks for instructions, never for action — even with verbs.
+# "How do I â€¦?" asks for instructions, never for action â€” even with verbs.
 _HOW_TO_QUESTION = re.compile(
     r"^\s*how\s+(do|does|did|can|could|to|should|would)\b.*$",
     re.IGNORECASE,
@@ -97,7 +97,7 @@ _HOW_TO_QUESTION = re.compile(
 
 
 class TaskReport(BaseModel):
-    """BP §180: requested vs done vs verified vs failed vs uncertainty."""
+    """BP Â§180: requested vs done vs verified vs failed vs uncertainty."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -152,7 +152,7 @@ class _LatencyProbe:
         probe = self
         inner = model
 
-        class _Probed:  # noqa: N801 — probe is private
+        class _Probed:  # noqa: N801 â€” probe is private
             def __getattr__(self, name: str) -> Any:
                 return getattr(inner, name)
 
@@ -180,7 +180,7 @@ class AgentRuntime:
         evaluator: EvaluationEngine,
         bus: EventBus | None = None,
         budget: TaskBudget | None = None,
-        memory: Any | None = None,  # MemoryEngine (BP §376-420)
+        memory: Any | None = None,  # MemoryEngine (BP Â§376-420)
         memory_context: list | None = None,  # pre-retrieved memories for this goal
         skills: SkillStore | None = None,  # machine-local learned skills
         machine_profile: str | None = None,  # environment facts for every task
@@ -198,7 +198,7 @@ class AgentRuntime:
         self._skills = skills
         self._machine_profile = machine_profile or ""
         # Pipeline agents: model selection + handling are explicit agent steps
-        # (BP §364) — constructed lazily since they wrap this runtime.
+        # (BP Â§364) â€” constructed lazily since they wrap this runtime.
         from nomadicos.agent.pipeline_agents import ModelHandlerAgent, SelectorAgent
 
         self.selector_agent = SelectorAgent(self)
@@ -212,7 +212,7 @@ class AgentRuntime:
         model_id: str | None = None,
         max_steps: int = 8,
     ) -> TaskReport:
-        """Run one task through the canonical loop (BP §185, §78)."""
+        """Run one task through the canonical loop (BP Â§185, Â§78)."""
         started = time.monotonic()
         budget = TaskBudgetTracker(self._budget_cfg)
         import uuid
@@ -225,7 +225,7 @@ class AgentRuntime:
         )
 
         model_latency = _LatencyProbe()
-        # 1. Model selection + handling as agents (BP §97, §320, §364).
+        # 1. Model selection + handling as agents (BP Â§97, Â§320, Â§364).
         if model_id is None:
             decision = await self.selector_agent.select(goal)
             task_family = decision.task_family
@@ -252,36 +252,50 @@ class AgentRuntime:
 
         await self._audit_task(trace, task_id, "TASK_START", model_id)
 
-        try:
-            intent = self._is_conversational(goal)
-            if intent is None:
-                # Ambiguous phrasing/language: let the model classify it.
-                budget.check_model_call()
-                intent = await self._classify_intent(model, goal)
-            if intent:
-                # Chat, not a task: nothing effectful happens, so the Security
-                # Gate is not involved (I5 untouched — there is no action to
-                # mediate). The model answers directly, without tool proposals.
-                budget.check_model_call()
-                reply = await self._chat_reply(model, goal)
-                status = TaskStatus.SUCCESS
-            else:
-                # 2. Execution loop (BP §185).
+        async def _run_execution(attempt_no: int) -> None:
+            """One full attempt: proposal loop with a FRESH budget. On attempt 2
+            the skills learned from attempt 1 are injected by _propose â€” this is
+            the self-improvement loop: fail â†’ learn â†’ retry â†’ succeed."""
+            nonlocal status, reply, model_latency
+            nonlocal completed, failed, verification_notes, evidence_bundles
+            completed, verification_notes = [], []
+            failed, evidence_bundles = [], []
+            reply = None
+            status = TaskStatus.RUNNING
+            budget = TaskBudgetTracker(self._budget_cfg)
+            attempt_trace = trace.child(step_id=f"attempt-{attempt_no}")
+            run_trace = trace
+
+            try:
+                intent = self._is_conversational(goal)
+                if intent is None:
+                    # Ambiguous phrasing/language: let the model classify it.
+                    budget.check_model_call()
+                    intent = await self._classify_intent(model, goal)
+                if intent:
+                    # Chat, not a task: nothing effectful happens, so the Security
+                    # Gate is not involved (I5 untouched â€” there is no action to
+                    # mediate). The model answers directly, without tool proposals.
+                    budget.check_model_call()
+                    reply = await self._chat_reply(model, goal)
+                    status = TaskStatus.SUCCESS
+                    return
+                # 2. Execution loop (BP Â§185).
                 for step in range(1, max_steps + 1):
                     budget.check_step()
-                    trace = trace.child(step_id=f"step-{step}")
+                    run_trace = attempt_trace.child(step_id=f"step-{step}")
 
-                    # 2a. Model proposes a structured tool call (BP §86).
+                    # 2a. Model proposes a structured tool call (BP Â§86).
                     budget.check_model_call()
                     proposal = await self._propose(model, goal, completed)
 
                     # Proposal routing (unified):
-                    # 1) tool present  → execute, REGARDLESS of the finished
+                    # 1) tool present  â†’ execute, REGARDLESS of the finished
                     #    flag (small models habitually mark their own reply
                     #    "finished"; the flag only ever breaks a no-tool reply).
-                    # 2) reply present → conversational answer, break.
+                    # 2) reply present â†’ conversational answer, break.
                     # 3) finished without any work (step 1, nothing completed)
-                    #    → challenge ONCE, then fail truthfully (BP §366).
+                    #    â†’ challenge ONCE, then fail truthfully (BP Â§366).
                     tool_name = proposal.get("tool", "")
                     arguments = proposal.get("arguments", {}) or {}
 
@@ -329,15 +343,15 @@ class AgentRuntime:
                     if not gate_result.success:
                         failed.append(f"{tool_name}: {gate_result.error}")
                         if "requires user confirmation" in (gate_result.error or ""):
-                            # ASK cannot flip to ALLOW mid-task — there is no
+                            # ASK cannot flip to ALLOW mid-task â€” there is no
                             # approver inside this execution. Retrying the same
-                            # refused proposal wastes budget (fail fast, BP §70).
+                            # refused proposal wastes budget (fail fast, BP Â§70).
                             budget.spend_all_retries()
                             break
                         budget.check_retry()
                         continue
 
-                    # 2c. Verification (BP §28, §144: evidence, not claims).
+                    # 2c. Verification (BP Â§28, Â§144: evidence, not claims).
                     evidence_kind = self._gateway.get(tool_name).spec.evidence_kind
                     if evidence_kind in ("filesystem", "terminal"):
                         evidence = self._evidence_from(tool_name, gate_result)
@@ -355,45 +369,58 @@ class AgentRuntime:
                             verification_notes.append(f"no verifier: {exc}")
 
                     completed.append(f"{tool_name} {json.dumps(arguments)[:120]}")
-                    await self._audit_task(trace, task_id, "STEP_DONE", model_id)
+                    await self._audit_task(run_trace, task_id, "STEP_DONE", model_id)
 
                 if completed:
-                    # Steps ran; failures make it partial (truthful report, BP §180).
+                    # Steps ran; failures make it partial (truthful report, BP Â§180).
                     status = TaskStatus.PARTIALLY_COMPLETED if failed else TaskStatus.SUCCESS
                 elif reply is not None:
                     # Answered conversationally but nothing was materially done.
                     status = TaskStatus.PARTIALLY_COMPLETED
                 else:
-                    # The model claimed finished without executing anything —
-                    # never a success (BP §366: claims are not evidence).
+                    # The model claimed finished without executing anything â€”
+                    # never a success (BP Â§366: claims are not evidence).
                     status = TaskStatus.FAILED
                     failed.append(
                         "model declared the goal finished without executing any steps"
                     )
                 # (a plain-language explanation is added post-mortem below)
-        except (BudgetExceeded, TaskTimeout, NomadicError) as exc:
-            status = TaskStatus.FAILED
-            failed.append(str(exc))
-        except Exception as exc:  # noqa: BLE001 — surfaced in the truthful report
-            status = TaskStatus.FAILED
-            failed.append(f"unexpected {type(exc).__name__}: {exc}")
+            except (BudgetExceeded, TaskTimeout, NomadicError) as exc:
+                status = TaskStatus.FAILED
+                failed.append(str(exc))
+            except Exception as exc:  # noqa: BLE001 â€” surfaced in the truthful report
+                status = TaskStatus.FAILED
+                failed.append(f"unexpected {type(exc).__name__}: {exc}")
+
+        # Self-improvement loop (max 2 attempts): attempt 1 runs; if it fails
+        # with zero executed work, the failure is distilled into a skill note
+        # and attempt 2 re-runs IMMEDIATELY with that knowledge injected
+        # (fresh budget, same model â€” learning, not luck; BP Â§67, Â§147).
+        max_attempts = 2
+        for attempt_no in range(1, max_attempts + 1):
+            await _run_execution(attempt_no)
+            if status is not TaskStatus.FAILED:
+                break
+            if completed:  # real work happened; a retry would duplicate it
+                break
+            if attempt_no < max_attempts:
+                logger.info(
+                    "attempt %d failed (%s) â€” learning and retrying with fresh knowledge",
+                    attempt_no,
+                    (failed[0][:120] if failed else "unknown"),
+                )
+                try:
+                    await self._learn_skill(model, goal, failed)
+                except Exception:  # noqa: BLE001 â€” learning is best effort
+                    logger.debug("skill learning failed", exc_info=True)
 
         # Post-mortem: on total failure with zero executed steps, fetch a
-        # plain-language explanation for the user. Best effort and truthful —
-        # the FAILED status is never softened (BP §366).
+        # plain-language explanation for the user. Best effort and truthful â€”
+        # the FAILED status is never softened (BP Â§366).
         if status is TaskStatus.FAILED and not completed and reply is None and failed:
             reply = await self._explain_failure(model, goal, failed[0])
 
-        # Learning loop: a failed/partial task teaches the machine something
-        # for next time — a telegraphic skill note saved locally (I11). Best
-        # effort only; never blocks or alters the truthful report.
-        if status in (TaskStatus.FAILED, TaskStatus.PARTIALLY_COMPLETED) and failed:
-            try:
-                await self._learn_skill(model, goal, failed)
-            except Exception:  # noqa: BLE001 — learning is best effort
-                logger.debug("skill learning failed", exc_info=True)
-
-        # 3. Evaluation (BP §100) + Experience (BP §95, §18) on every exit path.
+        # 3. Evaluation (BP Â§100) + Experience (BP Â§95, Â§18) on every exit path.
         duration = time.monotonic() - started
         record = await self._evaluator.evaluate_run(
             task_id=task_id,
@@ -449,8 +476,8 @@ class AgentRuntime:
     @staticmethod
     def _task_family(goal: str) -> str:
         """Route the goal to a selection family so the right class of model
-        serves it (BP §320). Cheap keyword routing; the selector still scores
-        candidates within the family. Action verbs → automation (needs reliable
+        serves it (BP Â§320). Cheap keyword routing; the selector still scores
+        candidates within the family. Action verbs â†’ automation (needs reliable
         tool-argument generation, i.e. the biggest brain available)."""
         text = goal.lower()
         if _ACTION_VERB.search(text) or any(
@@ -474,7 +501,7 @@ class AgentRuntime:
         be trusted to follow reply-vs-tool prompt rules reliably, so this
         classification is deterministic here in the runtime.
 
-        Returns None when the message is ambiguous (any language/phrasing) —
+        Returns None when the message is ambiguous (any language/phrasing) â€”
         the caller then asks the model to classify it."""
         text = goal.strip()
         if not text:
@@ -491,13 +518,13 @@ class AgentRuntime:
             return True
         if _CHAT_STARTER.match(text) is not None:
             return True
-        return None  # ambiguous (any language/phrasing) — let the model decide
+        return None  # ambiguous (any language/phrasing) â€” let the model decide
 
     async def _classify_intent(self, model: LocalModel, goal: str) -> bool:
         """Model-driven chat/task classification for ambiguous messages.
 
         Understands any language the model knows (Hinglish included). Defaults
-        to task on failure — preserving pre-classifier behavior (BP §185)."""
+        to task on failure â€” preserving pre-classifier behavior (BP Â§185)."""
         from nomadicos.models.base import GenerateRequest
 
         prompt = (
@@ -512,11 +539,11 @@ class AgentRuntime:
                 GenerateRequest(prompt=prompt, max_output_tokens=8)
             )
             return result.text.strip().lower() != "task"
-        except Exception:  # noqa: BLE001 — classification failure ⇒ task (old behavior)
+        except Exception:  # noqa: BLE001 â€” classification failure â‡’ task (old behavior)
             return False
 
     async def _chat_reply(self, model: LocalModel, goal: str) -> str:
-        """Direct conversational answer — no tools, no gate (nothing effectful)."""
+        """Direct conversational answer â€” no tools, no gate (nothing effectful)."""
         from nomadicos.models.base import GenerateRequest
 
         prompt = (
@@ -527,7 +554,7 @@ class AgentRuntime:
         result = await model.generate(
             GenerateRequest(prompt=prompt, max_output_tokens=256)
         )
-        return result.text.strip() or "…"
+        return result.text.strip() or "â€¦"
 
     async def _explain_failure(
         self, model: LocalModel, goal: str, failure: str
@@ -535,7 +562,7 @@ class AgentRuntime:
         """Plain-language explanation when the goal could not be executed.
 
         Best effort: any error here leaves ``reply`` unset (truthful report
-        only, no invented explanation — BP §366)."""
+        only, no invented explanation â€” BP Â§366)."""
         from nomadicos.models.base import GenerateRequest
 
         prompt = (
@@ -553,7 +580,7 @@ class AgentRuntime:
             )
             text = result.text.strip()
             return text or None
-        except Exception:  # noqa: BLE001 — explanation is best effort
+        except Exception:  # noqa: BLE001 â€” explanation is best effort
             return None
 
     async def _learn_skill(self, model: LocalModel, goal: str, failed: list[str]) -> None:
@@ -585,9 +612,9 @@ class AgentRuntime:
     async def _propose(
         self, model: LocalModel, goal: str, completed: list[str]
     ) -> dict[str, Any]:
-        """Model proposes a structured tool call (BP §86). Invalid proposals are
-        rejected — never executed raw (BP §86, §142). Tool schemas are surfaced
-        so the model can emit compliant arguments (BP §141)."""
+        """Model proposes a structured tool call (BP Â§86). Invalid proposals are
+        rejected â€” never executed raw (BP Â§86, Â§142). Tool schemas are surfaced
+        so the model can emit compliant arguments (BP Â§141)."""
         from nomadicos.models.base import GenerateRequest
 
         tool_docs: list[dict[str, Any]] = []
@@ -606,7 +633,7 @@ class AgentRuntime:
             "Reply with ONE JSON object, nothing else:\n"
             '{"tool": "<tool name>", "arguments": {...}, "finished": false|true}\n'
             "Use finished=true ONLY when the goal is already accomplished by the "
-            "completed steps listed — never before any step ran.\n"
+            "completed steps listed â€” never before any step ran.\n"
             "If the goal needs no tool (pure chat/question), answer directly instead "
             "of calling a tool:\n"
             '{"reply": "<your answer>", "finished": true}\n'
@@ -624,7 +651,7 @@ class AgentRuntime:
                 {"content": m.content, "source": m.source, "verified": m.verified}
                 for m in self._memory_context
             ]
-            # BP §385/§352: memory is evidence to reason over, not authority —
+            # BP Â§385/Â§352: memory is evidence to reason over, not authority â€”
             # and revalidation is the caller's discipline.
             prompt += (
                 "\nRelevant past experience/memory (evidence, revalidate before "
@@ -648,7 +675,7 @@ class AgentRuntime:
         if self._machine_profile:
             prompt += "\n" + self._machine_profile
         result = await model.generate(GenerateRequest(prompt=prompt, max_output_tokens=1024))
-        # Strip reasoning blocks — qwen/gpt-oss families may emit them around
+        # Strip reasoning blocks â€” qwen/gpt-oss families may emit them around
         # the JSON; a leaked think-block previously broke extraction and the
         # proposal silently became "finished".
         text = re.sub(r"<think>.*?</think>", "", result.text, flags=re.DOTALL)
@@ -661,8 +688,8 @@ class AgentRuntime:
                 raise ValueError("proposal is not an object")
             return proposal
         except (ValueError, json.JSONDecodeError):
-            # Malformed proposal ≠ finished. Signal malformed so the loop
-            # counts it as a failed step and retries (truthful, BP §366).
+            # Malformed proposal â‰  finished. Signal malformed so the loop
+            # counts it as a failed step and retries (truthful, BP Â§366).
             return {"malformed": True}
 
     async def _mediated_execute(
