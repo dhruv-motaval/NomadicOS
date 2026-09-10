@@ -124,4 +124,4 @@ def test_skill_injection_into_propose(tmp_path: Path) -> None:
     model.generate = capture
     asyncio.run(AgentRuntime._propose(rt, model, "can you open chrome", []))
     assert "start chrome" in holder["prompt"]
-    assert "Known-good notes" in holder["prompt"]
+    assert "MACHINE FACTS" in holder["prompt"]

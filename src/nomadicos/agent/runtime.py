@@ -378,13 +378,16 @@ class AgentRuntime:
     # ------------------------------------------------------------------ helpers
 
     @staticmethod
-    def _is_conversational(goal: str) -> bool:
+    def _is_conversational(goal: str) -> bool | None:
         """Informational/chat detection: greetings, questions, explain-starters.
 
         Any explicit action verb ('open chrome', 'list files') forces the task
         pipeline even if the message is question-shaped. Small models cannot
         be trusted to follow reply-vs-tool prompt rules reliably, so this
-        classification is deterministic here in the runtime."""
+        classification is deterministic here in the runtime.
+
+        Returns None when the message is ambiguous (any language/phrasing) —
+        the caller then asks the model to classify it."""
         text = goal.strip()
         if not text:
             return False
