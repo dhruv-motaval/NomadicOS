@@ -1,6 +1,9 @@
-"""Tests for the interactive CLI REPL (ADR-0015)."""
+"""Tests for the interactive CLI (ADR-0015 + ADR-0032 menu flow).
 
-
+Flow since the arrow-menu refactor: run() opens the menu (typed fallback when
+stdin is piped); selecting "1" enters chat mode where lines are goals and
+/close exits the whole app.
+"""
 from nomadicos.cli_interactive import InteractiveCLI
 
 
@@ -32,7 +35,7 @@ class FakeRuntime:
         self.status_text = "NomadicOS | test"
         self.sync_calls = 0
 
-    def run_goal_sync(self, goal, user_id="local-owner"):
+    async def run_goal(self, goal, user_id="local-owner"):
         from nomadicos.agent.runtime import TaskReport
         from nomadicos.core.lifecycle import TaskStatus
 
@@ -90,8 +93,9 @@ def make_cli(lines: list[str]) -> tuple[InteractiveCLI, Recorder, FakeRuntime]:
     return cli, out, runtime
 
 
+# "1" selects Chat from the menu; "/close" exits the app from chat mode.
 def test_chat_message_executes_task() -> None:
-    cli, out, runtime = make_cli(["Create hello.txt with a greeting", "/close"])
+    cli, out, runtime = make_cli(["1", "Create hello.txt with a greeting", "/close"])
     exit_code = cli.run()
     assert exit_code == 0
     assert runtime.goals == ["Create hello.txt with a greeting"]
@@ -99,32 +103,38 @@ def test_chat_message_executes_task() -> None:
 
 
 def test_multiple_messages_sequence() -> None:
-    cli, out, runtime = make_cli(["first goal", "second goal", "/close"])
+    cli, out, runtime = make_cli(["1", "first goal", "second goal", "/close"])
     cli.run()
     assert runtime.goals == ["first goal", "second goal"]
 
 
 def test_slash_close_exits() -> None:
-    cli, out, runtime = make_cli(["/close"])
+    cli, out, runtime = make_cli(["1", "/close"])
     assert cli.run() == 0
 
 
 def test_slash_help_does_not_execute_task() -> None:
-    cli, out, runtime = make_cli(["/help", "/close"])
+    cli, out, runtime = make_cli(["1", "/help", "/close"])
     cli.run()
     assert runtime.goals == []
 
 
 def test_unknown_command_reported() -> None:
-    cli, out, runtime = make_cli(["/bogus", "/close"])
+    cli, out, runtime = make_cli(["1", "/bogus", "/close"])
     cli.run()
     assert any("Unknown command" in line for line in out.lines)
 
 
 def test_sessions_shows_history() -> None:
-    cli, out, runtime = make_cli(["/sessions", "/close"])
+    cli, out, runtime = make_cli(["1", "/sessions", "/close"])
     cli.run()
     assert any("Create hello.txt" in line for line in out.lines)
+
+
+def test_menu_returns_to_chat_again() -> None:
+    cli, out, runtime = make_cli(["1", "/menu", "1", "second visit", "/close"])
+    cli.run()
+    assert runtime.goals == ["second visit"]
 
 
 def test_eof_exits_gracefully() -> None:
@@ -133,18 +143,18 @@ def test_eof_exits_gracefully() -> None:
 
 
 def test_empty_lines_ignored() -> None:
-    cli, out, runtime = make_cli(["", "   ", "/close"])
+    cli, out, runtime = make_cli(["1", "", "   ", "/close"])
     cli.run()
     assert runtime.goals == []
 
 
 def test_failed_task_is_reported_not_crashed() -> None:
     class FailingRuntime(FakeRuntime):
-        def run_goal_sync(self, goal, user_id="local-owner"):
+        async def run_goal(self, goal, user_id="local-owner"):
             raise RuntimeError("model unavailable")
 
     out = Recorder()
     runtime = FailingRuntime()
-    cli = InteractiveCLI(runtime, input_fn=FakeInput(["break it", "/close"]), output_fn=out)
+    cli = InteractiveCLI(runtime, input_fn=FakeInput(["1", "break it", "/close"]), output_fn=out)
     cli.run()
     assert any("model unavailable" in line for line in out.lines)
