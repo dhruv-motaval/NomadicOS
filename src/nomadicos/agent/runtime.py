@@ -185,6 +185,7 @@ class AgentRuntime:
         skills: SkillStore | None = None,  # machine-local learned skills
         machine_profile: str | None = None,  # environment facts for every task
         workspace_root: str | None = None,  # where task files must be written
+        conversation: list | None = None,  # recent session exchanges (BP §376)
     ) -> None:
         self._selector = selector
         self._manager = manager
@@ -199,6 +200,7 @@ class AgentRuntime:
         self._skills = skills
         self._machine_profile = machine_profile or ""
         self._workspace_root = workspace_root or ""
+        self._conversation_log = conversation or []
         # Pipeline agents: model selection + handling are explicit agent steps
         # (BP Â§364) â€” constructed lazily since they wrap this runtime.
         from nomadicos.agent.pipeline_agents import ModelHandlerAgent, SelectorAgent
@@ -276,10 +278,12 @@ class AgentRuntime:
                     intent = await self._classify_intent(model, goal)
                 if intent:
                     # Chat, not a task: nothing effectful happens, so the Security
-                    # Gate is not involved (I5 untouched â€” there is no action to
+                    # Gate is not involved (I5 untouched — there is no action to
                     # mediate). The model answers directly, without tool proposals.
                     budget.check_model_call()
-                    reply = await self._chat_reply(model, goal)
+                    reply = await self._chat_reply(
+                        model, goal, getattr(self, "_conversation_log", None)
+                    )
                     status = TaskStatus.SUCCESS
                     return
                 # 2. Execution loop (BP §185) — with a working memory: the
@@ -359,7 +363,7 @@ class AgentRuntime:
                         tool_name, arguments, identity, budget
                     )
                     if not gate_result.success:
-                        failed.append(f"{tool_name}: {gate_result.error}")
+                        failed.append(f"{tool_name}: {gate_result.error or 'unknown gate failure'}")
                         if "requires user confirmation" in (gate_result.error or ""):
                             # ASK cannot flip to ALLOW mid-task â€” there is no
                             # approver inside this execution. Retrying the same
@@ -587,15 +591,25 @@ class AgentRuntime:
         except Exception:  # noqa: BLE001 â€” classification failure â‡’ task (old behavior)
             return False
 
-    async def _chat_reply(self, model: LocalModel, goal: str) -> str:
-        """Direct conversational answer â€” no tools, no gate (nothing effectful)."""
+    async def _chat_reply(
+        self, model: LocalModel, goal: str, conversation: list | None = None
+    ) -> str:
+        """Direct conversational answer — no tools, no gate (nothing effectful).
+
+        Carries recent session context so follow-ups ('in which you wrote...')
+        resolve against what actually happened."""
         from nomadicos.models.base import GenerateRequest
 
         prompt = (
             "You are NomadicOS, a local-first AI assistant. Reply briefly and "
             "conversationally. Do not use tools. Do not output JSON.\n"
-            f"Message: {goal}"
         )
+        if conversation:
+            prompt += (
+                "Recent conversation with the owner (use this for follow-up "
+                f"references like 'that file'): {json.dumps(conversation)}\n"
+            )
+        prompt += f"Message: {goal}"
         result = await model.generate(
             GenerateRequest(prompt=prompt, max_output_tokens=256)
         )
@@ -807,6 +821,11 @@ class AgentRuntime:
                 f"\nTASK WORKSPACE: {self._workspace_root} — ALL files you create "
                 "or modify MUST be inside this exact directory. Any path outside "
                 "it will be refused."
+            )
+        if self._conversation_log:
+            prompt += (
+                "\nRecent conversation with the owner (context for follow-ups "
+                f"like 'that file'): {json.dumps(self._conversation_log)}"
             )
         result = await model.generate(GenerateRequest(prompt=prompt, max_output_tokens=1024))
         raw = result.text

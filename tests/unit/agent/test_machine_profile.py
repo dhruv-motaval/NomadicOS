@@ -57,6 +57,7 @@ def test_profile_injected_into_propose(tmp_path: Path) -> None:
 
         _gateway = _G()
         _extract_json = staticmethod(AgentRuntime._extract_json)
+        _conversation_log: list = []
 
     rt = _Minimal()
     holder: dict = {}

@@ -104,6 +104,12 @@ def build_profile(installed_apps: list[str] | None = None) -> str:
         "- Files written for tasks go under the task workspace, not /tmp or /home."
     )
     lines.append(
+        "- NOT AVAILABLE YET (reply honestly that this capability is not built, "
+        "do NOT substitute other commands): keyboard/mouse control, pressing key "
+        "combos (win+d), clicking, moving the cursor, reading the screen, "
+        "window management. Terminal commands CANNOT do these."
+    )
+    lines.append(
         "- TO CREATE OR MODIFY FILES use the filesystem tool (action: write). "
         "Never write file contents through terminal echo - the terminal runs "
         "commands only."

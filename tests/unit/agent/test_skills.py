@@ -123,6 +123,7 @@ def test_skill_injection_into_propose(tmp_path: Path) -> None:
     model._responses = [json.dumps({"finished": True})]
     rt = _MinimalRuntime(model, store, _make_gateway())
     rt._extract_json = AgentRuntime._extract_json
+    rt._conversation_log = []
 
     holder: dict = {}
     orig_generate = model.generate

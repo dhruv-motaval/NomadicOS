@@ -107,6 +107,7 @@ class Runtime:
         except Exception:  # noqa: BLE001 — profile is best effort, table still applies
             self._machine_profile = ""
         self._orchestration_enabled = False  # owner opt-in (ADR-0030 staged rollout)
+        self._conversation: list[dict[str, Any]] = []  # session continuity (BP §376)
         self._emergency_stopped = False
         self._fleet: Any = None
         self._fleet_watch_task: Any = None
@@ -398,6 +399,7 @@ class Runtime:
             skills=self._skill_store,
             machine_profile=self._machine_profile,
             workspace_root=self.workspace_root,
+            conversation=self._conversation[-3:],
         )
         identity = SubjectIdentity(user_id=user_id, session_id=session_id, task_id=task_id)
 
@@ -432,6 +434,18 @@ class Runtime:
             )
 
         report = await runtime.execute_task(goal, identity)
+
+        # Session continuity (BP §376): remember this exchange so follow-ups
+        # ("give me the path of that file") understand the reference.
+        self._conversation.append(
+            {
+                "goal": goal[:200],
+                "status": report.status.value,
+                "completed": report.completed[:2],
+                "reply": (report.reply or "")[:150],
+            }
+        )
+        del self._conversation[:-8]
 
         # Persist task-level memory (BP Â§166: source + scope always present).
         summary = f"{goal[:120]} -> {report.status.value}"
