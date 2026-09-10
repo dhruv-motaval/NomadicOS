@@ -42,14 +42,22 @@ def test_find_best_match_first(tmp_path: Path) -> None:
 
 
 class _MinimalRuntime:
-    """Only the surface _learn_skill/_propose touch â€” no heavy ctor."""
+    """Only the surface _learn_skill/_propose touch — no heavy ctor."""
 
-    def __init__(self, model, store, gateway=None, machine_profile: str = ""):
+    def __init__(
+        self,
+        model,
+        store,
+        gateway=None,
+        machine_profile: str = "",
+        workspace_root: str = "",
+    ):
         self._skills = store
         self._model = model
         self._gateway = gateway
         self._memory_context: list = []
         self._machine_profile = machine_profile
+        self._workspace_root = workspace_root
 
 
 def _make_gateway():
@@ -114,7 +122,6 @@ def test_skill_injection_into_propose(tmp_path: Path) -> None:
     _loaded(model)
     model._responses = [json.dumps({"finished": True})]
     rt = _MinimalRuntime(model, store, _make_gateway())
-    rt._extract_json = AgentRuntime._extract_json
     rt._extract_json = AgentRuntime._extract_json
 
     holder: dict = {}

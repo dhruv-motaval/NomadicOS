@@ -44,6 +44,7 @@ def test_profile_injected_into_propose(tmp_path: Path) -> None:
     class _Minimal:
         _skills = None
         _machine_profile = profile
+        _workspace_root = str(tmp_path / "task-workspaces")
         _memory_context: list = []
         _model = model
 

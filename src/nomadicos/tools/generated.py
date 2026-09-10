@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from nomadicos.core.errors import ToolExecutionError, ValidationError
+from nomadicos.core.errors import ToolExecutionError
 from nomadicos.tools.base import (
     Tool,
     ToolContext,
