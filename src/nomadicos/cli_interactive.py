@@ -99,7 +99,6 @@ class InteractiveCLI:
                 return 0
             if key == "1":
                 if await self._chat():
-                    self._print("\nClosing NomadicOS. Goodbye.")
                     return 0
                 continue
 
