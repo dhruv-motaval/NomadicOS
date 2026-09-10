@@ -218,8 +218,26 @@ class AgentRuntime:
                     proposal = await self._propose(model, goal, completed)
 
                     if proposal.get("finished"):
-                        reply = proposal.get("reply") or reply
-                        break  # goal reached declared (verification still applies)
+                        if not completed and step == 1 and not proposal.get("reply"):
+                            # A first-step "finished" with zero executed work is
+                            # an empty claim (BP §366). Challenge it ONCE: the
+                            # model may have misread the goal as already done.
+                            budget.check_model_call()
+                            challenge = await self._propose(
+                                model,
+                                f"{goal}\n\n(The goal above has NOT been started yet. "
+                                "Do not declare finished. Propose the FIRST tool "
+                                "call that moves toward the goal, or use a reply "
+                                "if it needs no tool.)",
+                                completed,
+                            )
+                            if challenge.get("finished") or not challenge.get("tool"):
+                                reply = challenge.get("reply")
+                                break
+                            proposal = challenge
+                        else:
+                            reply = proposal.get("reply") or reply
+                            break  # goal reached declared (verification still applies)
 
                     tool_name = proposal.get("tool", "")
                     arguments = proposal.get("arguments", {})
@@ -393,9 +411,9 @@ class AgentRuntime:
             "could not be executed with your tools (filesystem read/write in "
             "the task workspace only - no apps, no browser, no computer "
             "control). In ONE short sentence, tell the user what you cannot "
-            "do and why. STATE ONLY THE FACTS FROM THE FAILURE BELOW. Never "
-            "invent actions, suggestions, or remedies that were not performed. "
-            "Do not output JSON.\n"
+            "do and why. Copy the FACTS from the Failure line below - change "
+            "the wording only if needed. Do NOT add reasons, guesses, advice, "
+            "or remedies of any kind. Do not output JSON.\n"
             f"Failure: {failure}\n"
             f"Goal: {goal}"
         )
