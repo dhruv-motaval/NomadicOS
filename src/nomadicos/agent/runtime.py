@@ -337,6 +337,15 @@ class AgentRuntime:
                     if not tool_name:
                         break
 
+                    # Loop guard: an exact repeat of the previous executed step
+                    # means the model is stuck (it opened Chrome 8 times once).
+                    # Treat the repeat as "done" instead of re-executing.
+                    signature = f"{tool_name} {json.dumps(arguments)[:120]}"
+                    if completed and signature == completed[-1]:
+                        if proposal.get("finished"):
+                            completed[-1] = signature
+                        break
+
                     gate_result = await self._mediated_execute(
                         tool_name, arguments, identity, budget
                     )
@@ -370,6 +379,10 @@ class AgentRuntime:
 
                     completed.append(f"{tool_name} {json.dumps(arguments)[:120]}")
                     await self._audit_task(run_trace, task_id, "STEP_DONE", model_id)
+                    if proposal.get("finished"):
+                        # The model declared the goal reached AFTER this step —
+                        # honor it: the loop ends here (honest, small-model fix).
+                        break
 
                 if completed:
                     # Steps ran; failures make it partial (truthful report, BP Â§180).
