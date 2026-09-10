@@ -56,6 +56,31 @@ def scan_installed_apps() -> list[str]:
         return []
 
 
+_DEV_TOOLS = {
+    "gcc": "winget install -e --id BrechtSanders.WinLibs.POSIX.UCRT",
+    "clang": "winget install -e --id LLVM.LLVM",
+    "python": "winget install -e --id Python.Python.3.12",
+    "git": "winget install -e --id Git.Git",
+    "node": "winget install -e --id OpenJS.NodeJS.LTS",
+    "winget": "update Windows via Windows Update",
+}
+
+
+def scan_dev_tools() -> list[str]:
+    """Check which dev tools exist on PATH (local subprocess, best effort)."""
+    found: list[str] = []
+    for tool in _DEV_TOOLS:
+        try:
+            raw = subprocess.run(
+                ["where.exe", tool], capture_output=True, text=True, timeout=15, check=False
+            )
+            if raw.returncode == 0 and raw.stdout.strip():
+                found.append(tool)
+        except Exception:  # noqa: BLE001 — discovery is best effort
+            continue
+    return found
+
+
 def build_profile(installed_apps: list[str] | None = None) -> str:
     """Compose the machine profile text (small: ~25 lines, always injected)."""
     apps = installed_apps if installed_apps is not None else scan_installed_apps()
@@ -77,6 +102,24 @@ def build_profile(installed_apps: list[str] | None = None) -> str:
     lines.append(
         "- Files written for tasks go under the task workspace, not /tmp or /home."
     )
+    lines.append(
+        "- TO CREATE OR MODIFY FILES use the filesystem tool (action: write). "
+        "Never write file contents through terminal echo - the terminal runs "
+        "commands only."
+    )
+    dev = scan_dev_tools()
+    lines.append("- Dev tools ON PATH: " + (", ".join(dev) if dev else "none"))
+    missing = [t for t in _DEV_TOOLS if t not in dev]
+    if missing:
+        lines.append(
+            "- Dev tools MISSING: "
+            + "; ".join(f"{t} (install: {cmd})" for t, cmd in _DEV_TOOLS.items() if t in missing)
+        )
+        lines.append(
+            "- If a task needs a missing tool, either install it with the exact "
+            "winget command above, or choose a different approach that works "
+            "with installed tools. Report honestly which path you took."
+        )
     return "\n".join(lines)
 
 

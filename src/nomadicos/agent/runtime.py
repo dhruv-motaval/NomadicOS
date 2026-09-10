@@ -735,6 +735,8 @@ class AgentRuntime:
             "If a terminal command can achieve the goal, you MUST propose it - do not "
             "claim inability. Reply (finished=true, no tool) ONLY when no tool listed "
             "above can achieve the goal.\n"
+            "FILE RULE: to create or modify files, ALWAYS use the filesystem tool "
+            "(action: write) - never write file contents through terminal echo.\n"
             f"Goal: {goal}\n"
             f"Already completed steps: {completed[-3:]}\n"
         )
