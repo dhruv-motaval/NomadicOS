@@ -397,6 +397,7 @@ class Runtime:
             budget=TaskBudget(max_steps=8),
             skills=self._skill_store,
             machine_profile=self._machine_profile,
+            workspace_root=self.workspace_root,
         )
         identity = SubjectIdentity(user_id=user_id, session_id=session_id, task_id=task_id)
 

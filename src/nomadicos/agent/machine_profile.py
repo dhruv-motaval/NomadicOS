@@ -57,11 +57,11 @@ def scan_installed_apps() -> list[str]:
 
 
 _DEV_TOOLS = {
-    "gcc": "winget install -e --id BrechtSanders.WinLibs.POSIX.UCRT",
-    "clang": "winget install -e --id LLVM.LLVM",
-    "python": "winget install -e --id Python.Python.3.12",
-    "git": "winget install -e --id Git.Git",
-    "node": "winget install -e --id OpenJS.NodeJS.LTS",
+    "gcc": "winget install -e --id BrechtSanders.WinLibs.POSIX.UCRT --accept-package-agreements --accept-source-agreements --silent",
+    "clang": "winget install -e --id LLVM.LLVM --accept-package-agreements --accept-source-agreements --silent",
+    "python": "winget install -e --id Python.Python.3.12 --accept-package-agreements --accept-source-agreements --silent",
+    "git": "winget install -e --id Git.Git --accept-package-agreements --accept-source-agreements --silent",
+    "node": "winget install -e --id OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements --silent",
     "winget": "update Windows via Windows Update",
 }
 

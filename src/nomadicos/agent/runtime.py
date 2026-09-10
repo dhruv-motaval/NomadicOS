@@ -184,6 +184,7 @@ class AgentRuntime:
         memory_context: list | None = None,  # pre-retrieved memories for this goal
         skills: SkillStore | None = None,  # machine-local learned skills
         machine_profile: str | None = None,  # environment facts for every task
+        workspace_root: str | None = None,  # where task files must be written
     ) -> None:
         self._selector = selector
         self._manager = manager
@@ -197,6 +198,7 @@ class AgentRuntime:
         self._memory_context = memory_context or []
         self._skills = skills
         self._machine_profile = machine_profile or ""
+        self._workspace_root = workspace_root or ""
         # Pipeline agents: model selection + handling are explicit agent steps
         # (BP Â§364) â€” constructed lazily since they wrap this runtime.
         from nomadicos.agent.pipeline_agents import ModelHandlerAgent, SelectorAgent
@@ -771,6 +773,12 @@ class AgentRuntime:
                 )
         if self._machine_profile:
             prompt += "\n" + self._machine_profile
+        if self._workspace_root:
+            prompt += (
+                f"\nTASK WORKSPACE: {self._workspace_root} — ALL files you create "
+                "or modify MUST be inside this exact directory. Any path outside "
+                "it will be refused."
+            )
         result = await model.generate(GenerateRequest(prompt=prompt, max_output_tokens=1024))
         raw = result.text
 
