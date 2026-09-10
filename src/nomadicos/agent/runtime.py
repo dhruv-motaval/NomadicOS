@@ -111,13 +111,17 @@ class TaskReport(BaseModel):
     uncertainty: list[str] = Field(default_factory=list)
     experience_id: str | None = None
     duration_seconds: float = 0.0
+    model_latency_ms: float = 0.0  # total time spent generating across model calls
     reply: str | None = None  # conversational answer (no tool work needed)
 
     def render(self) -> str:
         if self.reply is not None:
             if self.status is TaskStatus.SUCCESS:
-                return self.reply
-            return f"[{self.status.value}] {self.reply}"
+                base = self.reply
+            else:
+                base = f"[{self.status.value}] {self.reply}"
+            tail = f"(time: {self.duration_seconds}s total, {self.model_latency_ms} ms model)"
+            return f"{base}\n{tail}"
         completed_lines = [f"- {c}" for c in self.completed] or ["- nothing"]
         lines = [
             f"Task {self.task_id}: {self.status.value}",
@@ -125,6 +129,9 @@ class TaskReport(BaseModel):
             "Completed:",
             *completed_lines,
         ]
+        lines.append(
+            f"Time: {self.duration_seconds}s total | model {self.model_latency_ms} ms"
+        )
         if self.verification:
             lines.append("Verification: " + "; ".join(self.verification))
         if self.failed:
@@ -132,6 +139,30 @@ class TaskReport(BaseModel):
         if self.uncertainty:
             lines.append("Uncertainty: " + "; ".join(self.uncertainty))
         return "\n".join(lines)
+
+
+class _LatencyProbe:
+    """Accumulates wall-clock time spent inside model.generate calls (I10:
+    measured, not assumed). Transparent proxy over the LocalModel."""
+
+    def __init__(self) -> None:
+        self.ms = 0.0
+
+    def wrap(self, model: Any) -> Any:
+        probe = self
+        inner = model
+
+        class _Probed:  # noqa: N801 — probe is private
+            def __getattr__(self, name: str) -> Any:
+                return getattr(inner, name)
+
+            async def generate(self, request: Any) -> Any:
+                t0 = time.perf_counter()
+                result = await inner.generate(request)
+                probe.ms += (time.perf_counter() - t0) * 1000.0
+                return result
+
+        return _Probed()
 
 
 class AgentRuntime:
@@ -191,6 +222,7 @@ class AgentRuntime:
             task_id=task_id,
         )
 
+        model_latency = _LatencyProbe()
         # 1. Model selection + handling as agents (BP §97, §320, §364).
         if model_id is None:
             decision = await self.selector_agent.select(goal)
@@ -201,6 +233,7 @@ class AgentRuntime:
             task_family = "general"
             selection_reason = {"pinned": True}
         model = await self.handler_agent.ensure_model(model_id)
+        model = model_latency.wrap(model)
         logger.info(
             "task started model=%s task_family=%s selection_reason=%s",
             model_id,
@@ -240,18 +273,30 @@ class AgentRuntime:
                     budget.check_model_call()
                     proposal = await self._propose(model, goal, completed)
 
-                    if proposal.get("malformed"):
-                        # Unparseable model output is a retryable step failure,
-                        # never "finished" (BP §366: claims are not evidence).
+                    # Proposal routing (unified):
+                    # 1) tool present  → execute, REGARDLESS of the finished
+                    #    flag (small models habitually mark their own reply
+                    #    "finished"; the flag only ever breaks a no-tool reply).
+                    # 2) reply present → conversational answer, break.
+                    # 3) finished without any work (step 1, nothing completed)
+                    #    → challenge ONCE, then fail truthfully (BP §366).
+                    tool_name = proposal.get("tool", "")
+                    arguments = proposal.get("arguments", {}) or {}
+
+                    if tool_name:
+                        pass  # fall through to gate mediation below
+                    elif proposal.get("reply"):
+                        reply = proposal["reply"]
+                        break
+                    elif proposal.get("malformed"):
                         failed.append("model produced an unparseable proposal")
                         budget.check_retry()
                         continue
-
-                    if proposal.get("finished"):
-                        if not completed and step == 1 and not proposal.get("reply"):
-                            # A first-step "finished" with zero executed work is
-                            # an empty claim (BP §366). Challenge it ONCE: the
-                            # model may have misread the goal as already done.
+                    elif proposal.get("finished") and completed:
+                        break  # goal claimed reached with work done; post-loop decides
+                    else:
+                        # finished/reply-less/no-tool proposal
+                        if not completed and step == 1:
                             budget.check_model_call()
                             challenge = await self._propose(
                                 model,
@@ -261,22 +306,21 @@ class AgentRuntime:
                                 "if it needs no tool.)",
                                 completed,
                             )
-                            if challenge.get("finished") or not challenge.get("tool"):
-                                reply = challenge.get("reply")
+                            c_tool = challenge.get("tool")
+                            if c_tool:
+                                tool_name = c_tool
+                                arguments = challenge.get("arguments", {}) or {}
+                            elif challenge.get("reply"):
+                                reply = challenge["reply"]
                                 break
-                            proposal = challenge
+                            else:
+                                break  # nothing usable; fails truthfully post-loop
                         else:
-                            reply = proposal.get("reply") or reply
-                            break  # goal reached declared (verification still applies)
+                            break
 
-                    tool_name = proposal.get("tool", "")
-                    arguments = proposal.get("arguments", {})
-
-                    if not tool_name and proposal.get("reply"):
-                        reply = proposal["reply"]  # conversational answer, no tool work
+                    if not tool_name:
                         break
 
-                    # 2b. Security Gate mediation (BP §73, I5).
                     gate_result = await self._mediated_execute(
                         tool_name, arguments, identity, budget
                     )
@@ -387,6 +431,7 @@ class AgentRuntime:
             failed=list(dict.fromkeys(failed)),  # dedupe repeated refusals
             experience_id=str(experience.experience_id),
             duration_seconds=round(duration, 2),
+            model_latency_ms=round(model_latency.ms, 1),
             reply=reply,
         )
         logger.info(
@@ -591,7 +636,10 @@ class AgentRuntime:
                     "\nMACHINE FACTS - these are verified commands that WORK on "
                     "this machine. Use them EXACTLY as written, word for word:\n"
                     + "\n".join(notes)
-                    + "\nDo NOT invent new commands when a fact above covers the goal."
+                    + "\nWhen a fact above covers the goal, propose EXACTLY that "
+                    'command, in this JSON shape: {"tool": "terminal", '
+                    '"arguments": {"command": "<the exact command from the fact>"}, '
+                    '"finished": false}. Do NOT invent variations of it.'
                 )
         result = await model.generate(GenerateRequest(prompt=prompt, max_output_tokens=1024))
         # Strip reasoning blocks — qwen/gpt-oss families may emit them around
