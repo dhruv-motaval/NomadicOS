@@ -240,6 +240,13 @@ class AgentRuntime:
                     budget.check_model_call()
                     proposal = await self._propose(model, goal, completed)
 
+                    if proposal.get("malformed"):
+                        # Unparseable model output is a retryable step failure,
+                        # never "finished" (BP §366: claims are not evidence).
+                        failed.append("model produced an unparseable proposal")
+                        budget.check_retry()
+                        continue
+
                     if proposal.get("finished"):
                         if not completed and step == 1 and not proposal.get("reply"):
                             # A first-step "finished" with zero executed work is
@@ -485,13 +492,11 @@ class AgentRuntime:
         from nomadicos.models.base import GenerateRequest
 
         prompt = (
-            "You are NomadicOS, a local-first AI assistant. The user's goal "
-            "could not be executed with your tools (filesystem read/write in "
-            "the task workspace only - no apps, no browser, no computer "
-            "control). In ONE short sentence, tell the user what you cannot "
-            "do and why. Copy the FACTS from the Failure line below - change "
-            "the wording only if needed. Do NOT add reasons, guesses, advice, "
-            "or remedies of any kind. Do not output JSON.\n"
+            "You are NomadicOS, a local-first AI assistant. A task just failed. "
+            "In ONE short sentence, restate the failure for the user. Copy the "
+            "FACTS from the Failure line below - change wording only if needed. "
+            "Do NOT add reasons, guesses, advice, remedies, or capability claims "
+            "of your own. Do not output JSON.\n"
             f"Failure: {failure}\n"
             f"Goal: {goal}"
         )
@@ -555,10 +560,13 @@ class AgentRuntime:
             '{"tool": "<tool name>", "arguments": {...}, "finished": false|true}\n'
             "Use finished=true ONLY when the goal is already accomplished by the "
             "completed steps listed — never before any step ran.\n"
-            "If the goal needs no tool (chat/question) OR is impossible with the "
-            "available tools, answer directly instead of calling a tool:\n"
-            '{"reply": "<your answer, or what you cannot do and why>", "finished": true}\n'
-            "Never invent tool arguments for goals that need no tool.\n"
+            "If the goal needs no tool (pure chat/question), answer directly instead "
+            "of calling a tool:\n"
+            '{"reply": "<your answer>", "finished": true}\n'
+            "CRITICAL: the terminal tool CAN launch apps (start chrome, start notepad). "
+            "If a terminal command can achieve the goal, you MUST propose it - do not "
+            "claim inability. Reply (finished=true, no tool) ONLY when no tool listed "
+            "above can achieve the goal.\n"
             f"Goal: {goal}\n"
             f"Already completed steps: {completed[-3:]}\n"
             "Available tools with argument schemas: "
@@ -585,13 +593,23 @@ class AgentRuntime:
                     + "\n".join(notes)
                     + "\nDo NOT invent new commands when a fact above covers the goal."
                 )
-        result = await model.generate(GenerateRequest(prompt=prompt, max_output_tokens=512))
+        result = await model.generate(GenerateRequest(prompt=prompt, max_output_tokens=1024))
+        # Strip reasoning blocks — qwen/gpt-oss families may emit them around
+        # the JSON; a leaked think-block previously broke extraction and the
+        # proposal silently became "finished".
+        text = re.sub(r"<think>.*?</think>", "", result.text, flags=re.DOTALL)
+        text = re.sub(r"\[\[\[thinking.*?\]\]\]", "", text, flags=re.DOTALL | re.IGNORECASE)
         try:
-            start = result.text.index("{")
-            end = result.text.rindex("}") + 1
-            return json.loads(result.text[start:end])
+            start = text.index("{")
+            end = text.rindex("}") + 1
+            proposal = json.loads(text[start:end])
+            if not isinstance(proposal, dict):
+                raise ValueError("proposal is not an object")
+            return proposal
         except (ValueError, json.JSONDecodeError):
-            return {"finished": True}  # no valid proposal → stop gracefully
+            # Malformed proposal ≠ finished. Signal malformed so the loop
+            # counts it as a failed step and retries (truthful, BP §366).
+            return {"malformed": True}
 
     async def _mediated_execute(
         self,
