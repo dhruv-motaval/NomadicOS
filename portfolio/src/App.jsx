@@ -78,6 +78,36 @@ const ARCHITECTURE_DATA = {
   ],
   "nodes": [
     {
+      "id": "api",
+      "title": "Local API (FastAPI)",
+      "layer": "interface",
+      "x": 70,
+      "y": 900,
+      "status": "built",
+      "bp": ["ADR-0032"],
+      "code": ["src/nomadicos/api/"],
+      "summary": "Local service layer: 6 endpoints, bearer token auth, SSE streaming - the access path for terminals, scripts, and future dashboards (ADR-0032).",
+      "what": [
+        "POST /v1/goals (idempotency-key safe)",
+        "GET /v1/goals/{id} + GET /v1/events/{id} (SSE)",
+        "POST /v1/memory/search, GET /v1/status, POST /v1/emergency-stop"
+      ],
+      "how": [
+        "Auth: bearer token from data/api-token, fail closed on every endpoint",
+        "Goals run as background asyncio tasks with an in-memory registry",
+        "Token is never logged (I12); the gate still mediates every goal (I5)"
+      ],
+      "tech": [
+        {
+          "name": "FastAPI + uvicorn",
+          "why": "async-native HTTP wrapper over the asyncio Runtime loop"
+        }
+      ],
+      "why": "ADR-0032: NomadicOS reachable from any terminal, script, or future dashboard without modifying the Python core.",
+      "invariants": ["I5 no gate bypass", "I12 token containment"],
+      "tests": ["tests/unit/api/"]
+    },
+    {
       "id": "cli",
       "title": "CLI Intake",
       "layer": "interface",

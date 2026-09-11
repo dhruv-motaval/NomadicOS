@@ -31,6 +31,7 @@ from nomadicos.core.errors import (
     SecurityPolicyViolation,
     TaskTimeout,
     ToolExecutionError,
+    ValidationError,
     VerificationFailed,
 )
 from nomadicos.core.events import EventBus, TraceContext
@@ -928,6 +929,9 @@ class AgentRuntime:
             return await self._gateway.execute(tool_name, arguments, identity, budget)
         except ToolExecutionError as exc:
             return ToolResult.failure(str(exc))
+        except ValidationError as exc:
+            # Blocked/malformed commands (BP §194) fail the STEP, never the task.
+            return ToolResult.failure(f"invalid command: {exc}")
         except (PermissionDenied, SecurityPolicyViolation) as exc:
             return ToolResult.failure(
                 f"security refusal: {exc}", evidence={"decision": "REFUSED"}

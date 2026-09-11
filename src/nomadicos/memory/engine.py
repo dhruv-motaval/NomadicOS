@@ -32,7 +32,7 @@ class MemoryEngine:
         self,
         content: str,
         *,
-        scope: MemoryScope,
+        scope: MemoryScope | str,
         source: str,
         confidence: float = 0.5,
         session_id: str | None = None,
@@ -43,6 +43,8 @@ class MemoryEngine:
         tags: list[str] | None = None,
     ) -> str:
         """Store one memory. Source is mandatory (BP §166, §395)."""
+        if isinstance(scope, str):
+            scope = MemoryScope(scope)
         if not content.strip():
             raise MemoryAccessDenied("cannot store empty memory")
         if not source.strip():

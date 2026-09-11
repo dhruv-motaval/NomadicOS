@@ -1,6 +1,8 @@
 """PostgreSQL-backed MemoryStore (BP §16, §112-113, §376-420)."""
 
+import asyncio
 import json
+from typing import Any
 from uuid import UUID
 
 from nomadicos.core.logging import get_logger
@@ -18,8 +20,13 @@ logger = get_logger("postgres.memory")
 class PostgresMemoryStore(MemoryStore):
     """Persists memories into nomadicos.memories (migrations 002)."""
 
-    def __init__(self, client: PostgresClient) -> None:
+    def __init__(
+        self,
+        client: PostgresClient,
+        embedder: Any | None = None,  # Embedder — semantic rerank (Phase 9)
+    ) -> None:
         self._client = client
+        self._embedder = embedder
 
     async def store(self, record: MemoryRecord) -> UUID:
         self._client.execute(
@@ -63,9 +70,15 @@ class PostgresMemoryStore(MemoryStore):
         )
 
     async def search(self, query: MemoryQuery) -> list[MemoryRecord]:
-        """Keyword ILIKE + scope filters; sensitivity/scope enforcement stays in
-        MemoryEngine (BP §381). Vector ranking lands with Phase 9 wiring."""
-        keywords = [w for w in query.text.split() if len(w) > 2][:6]
+        """Keyword ILIKE (over-fetched) + Python relevance ranking: keyword hit
+        count dominates, verified/confidence and recency break ties. Sensitivity
+        and scope enforcement stay in MemoryEngine (BP §381). Vector ranking
+        lands with Phase 9 semantic wiring."""
+        import re as _re
+
+        keywords = [
+            w for w in _re.findall(r"[a-z0-9]+", query.text.lower()) if len(w) > 2
+        ][:6]
         if not keywords:
             return []
         clauses = " OR ".join(["content ILIKE %s"] * len(keywords))
@@ -83,10 +96,70 @@ class PostgresMemoryStore(MemoryStore):
         if query.session_id:
             sql += " AND (session_id = %s OR session_id IS NULL)"
             params.append(query.session_id)
-        sql += " ORDER BY verified DESC, confidence DESC, created_at DESC LIMIT %s"
-        params.append(query.limit)
+        # over-fetch wide, rank in Python (no ORDER BY guessing in SQL)
+        sql += " ORDER BY created_at DESC LIMIT %s"
+        params.append(query.limit * 4)
+
         rows = self._client.execute(sql, tuple(params))
-        return [self._to_record(row) for row in rows]
+        records = [self._to_record(row) for row in rows]
+        if not records:
+            return []
+
+        # Semantic rerank (Phase 9): embed query + candidates with the LOCAL
+        # Ollama embedder, rank by cosine. Falls back to IDF-lite keyword
+        # ranking when the embedder is unreachable (graceful degradation).
+        semantic_order: list[MemoryRecord] | None = None
+        if self._embedder is not None:
+            embedder = self._embedder
+            try:
+                query_vec = await embedder.embed(query.text)
+
+                async def safe_embed(text: str) -> list[float] | None:
+                    try:
+                        return await embedder.embed(text[:1000])
+                    except Exception:  # noqa: BLE001 — one bad record ≠ no rerank
+                        return None
+
+                vecs = await asyncio.gather(
+                    *(safe_embed(r.content) for r in records)
+                )
+                from nomadicos.vector.ollama_embedder import cosine
+
+                scored = sorted(
+                    (
+                        (rec, cosine(query_vec, v) if v is not None else -1.0)
+                        for rec, v in zip(records, vecs, strict=True)
+                    ),
+                    key=lambda pair: -pair[1],
+                )
+                semantic_order = [rec for rec, _ in scored]
+            except Exception:  # noqa: BLE001 — embedder down ⇒ keyword ranking
+                semantic_order = None
+
+        if semantic_order is not None:
+            return semantic_order[: query.limit]
+
+        # IDF-lite keyword ranking fallback
+        import math
+
+        lower_contents = [r.content.lower() for r in records]
+        df = {kw: sum(1 for c in lower_contents if kw in c) for kw in keywords}
+
+        def relevance(index: int, rec: MemoryRecord) -> tuple[float, float]:
+            content = lower_contents[index]
+            score = 0.0
+            for kw in keywords:
+                if kw in content:
+                    idf = math.log(1 + len(records) / (1 + df[kw]))
+                    score += 1.0 + idf
+            recency = 1.0 if rec.created_at is not None else 0.0
+            return (score, recency)
+
+        order = sorted(
+            range(len(records)), key=lambda i: relevance(i, records[i]), reverse=True
+        )
+        ranked = [records[i] for i in order]
+        return ranked[: query.limit]
 
     async def get(self, memory_id: UUID) -> MemoryRecord | None:
         rows = self._client.execute(

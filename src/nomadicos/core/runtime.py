@@ -90,6 +90,9 @@ class Runtime:
         for generated in load_generated_tools(self.REPO_ROOT / "data" / "scripts"):
             self.gateway.register(generated)
         self._network_gateway: NetworkGateway | None = None
+        # web.fetch is part of the default toolset (search-and-learn, BP §23-24):
+        # every fetch still passes the Network Gateway + Security Gate (I11).
+        self.enable_network()
 
         # --- Memory (BP Â§16, Â§376-420): persistent when DB reachable.
         self.memory = self._init_memory()
@@ -215,8 +218,13 @@ class Runtime:
     def _init_memory(self) -> MemoryEngine:
         if self._pg_available:
             from nomadicos.postgres.memory_store import PostgresMemoryStore
+            from nomadicos.vector.ollama_embedder import OllamaEmbedder
 
-            return MemoryEngine(PostgresMemoryStore(self._pg_client))
+            try:
+                embedder = OllamaEmbedder()
+            except Exception:  # noqa: BLE001 — semantic rerank is best effort
+                embedder = None
+            return MemoryEngine(PostgresMemoryStore(self._pg_client, embedder=embedder))
         from nomadicos.memory.fake import FakeMemoryStore
 
         return MemoryEngine(FakeMemoryStore())
