@@ -62,5 +62,7 @@ no_implicit_optional = true
 check_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = "pyautogui"
+# Optional hardware / ML dependencies (ADR-0004 vision, ADR-0006 inference):
+# absent in the type-check environment, guarded by try/except at runtime.
+module = ["pyautogui", "PIL", "PIL.*", "transformers", "transformers.*"]
 ignore_missing_imports = true

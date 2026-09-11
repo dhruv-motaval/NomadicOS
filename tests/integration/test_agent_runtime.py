@@ -112,7 +112,12 @@ async def test_milestone_write_and_verify(tmp_path, identity) -> None:
 
 
 async def test_report_truthfulness_on_failure(tmp_path, identity) -> None:
-    """BP §69/§180: failures are reported, never claimed as success."""
+    """BP §69/§180: failures are reported, never claimed as success.
+
+    Goal carries an action verb so it deterministically takes the executor
+    path (intent classification is a separate, tested concern) and exercises
+    the loop directly against the fake model's scripted proposals.
+    """
     model = proposal_model(
         [
             json.dumps({"tool": "nonexistent.tool", "arguments": {}, "finished": False}),
@@ -120,21 +125,24 @@ async def test_report_truthfulness_on_failure(tmp_path, identity) -> None:
         ]
     )
     runtime = build_runtime(tmp_path, model)
-    report = await runtime.execute_task("Impossible task", identity, max_steps=3)
-    # The model's invalid tool call is refused (unknown tool ⇒ fail closed, BP §85).
-    # The model then declared "finished" with zero completed steps and one recorded
-    # failure ⇒ PARTIALLY_COMPLETED is the truthful status (BP §181: never "Done").
-    assert report.status is TaskStatus.PARTIALLY_COMPLETED
+    report = await runtime.execute_task("Run the impossible thing", identity, max_steps=3)
+    # Unknown tool ⇒ PermissionDenied (fail closed, BP §85) — a recorded step
+    # failure. The model then "finished" with ZERO completed steps ⇒ nothing was
+    # actually achieved, so the truthful status is FAILED, never a success (BP §6).
+    assert report.status is TaskStatus.FAILED
     assert report.completed == []
     assert report.failed  # failure recorded, not hidden
 
 
 async def test_invalid_model_proposal_stops_gracefully(tmp_path, identity) -> None:
-    """BP §86: raw free-form text is never executed."""
+    """BP §86/§6: raw free-form (non-JSON) model output is never executed AND
+    never reported as success. 'Stop gracefully' = no crash, truthful FAILED."""
     model = proposal_model(["This is not JSON at all — just chat."])
     runtime = build_runtime(tmp_path, model)
-    report = await runtime.execute_task("Do a thing", identity, max_steps=2)
-    assert report.status is TaskStatus.SUCCESS  # graceful stop, no execution
+    report = await runtime.execute_task("Write the thing", identity, max_steps=2)
+    assert report.status is not TaskStatus.SUCCESS  # malformed output ≠ success
+    assert report.completed == []
+    assert any("malformed" in f.lower() or "unparseable" in f.lower() for f in report.failed)
 
 
 # ------------------------------------------------------------------ CLI + Runtime

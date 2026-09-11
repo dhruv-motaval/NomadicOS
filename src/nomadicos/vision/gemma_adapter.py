@@ -27,10 +27,8 @@ logger = get_logger("vision.gemma")
 
 _TransformerModel = Any
 _TransformerProcessor = Any
-AutoModelForCausalLM: Any
-AutoProcessor: Any
 
-try:  # optional hardware dependency
+try:  # optional hardware dependency — names bound on every path below
     from transformers import AutoModelForCausalLM, AutoProcessor
 
     TRANSFORMERS_AVAILABLE = True

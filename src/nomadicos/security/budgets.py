@@ -69,7 +69,10 @@ class TaskBudgetTracker:
 
     def check_duration(self) -> None:
         elapsed = time.monotonic() - self._started
-        if elapsed > self.budget.max_duration_seconds:
+        # `>=` (not `>`): a 0/expired budget must trip immediately. Windows
+        # monotonic() has ~15.6ms granularity, so `>` let elapsed==0 slip past
+        # (forensic CONFIRMED I10 hole). An at-or-past deadline is exhausted.
+        if elapsed >= self.budget.max_duration_seconds:
             raise BudgetExceeded(
                 f"max_duration exceeded ({self.budget.max_duration_seconds}s)",
                 context={"elapsed_seconds": round(elapsed, 1)},

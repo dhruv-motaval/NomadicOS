@@ -131,9 +131,10 @@ class GeneratedScriptTool(Tool):
             raise ToolExecutionError(
                 "generated script did not print a valid JSON result"
             ) from exc
-        return ToolResult.success(
-            summary=str(payload.get("summary", "script finished")),
+        return ToolResult(
+            success=True,
             data={
+                "summary": str(payload.get("summary", "script finished")),
                 "result": payload.get("data", payload),
                 "latency_ms": round(latency, 1),
                 "stderr": stderr.decode("utf-8", errors="replace")[:300],

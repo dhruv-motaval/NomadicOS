@@ -610,8 +610,14 @@ class AgentRuntime:
     async def _classify_intent(self, model: LocalModel, goal: str) -> bool:
         """Model-driven chat/task classification for ambiguous messages.
 
-        Understands any language the model knows (Hinglish included). Defaults
-        to task on failure â€” preserving pre-classifier behavior (BP Â§185)."""
+        Fail-CLOSED to the enforced task path (forensic fix): an earlier bug
+        (`!= "task"`) treated ANY non-"task" model output — empty, punctuation,
+        confusion, injected JSON — as chat, so imperatives never reached the
+        executor and the runtime leaked the model's raw text as a SUCCESS reply
+        (violates BP §6: malformed model output must never mean "success").
+        Now only a positive "chat" answer routes to chat; everything else runs
+        the loop, where the Security Gate (not the model) is the final authority.
+        """
         from nomadicos.models.base import GenerateRequest
 
         prompt = (
@@ -625,8 +631,9 @@ class AgentRuntime:
             result = await model.generate(
                 GenerateRequest(prompt=prompt, max_output_tokens=8)
             )
-            return result.text.strip().lower() != "task"
-        except Exception:  # noqa: BLE001 â€” classification failure â‡’ task (old behavior)
+            first = result.text.strip().lower().split()
+            return bool(first) and first[0].startswith("chat")
+        except Exception:  # noqa: BLE001 — classification failure ⇒ task (fail closed)
             return False
 
     async def _chat_reply(

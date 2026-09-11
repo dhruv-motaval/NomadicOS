@@ -16,12 +16,16 @@ data/
 postgres-data/
 vector-data/
 
-# --- Model artifacts (ADR-0005: supply-chain boundary) ---
-models/
+# --- Model weight artifacts (ADR-0005: supply-chain boundary) ---
+# Root-level weights dir only. A bare `models/` here was excluding the SOURCE
+# package src/nomadicos/models/ (forensic finding — the model runtime was never
+# tracked). Weight file types below are what actually mark artifacts.
+/models/
 *.gguf
 *.safetensors
 *.bin
 *.onnx
+node_modules/
 
 # --- Runtime artifacts ---
 logs/
