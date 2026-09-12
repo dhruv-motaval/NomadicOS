@@ -321,3 +321,62 @@ STEP-2 IR suites + STEP-4 lifecycle/persistence suites green unchanged.
 Files: +network/dns.py, network/gateway.py(+47), core/runtime.py(+6 wiring),
 +tests/unit/network/test_dns_ssrf.py, +tests/unit/tools/test_filesystem_links.py
 (qualification reports untouched).
+
+---
+
+# STEP 5 — EXECUTOR SEPARATION 2026-09-12
+
+## Forensic before/after responsibilities (see §1 map in commit)
+BEFORE gateway.execute = god path: schema+budget+capability+POLICY+DISPATCH+
+AUDIT; runtime loop consumed ToolResult where policy/refusal/exec exceptions
+were all mixed. AFTER: ToolGateway = registry + authorization pipeline
+(authorize_action: schema validate -> budget -> capability -> gate -> single-use
+grant token); agent/executor.py TaskExecutor = dispatch + result collection +
+ACTION_*/TOOL_EXECUTED audit only (import-boundary test proves zero
+knowledge of gate/models/budgets/lifecycle/registry); agent/runtime.py loop =
+policy-request plumbing + lifecycle (_advance STATE_TRANSITION audits), retry
+(RECOVERING), verification (VERIFICATION_RESULT + evaluator), reporting.
+
+## Contracts
+AuthorizedAction: frozen, gateway-issued ONLY (grant stamp registered in
+GrantRegistry; consumed at run; forged/replayed/raw-dict/bytes/TaskAction all
+rejected by PermissionDenied BEFORE dispatch, tool never touched).
+ExecutionResult: success/action/capability/task_id/step_id/attempt/data/error/
+evidence/observations/duration_ms; JSON-serializable.
+
+## Boundary tests
+tests/unit/agent/test_executor_boundary.py (16 tests: plan 12 items 1-15 +
+determinism) — executor accepts authorized, rejects unauthorized/forged/raw/
+replayed; no lifecycle hooks; no forbidden imports (structural test);
+retry/verification outside executor; failures structured; no duplicate audits;
+ids preserved; cancel lifecycle-owned.
+
+## Live production trace (real gemma/qwen3-coder 30B + real policy/executor/PG)
+RUN 1 write-file: POLICY ALLOW(token) -> EXECUTOR success 16ms ->
+VERIFICATION_RESULT -> STATE CHAIN CREATED>PLANNED>AUTHORIZED>RUNNING>SUCCESS;
+tasks.status=SUCCESS == runtime.
+RUN 2 controlled unknown-tool: descriptor/registry denial ->
+EXECUTOR never invoked for ghosts; escalations (FAILED>RECOVERING>RUNNING)
+lifecycle-owned; tasks.status=FAILED == runtime; no verification events claimed.
+Side effect discovered: escalated REAL model ran 'start ghost.tool' through the
+permitted terminal.execute capability -> Windows error dialog on the owner's
+screen (harmless; the owner's full_autonomy policy is what allowed terminal
+argv — flagged as residual risk below, NOT a boundary break).
+BUG FOUND+FIXED by the trace: terminal timeout left the child process running
+(orphan shells). Now killed+reaped (creationflags hide console on Windows);
+regression test tests/unit/tools/test_terminal_timeout.py.
+
+## Results
+uv run pytest tests: 411 passed, 4 skipped, 0 failed (baseline 393 + 22)
+mypy: clean 104 files; ruff: all checks passed
+Qualification report + suite files untouched (git-verified). Not claiming
+production-readiness/qualification — boundary established only.
+
+## Remaining architecture risks
+1. terminal.execute on full_autonomy runs ANY argv (owner choice); binary
+allowlist / ASK-unknown-binary escalation = future hardening, not built here.
+2. gateway keeps budget+schema checks (pre-policy fail-fast, documented);
+Executor stays policy-free.
+3. legacy gateway.execute kept as compatibility composition (isolated).
+4. orchestrator worker runs are in-memory-state; only the top-level run is
+DB-persisted (STEP 4 semantics, unchanged).
