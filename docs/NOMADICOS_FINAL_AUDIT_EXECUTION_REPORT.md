@@ -248,9 +248,11 @@ site; unknown => PermissionDenied(CAPABILITY_NOT_REGISTERED) BEFORE policy.
   audit(+resource label). describe_resource: path/command/url/script only
   (truncated 240 chars I12).
 - filesystem.safe_resolve: deterministic workspace-prefix echo normalization
-  (C:\Windows\System32\... and data/task-workspaces/x stay confined;
-  task-workspaces/file.txt -> file.txt; traversal and external escapes
-  rejected pre-policy).
+  (task-workspaces/file.txt resolves to file.txt; an absolute or relative
+  path that lands OUTSIDE the workspace - e.g. C:\Windows\System32\... -
+  is rejected pre-policy as an escape; '..' traversal rejected).
+  CORRECTION: my earlier draft of this bullet claimed the Windows path
+  'stayed confined' - it is refused, per tests #13/#14 and live case B.
 
 ## Tests: tests/security/test_capability_authority.py (all 12 plan items, 18
 functions incl. parameterized fake-authority fields, escalation by retry /
