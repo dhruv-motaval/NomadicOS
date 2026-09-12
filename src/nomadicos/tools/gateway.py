@@ -14,6 +14,7 @@ from nomadicos.audit.base import (
     AuditSeverity,
     AuditSink,
 )
+from nomadicos.constitution.policy_schema import RiskLevel
 from nomadicos.core.errors import (
     BudgetExceeded,
     PermissionDenied,
@@ -64,6 +65,21 @@ class ToolGateway:
 
     def registered_tools(self) -> list[str]:
         return sorted(self._tools)
+
+    def action_descriptor(
+        self, tool_name: str, arguments: dict[str, Any]
+    ) -> tuple[RiskLevel, tuple[str, ...]]:
+        """SYSTEM-derived (risk, capabilities) for IR binding — the ONLY
+        source these fields may come from. Unknown action ⇒ PermissionDenied
+        (fail closed, BP §85) BEFORE the claim can reach policy/executor."""
+        tool = self.get(tool_name)  # unknown ⇒ PermissionDenied
+        action_arg = arguments.get("action") if isinstance(arguments, dict) else None
+        capability = (
+            f"{tool_name}.{action_arg}"
+            if isinstance(action_arg, str) and action_arg
+            else f"{tool_name}.invoke"
+        )
+        return self._risk_of(tool), (capability,)
 
     # --------------------------------------------------------------- execution
 

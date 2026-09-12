@@ -119,3 +119,62 @@ Boot/Security foundations look solid and 2 security-relevant defects fixed, but 
 release bar (**≥99, Boot=100%, Security=100%**) is far from met: no computer control (MISSING),
 no coding E2E (MISSING), no self-healing/stress/security-attack harness (MISSING), and the
 deterministic core (IR/state) is not wired. **RELEASABLE: NO.** Next: STEP 2 canonical IR.
+
+---
+
+# STEP 2 — Canonical Task/Action IR (2026-09-12)
+
+## STATUS: COMPLETE (production runtime uses the IR; raw model->executor path removed)
+
+## Files inspected (map)
+- `agent/runtime.py` - the loop (_propose/_extract_json/raw dict .get x13/_mediated_execute/status tail) = the bypass.
+- `tools/gateway.py` - deterministic risk from registry (_risk_of), unknown->PermissionDenied. Policy already authoritative; executor took raw strings.
+- `security/gate.py` - ALLOW/ASK/DENY/BLOCK decision layer (untouched; consumes tool+risk+identity).
+- `core/lifecycle.py` - TaskStatus/TaskState (state machine wiring = STEP 4).
+- `security/permissions.py` - SubjectIdentity incl. step_id; grant model (user-only).
+- `agent/skills.py` + `agent/orchestrator.py` - competing parse surfaces (removed / verified-none).
+- `postgres/*`, `vector/exact.py`, `tools/generated.py`, `evaluation/*`, `api/app.py`, `models/*`, stores - persistence/result JSON, not model-action paths.
+- `tests/*`, `demo.py` - replay scripts reviewed for identity-field/queue drift.
+
+## Files changed
+- NEW `core/task_ir.py`: ActionClaim (untrusted->validated), TaskAction (bound trusted IR), extract_json_object parser, AUTHORITY_FIELDS denylist, Final schema_version, deterministic to_json. No executable behavior in models.
+- `tools/gateway.py`: +action_descriptor(tool,args)->(risk,capabilities) = single deterministic system metadata source for IR binding.
+- `agent/runtime.py`: _propose returns ActionClaim; loop consumes typed claim; every step binds a TaskAction carrying task/step/attempt/risk/capabilities before policy/executor; _mediated_execute hard-rejects non-IR objects; cross-attempt failure evidence (all_failures) + specific INVALID reason kept; _audit_task now stamps step_id; dead `_extract_json` removed.
+- `agent/skills.py`: dead proposal-replay removed (save(...,proposal=)/find_proposal) - raw model dicts can no longer be a second route to execution.
+- `.gitignore`-era BOM artifacts stripped from 13 files (editor hygiene discovered mid-step; behavior-preserving).
+- Tests: NEW `tests/unit/core/test_task_ir.py` (matrix 1-10,12,11IR,15IR), NEW `tests/integration/test_task_ir_e2e.py` (4,11,12,13,14,15 real loop+audit+file on disk), stubs updated (`test_machine_profile.py`, `test_skills.py`).
+
+## Post-change execution path (live evidence)
+model text -> ActionClaim.from_model_text (INVALID on malformed/authority/extras/oversize; {} NEVER finish) -> loop:
+TOOL_CALL -> gateway.action_descriptor (unknown -> stop BEFORE executor; audit shows no ghost ALLOW/ASK) ->
+TaskAction.bind(claim,task_id,step_id=attempt-N-step-N,attempt,risk,system-caps) ->
+mediated: gateway.execute -> tool schema/path validation -> SecurityGate.authorize(tool,risk from IR+registry,step id) ->
+tool.run (workspace-confined) -> verify -> audit step-scoped -> persist. REPLY/FINISH branches never reach executor.
+Live Ollama case F: real gemma/qwen run wrote the file, status SUCCESS verified=True, experience+memory persisted.
+
+## Bypass analysis
+- policy: only IR tool names with registry risk. Unknown actions blocked at descriptor; never authorized (test D/E + audit assertion).
+- executor: _mediated_execute raises ValidationError on non-TaskAction (test 11).
+- tool gateway: reachable only THROUGH _mediated_execute (loop) or direct legitimate tool tests; no raw model path.
+- task-state mutation: SUCCESS only from chat reply or post-execution completed evidence; never from raw JSON (malformed test C + {} rule + integration tests).
+- identity: task/step ids injected by system (IGNORED_IDENTITY_FIELDS); model cannot forge (unit tested).
+
+## TEST EVIDENCE (this session)
+- uv run python -m pytest tests -p no:cacheprovider -> 336 passed, 4 skipped (baseline before step2: 298; +38 new/updated, 0 regressions)
+- uv run --extra dev mypy src/nomadicos -> Success (101 source files)
+- uv run --extra dev ruff check src tests -> All checks passed
+- trace_ir.py: A chat=SUCCESS (no executor line), B tool SUCCESS file on disk step attempt-1-step-1, C FAILED unparseable (never finish), D FAILED unknown-tool (policy never saw), E FAILED path escape refused, F live-model SUCCESS incl. memory+experience persistence; audit STEP_DONE step_ids verified.
+
+## Regressions
+- None functional. Two test-stub attributes updated; existing integration semantics preserved (challenge/escalation/repeat-guard intact).
+
+## Remaining issues (confirmed, deferred to later steps)
+- FilesystemTool accepts nested relative paths -> model-supplied data/task-workspaces/ir-live.txt landed one level deep; sandbox containment held but path UX oddity = STEP 3/6 cleanup item.
+- TaskState enum still unused by loop -> STEP 4 (state machine wiring).
+- Capability vocabulary is tool-derived (filesystem.read etc.) -> formal capability model in STEP 3.
+
+## CLAIM CONFIDENCE
+- Execution path uses canonical IR: CONFIRMED (unit + integration + live F).
+- Bypass closed at four surfaces: CONFIRMED by tests (not inspection) .
+- Policy authority unchanged (gate still decides): CONFIRMED.
+- "Nothing bypassed" beyond traced paths: INFERRED (static grep + tests cover model-origin paths; STEP 3 attack suite will probe further).

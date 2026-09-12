@@ -1,4 +1,4 @@
-﻿"""Adaptive model selection (BP §148, §187, §320, §386-387; Phase 12).
+"""Adaptive model selection (BP §148, §187, §320, §386-387; Phase 12).
 
 ModelSelector learns from real experience (BP §64): global capability scores
 are combined with per-task-family and per-project historical success

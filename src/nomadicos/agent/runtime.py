@@ -1,4 +1,4 @@
-﻿"""AgentRuntime: the canonical execution loop (BP Â§185, Â§50; Milestone Â§78).
+"""AgentRuntime: the canonical execution loop (BP Â§185, Â§50; Milestone Â§78).
 
     while not task.finished:
         observe â†’ plan/decide (model proposes structured tool call)
@@ -37,6 +37,7 @@ from nomadicos.core.errors import (
 from nomadicos.core.events import EventBus, TraceContext
 from nomadicos.core.lifecycle import TaskStatus
 from nomadicos.core.logging import get_logger
+from nomadicos.core.task_ir import ActionClaim, ActionKind, TaskAction
 from nomadicos.evaluation.engine import EvaluationEngine
 from nomadicos.experience.recorder import ExperienceRecorder, Outcome
 from nomadicos.models.base import LocalModel
@@ -272,6 +273,9 @@ class AgentRuntime:
         reply: str | None = None
 
         await self._audit_task(trace, task_id, "TASK_START", model_id)
+        # Failure evidence accumulates ACROSS attempts: an attempt-2 wipe of
+        # `failed` erased the true root cause from the report (evidence rule).
+        all_failures: list[str] = []
 
         async def _run_execution(attempt_no: int) -> None:
             """One full attempt: proposal loop with a FRESH budget. On attempt 2
@@ -324,46 +328,43 @@ class AgentRuntime:
                     )
                     status = TaskStatus.SUCCESS
                     return
-                # 2. Execution loop (BP §185) — with a working memory: the
-                # model's own reasoning is carried across steps.
+                # 2. Execution loop (BP 185) — with a working memory: the
+                # model's own reasoning is carried across steps. Every model
+                # message becomes a canonical ActionClaim -> TaskAction before
+                # policy or the executor may see it (rebuild plan S3).
                 reasoning_history: list[str] = []
                 for step in range(1, max_steps + 1):
                     budget.check_step()
-                    run_trace = attempt_trace.child(step_id=f"step-{step}")
+                    step_label = f"attempt-{attempt_no}-step-{step}"
+                    run_trace = attempt_trace.child(step_id=step_label)
 
-                    # 2a. Model proposes a structured tool call (BP §86).
+                    # 2a. Model proposes; parser validates into the claim IR.
                     budget.check_model_call()
-                    proposal = await self._propose(
+                    claim = await self._propose(
                         model, goal, completed, reasoning_history
                     )
-                    step_reasoning = proposal.pop("_reasoning", None)
-                    if step_reasoning:
-                        reasoning_history.append(step_reasoning)
+                    if claim.reasoning:
+                        reasoning_history.append(claim.reasoning)
 
-                    # Proposal routing (unified):
-                    # 1) tool present  â†’ execute, REGARDLESS of the finished
-                    #    flag (small models habitually mark their own reply
-                    #    "finished"; the flag only ever breaks a no-tool reply).
-                    # 2) reply present â†’ conversational answer, break.
-                    # 3) finished without any work (step 1, nothing completed)
-                    #    â†’ challenge ONCE, then fail truthfully (BP Â§366).
-                    tool_name = proposal.get("tool", "")
-                    arguments = proposal.get("arguments", {}) or {}
-
-                    if tool_name:
-                        pass  # fall through to gate mediation below
-                    elif proposal.get("reply"):
-                        reply = proposal["reply"]
+                    if claim.kind is ActionKind.TOOL_CALL:
+                        pass  # canonicalized + executed below
+                    elif claim.kind is ActionKind.REPLY:
+                        reply = claim.reply
                         break
-                    elif proposal.get("malformed"):
-                        failed.append("model produced an unparseable proposal")
+                    elif claim.kind is ActionKind.INVALID:
+                        # Malformed output NEVER reads as finished/success
+                        # (rebuild plan 6): failed step, then retry.
+                        failed.append(
+                            "model produced an unparseable proposal"
+                            + (f" ({claim.reason})" if claim.reason else "")
+                        )
                         budget.check_retry()
                         continue
-                    elif proposal.get("finished") and completed:
-                        break  # goal claimed reached with work done; post-loop decides
-                    else:
-                        # finished/reply-less/no-tool proposal
-                        if not completed and step == 1:
+                    elif claim.kind is ActionKind.FINISH:
+                        if completed:
+                            break  # post-loop decides the truthful status
+                        if step == 1:
+                            # Empty "finished" claim challenged ONCE (366).
                             budget.check_model_call()
                             challenge = await self._propose(
                                 model,
@@ -372,51 +373,74 @@ class AgentRuntime:
                                 "call that moves toward the goal, or use a reply "
                                 "if it needs no tool.)",
                                 completed,
+                                reasoning_history,
                             )
-                            c_tool = challenge.get("tool")
-                            if c_tool:
-                                tool_name = c_tool
-                                arguments = challenge.get("arguments", {}) or {}
-                            elif challenge.get("reply"):
-                                reply = challenge["reply"]
+                            if challenge.reasoning:
+                                reasoning_history.append(challenge.reasoning)
+                            if challenge.kind is ActionKind.REPLY:
+                                reply = challenge.reply
                                 break
+                            if challenge.kind is ActionKind.TOOL_CALL:
+                                claim = challenge
                             else:
-                                break  # nothing usable; fails truthfully post-loop
+                                break  # nothing usable; fails truthfully
                         else:
                             break
-
-                    if not tool_name:
+                    else:  # pragma: no cover - defensive
                         break
 
-                    # Loop guard: an exact repeat of the previous executed step
+                    # --- canonicalize: SYSTEM metadata, never model-supplied.
+                    # Unknown/unrunnable action is denied at the registry here,
+                    # so raw claims cannot reach policy or the executor.
+                    tool_name = claim.tool or ""
+                    try:
+                        risk, capabilities = self._gateway.action_descriptor(
+                            tool_name, claim.arguments
+                        )
+                        action = TaskAction.bind(
+                            claim,
+                            task_id=task_id,
+                            step_id=step_label,
+                            attempt=attempt_no,
+                            risk=risk,
+                            capabilities=capabilities,
+                            origin_model=model_id,
+                        )
+                    except (PermissionDenied, ValidationError, ValueError) as exc:
+                        failed.append(f"{tool_name or 'invalid claim'}: {exc}")
+                        budget.check_retry()
+                        continue
+
+                    identity_step = action.identity_for(identity)
+
+                    # Loop guard: exact repeat of the previous executed step
                     # means the model is stuck (it opened Chrome 8 times once).
-                    # Treat the repeat as "done" instead of re-executing.
-                    signature = f"{tool_name} {json.dumps(arguments)[:120]}"
+                    signature = action.label()
                     if completed and signature == completed[-1]:
-                        if proposal.get("finished"):
-                            completed[-1] = signature
                         break
 
                     gate_result = await self._mediated_execute(
-                        tool_name, arguments, identity, budget
+                        action, identity_step, budget
                     )
                     if not gate_result.success:
-                        failed.append(f"{tool_name}: {gate_result.error or 'unknown gate failure'}")
+                        failed.append(
+                            f"{tool_name}: {gate_result.error or 'unknown gate failure'}"
+                        )
                         if "requires user confirmation" in (gate_result.error or ""):
-                            # ASK cannot flip to ALLOW mid-task â€” there is no
-                            # approver inside this execution. Retrying the same
-                            # refused proposal wastes budget (fail fast, BP Â§70).
+                            # ASK cannot flip to ALLOW mid-task — there is no
+                            # approver inside this execution. Stop without
+                            # burning retries on an unchangeable refusal.
                             budget.spend_all_retries()
                             break
                         budget.check_retry()
                         continue
 
-                    # 2c. Verification (BP Â§28, Â§144: evidence, not claims).
+                    # 2c. Verification: evidence, not claims.
                     evidence_kind = self._gateway.get(tool_name).spec.evidence_kind
                     if evidence_kind in ("filesystem", "terminal"):
                         evidence = self._evidence_from(tool_name, gate_result)
-                        if arguments.get("action"):
-                            evidence.facts["action"] = arguments["action"]
+                        if action.arguments.get("action"):
+                            evidence.facts["action"] = action.arguments["action"]
                         try:
                             verdict = await self._evaluator.verify(evidence_kind, evidence)
                             evidence_bundles.append((evidence_kind, evidence))
@@ -428,9 +452,9 @@ class AgentRuntime:
                         except VerificationFailed as exc:
                             verification_notes.append(f"no verifier: {exc}")
 
-                    completed.append(f"{tool_name} {json.dumps(arguments)[:120]}")
+                    completed.append(signature)
                     await self._audit_task(run_trace, task_id, "STEP_DONE", model_id)
-                    if proposal.get("finished"):
+                    if claim.finish:
                         # The model declared the goal reached AFTER this step —
                         # honor it: the loop ends here (honest, small-model fix).
                         break
@@ -463,6 +487,7 @@ class AgentRuntime:
         max_attempts = 2
         for attempt_no in range(1, max_attempts + 1):
             await _run_execution(attempt_no)
+            all_failures.extend(failed)
             if status is not TaskStatus.FAILED:
                 break
             if completed:  # real work happened; a retry would duplicate it
@@ -494,8 +519,10 @@ class AgentRuntime:
         # Post-mortem: on total failure with zero executed steps, fetch a
         # plain-language explanation for the user. Best effort and truthful â€”
         # the FAILED status is never softened (BP Â§366).
-        if status is TaskStatus.FAILED and not completed and reply is None and failed:
-            reply = await self._explain_failure(model, goal, failed[0])
+        if status is TaskStatus.FAILED and not completed and reply is None and all_failures:
+            reply = await self._explain_failure(
+                model, goal, failed[0] if failed else all_failures[0]
+            )
 
         # Self-implementation (owner vision: the toolbox grows): a successful
         # task that wrote+ran a script may deserve a permanent generated tool.
@@ -544,7 +571,7 @@ class AgentRuntime:
             requested=goal,
             completed=completed,
             verification=verification_notes,
-            failed=list(dict.fromkeys(failed)),  # dedupe repeated refusals
+            failed=list(dict.fromkeys(all_failures)),  # full evidence
             experience_id=str(experience.experience_id),
             duration_seconds=round(duration, 2),
             model_latency_ms=round(model_latency.ms, 1),
@@ -793,7 +820,7 @@ class AgentRuntime:
         goal: str,
         completed: list[str],
         reasoning_history: list[str] | None = None,
-    ) -> dict[str, Any]:
+    ) -> ActionClaim:
         """Model proposes a structured tool call (BP §86) — with room to THINK.
 
         The model may reason before the JSON ('REASON:' lines or a native
@@ -881,9 +908,8 @@ class AgentRuntime:
         result = await model.generate(GenerateRequest(prompt=prompt, max_output_tokens=1024))
         raw = result.text
 
-        # Capture the model's reasoning: native think channels first, then the
-        # REASON: preamble. This is the loop's working memory (BP §190: learned
-        # reasoning is evidence, never authority).
+        # Capture native reasoning channels first (reasoning in the payload
+        # itself wins); the THINK/REASON capture feeds loop working memory.
         reasoning: str | None = None
         think = re.search(r"<think>(.*?)</think>", raw, flags=re.DOTALL)
         if think:
@@ -895,45 +921,32 @@ class AgentRuntime:
             if reason_match:
                 reasoning = reason_match.group(1).strip()[:400]
 
-        # Strip think blocks, then robustly extract the JSON object (reasoning
-        # text may contain braces, so scan every '{' left to right).
-        text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL)
-        text = re.sub(r"\[\[\[thinking.*?\]\]\]", "", text, flags=re.DOTALL | re.IGNORECASE)
-        proposal = self._extract_json(text)
-        if proposal is None:
-            # Malformed proposal ≠ finished. Signal malformed so the loop
-            # counts it as a failed step and retries (truthful, BP §366).
-            proposal = {"malformed": True}
-        if reasoning:
-            proposal["_reasoning"] = reasoning
-        return proposal
-
-    @staticmethod
-    def _extract_json(text: str) -> dict[str, Any] | None:
-        """Robust JSON object extraction: reasoning text may contain braces,
-        so scan every '{' left to right and take the first parseable dict."""
-        for start in (i for i, ch in enumerate(text) if ch == "{"):
-            for end in range(len(text) - 1, start, -1):
-                if text[end] != "}":
-                    continue
-                try:
-                    parsed = json.loads(text[start : end + 1])
-                    if isinstance(parsed, dict):
-                        return parsed
-                except json.JSONDecodeError:
-                    continue
-                break
-        return None
+        claim = ActionClaim.from_model_text(raw)
+        if (
+            reasoning
+            and claim.reasoning is None
+            and claim.kind is not ActionKind.INVALID
+        ):
+            claim = claim.model_copy(update={"reasoning": reasoning[:400]})
+        return claim
 
     async def _mediated_execute(
         self,
-        tool_name: str,
-        arguments: dict[str, Any],
+        action: object,
         identity: SubjectIdentity,
         budget: TaskBudgetTracker,
     ) -> ToolResult:
+        """Execute ONLY a canonical TaskAction. Raw model dicts/strings can
+        never arrive here — trust boundary (rebuild plan S3/S6)."""
+        if not isinstance(action, TaskAction):
+            raise ValidationError(
+                f"executor requires canonical TaskAction, got {type(action).__name__}"
+            )
+        tool_name = action.tool or ""
         try:
-            return await self._gateway.execute(tool_name, arguments, identity, budget)
+            return await self._gateway.execute(
+                tool_name, action.arguments, identity, budget
+            )
         except ToolExecutionError as exc:
             return ToolResult.failure(str(exc))
         except ValidationError as exc:
@@ -967,6 +980,7 @@ class AgentRuntime:
                 session_id=trace.session_id,
                 task_id=trace.task_id,
                 run_id=trace.run_id,
+                step_id=trace.step_id,
                 subject=model_id,
                 decision=event,
             )

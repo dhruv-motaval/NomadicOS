@@ -1,1 +1,1 @@
-﻿"""Placeholder — implemented in a later phase (ADR-0027)."""
+"""Placeholder — implemented in a later phase (ADR-0027)."""

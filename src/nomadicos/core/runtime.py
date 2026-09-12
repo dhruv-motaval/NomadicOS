@@ -1,4 +1,4 @@
-﻿"""Runtime composition root (BP Â§234, Â§237; ADR-0015/0023): wires all subsystems.
+"""Runtime composition root (BP Â§234, Â§237; ADR-0015/0023): wires all subsystems.
 
 Persistence posture (BP Â§237): PostgreSQL is canonical; when the database is
 reachable the runtime persists audit/experiences/memory and enables the

@@ -1,4 +1,4 @@
-﻿"""FastAPI wrapper around the NomadicOS Runtime (ADR-0032).
+"""FastAPI wrapper around the NomadicOS Runtime (ADR-0032).
 
 Six endpoints: POST /v1/goals, GET /v1/goals/{id}, GET /v1/events/{id},
 POST /v1/memory/search, GET /v1/status, POST /v1/emergency-stop.

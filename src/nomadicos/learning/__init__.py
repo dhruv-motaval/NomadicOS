@@ -1,4 +1,4 @@
-﻿"""Self-Improvement Engine (BP §29-31, §65-67, §101, §147, §216, §243; Phase 13).
+"""Self-Improvement Engine (BP §29-31, §65-67, §101, §147, §216, §243; Phase 13).
 
 Improvement is NOT weight modification (answers Section I): candidates are
 policy/configuration proposals — sandboxed, benchmarked, compared, versioned,

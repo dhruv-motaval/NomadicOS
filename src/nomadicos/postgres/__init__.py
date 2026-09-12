@@ -1,4 +1,4 @@
-﻿"""PostgreSQL persistence (BP §19, §93, ADR-0009/0010)."""
+"""PostgreSQL persistence (BP §19, §93, ADR-0009/0010)."""
 
 from nomadicos.postgres.client import PostgresClient
 from nomadicos.postgres.migrator import MigrationRunner

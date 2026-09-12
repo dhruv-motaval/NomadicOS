@@ -1,4 +1,4 @@
-﻿"""Vision Runtime (BP §9, §51, §158-159, §172-177, §240; ADR-0004).
+"""Vision Runtime (BP §9, §51, §158-159, §172-177, §240; ADR-0004).
 
 Local-only perception: capture → local Gemma-family vision → structured
 observation. Event-driven capture only (BP §158); screen data never leaves the

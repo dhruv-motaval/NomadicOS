@@ -1,4 +1,4 @@
-﻿"""Experience system (BP §18, §95, §109, §168, §206, §318, §352; Phase 11).
+"""Experience system (BP §18, §95, §109, §168, §206, §318, §352; Phase 11).
 
 Experience = what the system actually did (BP §317) — distinct from user
 memory. Quality-scored (BP §318), deduplicated (BP §168), consolidated
