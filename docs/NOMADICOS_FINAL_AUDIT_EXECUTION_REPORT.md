@@ -178,3 +178,35 @@ Live Ollama case F: real gemma/qwen run wrote the file, status SUCCESS verified=
 - Bypass closed at four surfaces: CONFIRMED by tests (not inspection) .
 - Policy authority unchanged (gate still decides): CONFIRMED.
 - "Nothing bypassed" beyond traced paths: INFERRED (static grep + tests cover model-origin paths; STEP 3 attack suite will probe further).
+
+---
+
+# STEP 4 — Unified Task State (authoritative lifecycle) 2026-09-12
+
+## Implementation
+- core/lifecycle.py: CREATED/AUTHORIZED/BLOCKED added; FAILED/PARTIALLY -> RECOVERING
+  retry chain; RUNNING/WAITING/VERIFYING -> BLOCKED removed except RUNNING;
+  INTERRUPT_STATUSES + TERMINAL_STATUSES define recovery semantics.
+- repositories: create -> status='CREATED'; advance_status(expected,to) CAS with
+  StateConflict; reconcile_interrupted() -> FAILED for interrupted, BLOCKED survives.
+- migration 004_tasks_lifecycle_status.sql (CHECK + default).
+- agent/runtime execute_task: single TaskState owner. _advance = validate ->
+  persist CAS -> flip. Mid-flight persistence = HARD (StatePersistenceError ->
+  honest FAILED report, no phantom state). Terminal/ensure = soft best-effort.
+  Every attempt/retry/verify/cancel/blocked path goes through it; stop callback
+  cancels + persists CANCELLED; blocked ask persists BLOCKED.
+- core/runtime: state_sink + stop_requested wiring; lazy startup reconcile;
+  orchestration row walked through the same legal transitions.
+
+## Verification (this turn, live)
+- Unit lifecycle + PG persistence + duplicate-completion: all green.
+- Live trace A (real Ollama write goal): report SUCCESS == db SUCCESS,
+  step states attempt-1-step-1 ALLOW->EXECUTED->STEP_DONE.
+- Live trace B (System32 write attempted by real model): report FAILED ==
+  db FAILED across TWO attempts (attempt-2-step-N audit proves retry state).
+- Full: pytest 348 passed 4 skipped (baseline 336); mypy 101 files clean;
+  ruff clean. Qualification docs untouched (git-scoped check).
+- Remaining: step-level per-row state of steps themselves stays in audit
+  STEP_DONE events (tasks table remains the task authority); api GoalRegistry
+  entry.status + orchestrator final_status strings are DERIVED views (justified),
+  not stores.

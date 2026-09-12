@@ -15,13 +15,22 @@ logger = logging.getLogger(__name__)
 
 
 class TaskStatus(StrEnum):
-    """Explicit task state machine (BP §137). Free-form agent text never drives state."""
+    """Explicit task state machine (BP §137). Free-form agent text never drives
+    state. This is the ONE authoritative lifecycle vocabulary (STEP 4):
+    runtime transitions -> PostgreSQL mirror — no second mutable store.
 
+    Name mapping for the qualification vocabulary: CREATED is the persisted
+    creation state; COMPLETED maps to SUCCESS, RECOVERY maps to RECOVERING
+    (kept for API/report compatibility)."""
+
+    CREATED = "CREATED"
     PLANNED = "PLANNED"
+    AUTHORIZED = "AUTHORIZED"
     RUNNING = "RUNNING"
     WAITING = "WAITING"
     VERIFYING = "VERIFYING"
     RECOVERING = "RECOVERING"
+    BLOCKED = "BLOCKED"  # awaiting owner authorization (ASK w/o approver)
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
@@ -30,14 +39,26 @@ class TaskStatus(StrEnum):
 
 # Legal transitions (BP §137/§52/§121/§135). Anything else is a bug, not a state.
 TASK_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
+    TaskStatus.CREATED: frozenset(
+        {TaskStatus.PLANNED, TaskStatus.CANCELLED, TaskStatus.FAILED}
+    ),
     TaskStatus.PLANNED: frozenset(
-        {TaskStatus.RUNNING, TaskStatus.CANCELLED}
+        {
+            TaskStatus.AUTHORIZED,
+            TaskStatus.RUNNING,
+            TaskStatus.CANCELLED,
+            TaskStatus.FAILED,
+        }
+    ),
+    TaskStatus.AUTHORIZED: frozenset(
+        {TaskStatus.RUNNING, TaskStatus.CANCELLED, TaskStatus.FAILED}
     ),
     TaskStatus.RUNNING: frozenset(
         {
             TaskStatus.WAITING,
             TaskStatus.VERIFYING,
             TaskStatus.RECOVERING,
+            TaskStatus.BLOCKED,
             TaskStatus.SUCCESS,
             TaskStatus.FAILED,
             TaskStatus.PARTIALLY_COMPLETED,
@@ -45,7 +66,7 @@ TASK_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
         }
     ),
     TaskStatus.WAITING: frozenset(
-        {TaskStatus.RUNNING, TaskStatus.RECOVERING, TaskStatus.CANCELLED}
+        {TaskStatus.RUNNING, TaskStatus.RECOVERING, TaskStatus.CANCELLED, TaskStatus.FAILED}
     ),
     TaskStatus.VERIFYING: frozenset(
         {
@@ -65,9 +86,12 @@ TASK_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
             TaskStatus.CANCELLED,
         }
     ),
+    TaskStatus.BLOCKED: frozenset(
+        {TaskStatus.RUNNING, TaskStatus.RECOVERING, TaskStatus.CANCELLED}
+    ),
     TaskStatus.SUCCESS: frozenset(),
-    TaskStatus.FAILED: frozenset(),
-    TaskStatus.PARTIALLY_COMPLETED: frozenset(),
+    TaskStatus.FAILED: frozenset({TaskStatus.RECOVERING}),
+    TaskStatus.PARTIALLY_COMPLETED: frozenset({TaskStatus.RECOVERING}),
     TaskStatus.CANCELLED: frozenset(),
 }
 
@@ -78,6 +102,16 @@ TERMINAL_STATUSES = frozenset(
         TaskStatus.PARTIALLY_COMPLETED,
         TaskStatus.CANCELLED,
     }
+)
+
+# Crash-reconcilable states: a row in any of these after a restart was left
+# unfinished by the dead process — it must never be reported as successful.
+# BLOCKED is EXCLUDED deliberately: waiting on the owner is a durable, chosen
+# outcome, not an interrupted one.
+INTERRUPT_STATUSES = frozenset(
+    {TaskStatus.CREATED, TaskStatus.PLANNED, TaskStatus.AUTHORIZED}
+    | {TaskStatus.RUNNING, TaskStatus.WAITING, TaskStatus.VERIFYING}
+    | {TaskStatus.RECOVERING}
 )
 
 

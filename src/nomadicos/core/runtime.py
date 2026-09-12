@@ -17,7 +17,7 @@ from nomadicos.constitution.policy_loader import PolicyEngine
 from nomadicos.core.config import CoreConfig, load_config
 from nomadicos.core.errors import NomadicError
 from nomadicos.core.events import EventBus
-from nomadicos.core.lifecycle import Lifecycle
+from nomadicos.core.lifecycle import Lifecycle, TaskStatus
 from nomadicos.core.logging import configure_logging, get_logger
 from nomadicos.evaluation.engine import EvaluationEngine
 from nomadicos.evaluation.model_eval import ModelPerformanceTracker
@@ -112,6 +112,7 @@ class Runtime:
         self._orchestration_enabled = False  # owner opt-in (ADR-0030 staged rollout)
         self._conversation: list[dict[str, Any]] = []  # session continuity (BP §376)
         self._emergency_stopped = False
+        self._reconciled = False
         self._fleet: Any = None
         self._fleet_watch_task: Any = None
 
@@ -336,6 +337,73 @@ class Runtime:
             f"emergency_stopped={self._emergency_stopped}"
         )
 
+    async def _reconcile_interrupted_once(self) -> None:
+        """STEP 4 crash semantics: rows left mid-flight by a dead process
+        become FAILED on first use after startup — never silent success.
+        BLOCKED rows are durable owner-decisions and are left untouched."""
+        if self._reconciled or not getattr(self, "_pg_available", False):
+            self._reconciled = True
+            return
+        self._reconciled = True
+        try:
+            from nomadicos.postgres.repositories import TaskRepository
+
+            fixed = await TaskRepository(self._pg_client).reconcile_interrupted()
+            if fixed:
+                logger.warning("reconciled interrupted tasks count=%d", len(fixed))
+        except Exception:  # noqa: BLE001
+            logger.debug("interrupted-task reconciliation skipped", exc_info=True)
+
+    def _state_sink(self, task_id: str | None):
+        if not task_id or not getattr(self, "_pg_available", False):
+            return None
+
+        async def sink(tid: str, expected, to) -> None:
+            from uuid import UUID
+
+            from nomadicos.postgres.repositories import TaskRepository
+
+            await TaskRepository(self._pg_client).advance_status(
+                UUID(tid), expected, to
+            )
+
+        return sink
+
+    async def _walk_row_to(self, task_id: str | None, target) -> None:
+        """Orchestration mode: advance the authoritative row to the final
+        state through legal transitions (best effort, logged)."""
+        if not task_id or not getattr(self, "_pg_available", False):
+            return
+        from uuid import UUID
+
+        from nomadicos.core.lifecycle import TASK_TRANSITIONS, TERMINAL_STATUSES
+        from nomadicos.postgres.repositories import TaskRepository
+
+        repo = TaskRepository(self._pg_client)
+        try:
+            uid = UUID(task_id)
+            row = await repo.get(uid)
+            if row is None:
+                return
+            cur = TaskStatus(row["status"])
+            for _ in range(6):
+                if cur is target or cur in TERMINAL_STATUSES:
+                    return
+                for nxt in (
+                    target,
+                    TaskStatus.PLANNED,
+                    TaskStatus.AUTHORIZED,
+                    TaskStatus.RUNNING,
+                ):
+                    if nxt in TASK_TRANSITIONS[cur]:
+                        await repo.advance_status(uid, cur, nxt)
+                        cur = nxt
+                        break
+                else:
+                    return
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("orchestration row walk skipped: %s", exc)
+
     def emergency_stop(self) -> None:
         self._emergency_stopped = True
 
@@ -392,6 +460,7 @@ class Runtime:
                 failed=["emergency stop active"],
             )
 
+        await self._reconcile_interrupted_once()
         memory_engine = self.memory
         memory_context = await memory_engine.search(goal, limit=3) if goal.strip() else []
 
@@ -449,6 +518,7 @@ class Runtime:
                 runtime_factory=self._agent_factory(runtime),
             )
             result = await orchestrator.orchestrate(goal, identity)
+            await self._walk_row_to(task_id, TaskStatus(result.final_status))
             from nomadicos.agent.runtime import TaskReport
 
             return TaskReport(
@@ -462,7 +532,12 @@ class Runtime:
                 reply=result.synthesis,
             )
 
-        report = await runtime.execute_task(goal, identity)
+        report = await runtime.execute_task(
+            goal,
+            identity,
+            state_sink=self._state_sink(task_id),
+            stop_requested=lambda: self._emergency_stopped,
+        )
 
         # Session continuity (BP §376): remember this exchange so follow-ups
         # ("give me the path of that file") understand the reference.

@@ -54,6 +54,7 @@ def test_migrations_apply_and_are_idempotent(db) -> None:
     "001_core_state.sql",
     "002_memory.sql",
     "003_audit_correlation_text.sql",
+    "004_tasks_lifecycle_status.sql",
 ]
     applied_second = runner.run()
     assert applied_second == []  # idempotent
@@ -76,7 +77,7 @@ def test_session_and_task_lifecycle(db) -> None:
     )
     task = __import__("asyncio").run(tasks.get(task_id))
     assert str(task["session_id"]) == str(session_id)  # ADR-0026/F5 correlation
-    assert task["status"] == "PLANNED"
+    assert task["status"] == "CREATED"  # lifecycle (STEP 4): rows are born CREATED
 
     with pytest.raises(ValidationError, match="non-empty"):
         __import__("asyncio").run(tasks.create("user-1", "   "))

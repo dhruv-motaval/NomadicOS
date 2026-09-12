@@ -5,8 +5,8 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from nomadicos.audit.base import AuditEvent, AuditEventCategory
-from nomadicos.core.errors import ValidationError
-from nomadicos.core.lifecycle import TaskStatus
+from nomadicos.core.errors import StateConflict, ValidationError
+from nomadicos.core.lifecycle import INTERRUPT_STATUSES, TaskStatus
 from nomadicos.postgres.client import PostgresClient
 
 
@@ -56,8 +56,8 @@ class TaskRepository:
             raise ValidationError("task goal must be non-empty")
         tid = task_id or uuid4()
         self._client.execute(
-            "INSERT INTO nomadicos.tasks (task_id, session_id, user_id, goal, priority) "
-            "VALUES (%s, %s, %s, %s, %s)",
+            "INSERT INTO nomadicos.tasks (task_id, session_id, user_id, goal, priority, status) "
+            "VALUES (%s, %s, %s, %s, %s, 'CREATED')",
             (tid, session_id, user_id, goal, priority),
         )
         return tid
@@ -91,6 +91,36 @@ class TaskRepository:
             "UPDATE nomadicos.tasks SET status = %s, updated_at = now() WHERE task_id = %s",
             (status.value, task_id),
         )
+
+    async def advance_status(self, task_id: UUID, expected: TaskStatus, to: TaskStatus) -> None:
+        """CAS lifecycle write (STEP 4): the row advances ONLY from the exact
+        state the caller believes is current. Rows already beyond a race throw
+        StateConflict; a lost race cannot fake durable SUCCESS."""
+        if to.value == expected.value:
+            return  # idempotent no-op
+        rows = self._client.execute(
+            "UPDATE nomadicos.tasks SET status = %s, updated_at = now() "
+            "WHERE task_id = %s AND status = %s RETURNING task_id",
+            (to.value, task_id, expected.value),
+        )
+        if not rows:
+            raise StateConflict(
+                f"cannot advance task {task_id} {expected.value} -> {to.value}: "
+                "stored state differs (concurrent transition or stale writer)",
+                context={"expected": expected.value, "attempted": to.value},
+            )
+
+    async def reconcile_interrupted(self) -> list[str]:
+        """Crash reconciliation (STEP 5): every row left mid-flight by a dead
+        runtime becomes FAILED — never silently successful. BLOCKED rows are
+        owned-by-decision and stay untouched."""
+        placeholders = ", ".join(["%s"] * len(INTERRUPT_STATUSES))
+        rows = self._client.execute(
+            f"UPDATE nomadicos.tasks SET status = 'FAILED', updated_at = now() "
+            f"WHERE status IN ({placeholders}) RETURNING task_id",
+            tuple(s.value for s in sorted(INTERRUPT_STATUSES)),
+        )
+        return [str(r["task_id"]) for r in rows]
 
     async def start_run(self, task_id: UUID, run_id: UUID | None = None) -> UUID:
         rid = run_id or uuid4()

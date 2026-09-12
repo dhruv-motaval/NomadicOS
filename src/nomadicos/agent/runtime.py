@@ -13,6 +13,7 @@ verified/failed/uncertainty (BP Â§180-181).
 import json
 import re
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -29,13 +30,20 @@ from nomadicos.core.errors import (
     NomadicError,
     PermissionDenied,
     SecurityPolicyViolation,
+    StatePersistenceError,
     TaskTimeout,
     ToolExecutionError,
     ValidationError,
     VerificationFailed,
 )
 from nomadicos.core.events import EventBus, TraceContext
-from nomadicos.core.lifecycle import TaskStatus
+from nomadicos.core.lifecycle import (
+    TASK_TRANSITIONS,
+    TERMINAL_STATUSES,
+    StateTransitionError,
+    TaskState,
+    TaskStatus,
+)
 from nomadicos.core.logging import get_logger
 from nomadicos.core.task_ir import ActionClaim, ActionKind, TaskAction
 from nomadicos.evaluation.engine import EvaluationEngine
@@ -233,6 +241,10 @@ class AgentRuntime:
         *,
         model_id: str | None = None,
         max_steps: int = 8,
+        state_sink: (
+            "Callable[[str, TaskStatus, TaskStatus], Awaitable[None]] | None"
+        ) = None,
+        stop_requested: Callable[[], bool] | None = None,
     ) -> TaskReport:
         """Run one task through the canonical loop (BP Â§185, Â§78)."""
         started = time.monotonic()
@@ -247,7 +259,89 @@ class AgentRuntime:
         )
 
         model_latency = _LatencyProbe()
+        completed: list[str] = []
+        verification_notes: list[str] = []
+        failed: list[str] = []
+        evidence_bundles: list[tuple[str, Any]] = []
+        reply: str | None = None
+        # STEP 4: the ONE authoritative task lifecycle. Order is
+        # validate legal -> persist CAS (durable) -> flip TaskState. A
+        # persistence failure may NEVER leave an unrecorded state claimed.
+        state = TaskState(task_id=task_id, status=TaskStatus.CREATED)
+
+        async def _advance(to: TaskStatus, *, soft: bool = False) -> bool:
+            current = state.status
+            if current is to:
+                return True
+            if to not in TASK_TRANSITIONS[current]:
+                raise StateTransitionError(
+                    f"illegal transition {current.value} -> {to.value}"
+                )
+            if state_sink is not None:
+                try:
+                    await state_sink(task_id, current, to)
+                except Exception as exc:  # noqa: BLE001 — durable-first rule
+                    failed.append(
+                        f"state persistence failed for {to.value}: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    if soft:
+                        return False
+                    raise StatePersistenceError(
+                        f"cannot continue without persisting state {to.value}"
+                        f" (task {task_id})"
+                    ) from exc
+            state.transition(to)
+            return True
+
+        async def _terminal(to: TaskStatus) -> None:
+            if not await _advance(to, soft=True):
+                await _advance(TaskStatus.FAILED, soft=True)
+
+        async def _hard(to: TaskStatus) -> TaskReport | None:
+            """Mid-flight states are hard: if the authoritative DB cannot
+            hold them, we stop before executing anything side-effectful.
+            """
+            try:
+                await _advance(to)
+                return None
+            except StatePersistenceError:
+                failed.append("task aborted: authoritative state not persisted")
+                return TaskReport(
+                    task_id=task_id,
+                    goal=goal,
+                    status=TaskStatus.FAILED,
+                    requested=goal,
+                    completed=list(completed),
+                    verification=list(verification_notes),
+                    failed=list(dict.fromkeys(failed)),
+                    duration_seconds=round(time.monotonic() - started, 2),
+                    model_latency_ms=round(model_latency.ms, 1),
+                )
+
+        async def _ensure_failed() -> None:
+            if state.status in TERMINAL_STATUSES or state.status is TaskStatus.BLOCKED:
+                return
+            if (
+                TaskStatus.FAILED not in TASK_TRANSITIONS[state.status]
+                and TaskStatus.RUNNING in TASK_TRANSITIONS[state.status]
+            ):
+                await _advance(TaskStatus.RUNNING, soft=True)
+            await _advance(TaskStatus.FAILED, soft=True)
+
+        async def _ensure_cancelled() -> None:
+            if state.status in TERMINAL_STATUSES:
+                return
+            if TaskStatus.CANCELLED not in TASK_TRANSITIONS[state.status]:
+                if TaskStatus.RUNNING in TASK_TRANSITIONS[state.status]:
+                    await _advance(TaskStatus.RUNNING, soft=True)
+                else:
+                    return
+            await _advance(TaskStatus.CANCELLED, soft=True)
         # 1. Model selection + handling as agents (BP Â§97, Â§320, Â§364).
+        abort = await _hard(TaskStatus.PLANNED)
+        if abort is not None:
+            return abort
         if model_id is None:
             decision = await self.selector_agent.select(goal)
             task_family = decision.task_family
@@ -258,19 +352,19 @@ class AgentRuntime:
             selection_reason = {"pinned": True}
         model = await self.handler_agent.ensure_model(model_id)
         model = model_latency.wrap(model)
+        abort = await _hard(TaskStatus.AUTHORIZED)
+        if abort is not None:
+            return abort
         logger.info(
             "task started model=%s task_family=%s selection_reason=%s",
             model_id,
             task_family,
             selection_reason,
         )
+        abort = await _hard(TaskStatus.RUNNING)
+        if abort is not None:
+            return abort
 
-        completed: list[str] = []
-        verification_notes: list[str] = []
-        failed: list[str] = []
-        evidence_bundles: list[tuple[str, Any]] = []
-        status = TaskStatus.RUNNING
-        reply: str | None = None
 
         await self._audit_task(trace, task_id, "TASK_START", model_id)
         # Failure evidence accumulates ACROSS attempts: an attempt-2 wipe of
@@ -281,12 +375,16 @@ class AgentRuntime:
             """One full attempt: proposal loop with a FRESH budget. On attempt 2
             the skills learned from attempt 1 are injected by _propose â€” this is
             the self-improvement loop: fail â†’ learn â†’ retry â†’ succeed."""
-            nonlocal status, reply, model_latency
-            nonlocal completed, failed, verification_notes, evidence_bundles
-            completed, verification_notes = [], []
-            failed, evidence_bundles = [], []
+            nonlocal completed, verification_notes, failed, evidence_bundles, reply
+            blocked = False
+            completed, verification_notes, failed, evidence_bundles = [], [], [], []
             reply = None
-            status = TaskStatus.RUNNING
+            if attempt_no > 1:
+                # Retry semantics (plan STEP 6): FAILED -> RECOVERING ->
+                # RUNNING. Never FAILED -> SUCCESS directly.
+                await _advance(TaskStatus.RECOVERING, soft=True)
+                state.attempts = state.attempts + 1
+                await _advance(TaskStatus.RUNNING, soft=True)
             budget = TaskBudgetTracker(self._budget_cfg)
             attempt_trace = trace.child(step_id=f"attempt-{attempt_no}")
             run_trace = trace
@@ -326,7 +424,7 @@ class AgentRuntime:
                     reply = await self._chat_reply(
                         chat_model, goal, getattr(self, "_conversation_log", None)
                     )
-                    status = TaskStatus.SUCCESS
+                    await _terminal(TaskStatus.SUCCESS)
                     return
                 # 2. Execution loop (BP 185) — with a working memory: the
                 # model's own reasoning is carried across steps. Every model
@@ -334,6 +432,9 @@ class AgentRuntime:
                 # policy or the executor may see it (rebuild plan S3).
                 reasoning_history: list[str] = []
                 for step in range(1, max_steps + 1):
+                    if stop_requested is not None and stop_requested():
+                        await _ensure_cancelled()
+                        return
                     budget.check_step()
                     step_label = f"attempt-{attempt_no}-step-{step}"
                     run_trace = attempt_trace.child(step_id=step_label)
@@ -430,6 +531,7 @@ class AgentRuntime:
                             # ASK cannot flip to ALLOW mid-task — there is no
                             # approver inside this execution. Stop without
                             # burning retries on an unchangeable refusal.
+                            blocked = True
                             budget.spend_all_retries()
                             break
                         budget.check_retry()
@@ -459,26 +561,28 @@ class AgentRuntime:
                         # honor it: the loop ends here (honest, small-model fix).
                         break
 
-                if completed:
-                    # Steps ran; failures make it partial (truthful report, BP Â§180).
-                    status = TaskStatus.PARTIALLY_COMPLETED if failed else TaskStatus.SUCCESS
+                if blocked and not completed:
+                    # Owner-decision waiting: durable BLOCKED, not failure.
+                    await _advance(TaskStatus.BLOCKED, soft=True)
+                elif completed:
+                    await _terminal(
+                        TaskStatus.PARTIALLY_COMPLETED if failed else TaskStatus.SUCCESS
+                    )
                 elif reply is not None:
-                    # Answered conversationally but nothing was materially done.
-                    status = TaskStatus.PARTIALLY_COMPLETED
+                    # Conversational answer only: partial completion.
+                    await _terminal(TaskStatus.PARTIALLY_COMPLETED)
                 else:
-                    # The model claimed finished without executing anything â€”
-                    # never a success (BP Â§366: claims are not evidence).
-                    status = TaskStatus.FAILED
                     failed.append(
                         "model declared the goal finished without executing any steps"
                     )
+                    await _terminal(TaskStatus.FAILED)
                 # (a plain-language explanation is added post-mortem below)
             except (BudgetExceeded, TaskTimeout, NomadicError) as exc:
-                status = TaskStatus.FAILED
                 failed.append(str(exc))
+                await _ensure_failed()
             except Exception as exc:  # noqa: BLE001 â€” surfaced in the truthful report
-                status = TaskStatus.FAILED
                 failed.append(f"unexpected {type(exc).__name__}: {exc}")
+                await _ensure_failed()
 
         # Self-improvement loop (max 2 attempts): attempt 1 runs; if it fails
         # with zero executed work, the failure is distilled into a skill note
@@ -488,7 +592,15 @@ class AgentRuntime:
         for attempt_no in range(1, max_attempts + 1):
             await _run_execution(attempt_no)
             all_failures.extend(failed)
-            if status is not TaskStatus.FAILED:
+            if state.status is TaskStatus.CANCELLED:
+                break
+            if (
+                state.status not in TERMINAL_STATUSES
+                and state.status is not TaskStatus.BLOCKED
+            ):
+                failed.append("attempt ended without a terminal state")
+                await _ensure_failed()
+            if state.status is not TaskStatus.FAILED:
                 break
             if completed:  # real work happened; a retry would duplicate it
                 break
@@ -500,7 +612,7 @@ class AgentRuntime:
                 )
                 try:
                     await self._learn_skill(
-                        model, goal, failed, task_failed=(status is TaskStatus.FAILED)
+                        model, goal, failed, task_failed=(state.status is TaskStatus.FAILED)
                     )
                 except Exception:  # noqa: BLE001 — learning is best effort
                     logger.debug("skill learning failed", exc_info=True)
@@ -519,7 +631,12 @@ class AgentRuntime:
         # Post-mortem: on total failure with zero executed steps, fetch a
         # plain-language explanation for the user. Best effort and truthful â€”
         # the FAILED status is never softened (BP Â§366).
-        if status is TaskStatus.FAILED and not completed and reply is None and all_failures:
+        if (
+            state.status is TaskStatus.FAILED
+            and not completed
+            and reply is None
+            and all_failures
+        ):
             reply = await self._explain_failure(
                 model, goal, failed[0] if failed else all_failures[0]
             )
@@ -528,7 +645,9 @@ class AgentRuntime:
         # task that wrote+ran a script may deserve a permanent generated tool.
         # One bounded model call, best effort, all local (I11) — the script is
         # saved under data/scripts/ where the owner can read or delete it (I4).
-        if status is TaskStatus.SUCCESS and any("filesystem" in c for c in completed):
+        if state.status is TaskStatus.SUCCESS and any(
+            "filesystem" in c for c in completed
+        ):
             try:
                 await self._learn_tool(model, goal, completed)
             except Exception:  # noqa: BLE001 — tool learning is best effort
@@ -546,9 +665,9 @@ class AgentRuntime:
         )
         outcome = (
             Outcome.SUCCESS
-            if status is TaskStatus.SUCCESS
+            if state.status is TaskStatus.SUCCESS
             else Outcome.PARTIAL
-            if status is TaskStatus.PARTIALLY_COMPLETED
+            if state.status is TaskStatus.PARTIALLY_COMPLETED
             else Outcome.FAILURE
         )
         experience = await self._recorder.finish(
@@ -567,7 +686,7 @@ class AgentRuntime:
         report = TaskReport(
             task_id=task_id,
             goal=goal,
-            status=status,
+            status=state.status,
             requested=goal,
             completed=completed,
             verification=verification_notes,
@@ -580,7 +699,7 @@ class AgentRuntime:
         logger.info(
             "task finished task=%s status=%s verified=%s",
             task_id,
-            status.value,
+            state.status.value,
             record.verified,
         )
         return report

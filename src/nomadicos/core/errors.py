@@ -71,6 +71,16 @@ class ValidationError(NomadicError):
     """Input or schema validation failure."""
 
 
+class StatePersistenceError(NomadicError):
+    """A lifecycle state that could NOT be durably recorded aborts the
+    task truthfully (STEP 4): unrecorded states are never claimed or
+    continued through."""
+
+class StateConflict(NomadicError):
+    """Authoritative CAS violation on tasks.status (STEP 4): the row is not in
+    the state we expected, so a race changed it first — never overwrite blindly."""
+
+
 class TaskTimeout(NomadicError):
     """Task budget exhausted (BP §72)."""
 
