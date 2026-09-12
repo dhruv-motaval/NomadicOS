@@ -275,3 +275,49 @@ lifecycle regression suites pass unchanged.
   containment; test only proves textual traversal; live-symlink case MISSING.
 - git.write/process.spawn/desktop.* capabilities intentionally absent
   (runtime cannot enforce yet).
+
+---
+
+# STEP 3.5 — SECURITY CLOSURE 2026-09-12
+
+## 1 DNS -> PRIVATE SSRF: CLOSED
+New src/nomadicos/network/dns.py: is_forbidden_address (loopback/private/
+link-local/reserved/multicast/unspecified + IPv4-mapped + CGNAT 100.64/10
+explicitly — Python 3.12 marks it non-private), validate_targets (ALL records
+must be public, empty or unparseable fails closed), system_resolver (prod).
+
+NetworkGateway: resolver injected; _validated() runs BEFORE cache use and
+BEFORE every transport hop (initial + ALL redirects — a redirect host change
+re-enters _validated: test_redirect_host_change_revalidated proves hop-2
+never reaches transport). All failures audited NETWORK_REQUEST BLOCK with
+reason_code (NETWORK_PRIVATE_ADDRESS/NETWORK_DNS_FAILURE/NETWORK_INVALID_URL).
+core.enable_network wires system_resolver (production always pinned);
+resolver=None exists only so hermetic tests keep working.
+
+Tests tests/unit/network/test_dns_ssrf.py (14: multi-record mixed block,
+ipv4/ipv6/private/ULA/link-local/metadata/::ffff:/0.0.0.0/gaierror/empty/
+garbage/UPPER-case redirect revalidation + transport-untouched asserts).
+Integration-style proof: public_looking_name_resolving_private_blocks_before_transport.
+No live DNS used anywhere.
+
+## 2 SYMLINK/JUNCTION CONFINEMENT: VERIFIED REAL (fixture created)
+tests/unit/tools/test_filesystem_links.py — on this machine a REAL Windows
+junction (cmd /c mklink /J, fallback posix symlink) pointed OUTSIDE the
+workspace; then: read/write/delete via validate_arguments AND via
+execute() both raised ValidationError; outside target file unchanged and no
+planted files existed; in-workspace ops kept working (positive control).
+Tests show '.' runs — NOT skipped -> mechanism really existed on disk.
+
+## 3 RESIDUAL KNOWN LIMITS (documented, not silent)
+- DNS TOCTOU/rebinding gap (resolution validated, but httpx re-resolves at
+  connect) — mitigation would need pinned-IP dial + SNI override → later step.
+- resolver=None (test mode only) relies on gate string checks.
+- link mechanisms unsupported -> tests SKIP with explicit UNVERIFIED message.
+
+## 4 FULL REGRESSION
+uv run pytest tests -> 393 passed, 4 skipped, 0 failed
+mypy src/nomadicos -> Success, 103 files; ruff check src tests -> All checks passed
+STEP-2 IR suites + STEP-4 lifecycle/persistence suites green unchanged.
+Files: +network/dns.py, network/gateway.py(+47), core/runtime.py(+6 wiring),
++tests/unit/network/test_dns_ssrf.py, +tests/unit/tools/test_filesystem_links.py
+(qualification reports untouched).

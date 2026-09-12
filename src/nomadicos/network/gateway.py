@@ -8,6 +8,7 @@ the gateway labels every document so downstream reasoning cannot treat it as
 instructions (BP §126, §283).
 """
 
+import asyncio
 import hashlib
 import re
 import time
@@ -26,6 +27,7 @@ from nomadicos.core.errors import NetworkDenied
 from nomadicos.core.logging import get_logger
 from nomadicos.network.base import NetworkRequest, NetworkTransport
 from nomadicos.network.cache import WebCache
+from nomadicos.network.dns import Resolver, validate_targets
 from nomadicos.security.gate import SecurityGate
 from nomadicos.security.permissions import SubjectIdentity
 
@@ -95,12 +97,52 @@ class NetworkGateway:
         cache: WebCache | None = None,
         *,
         max_redirects: int = 3,
+        resolver: Resolver | None = None,
     ) -> None:
         self._gate = security_gate
         self._audit = audit_sink
         self._transport = transport
         self._cache = cache or WebCache()
         self._max_redirects = max_redirects
+        # resolver=None: DNS pinning disabled (hermetic tests that fake the
+        # transport). Production MUST pass network.dns.system_resolver.
+        self._resolver = resolver
+
+    async def _validated(self, url: str, identity: SubjectIdentity) -> None:
+        """DNS pinning (STEP 3.5): every hostname this gateway contacts must
+        resolve to ONLY public addresses — a public-looking name resolving to
+        127.0.0.1/169.254.169.254/fd00:: etc. is blocked before any request.
+        Any resolver error fails closed."""
+        if self._resolver is None:
+            return
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        if not host:
+            raise NetworkDenied(
+                f"invalid URL host: {url!r}", context={"reason_code": "NETWORK_INVALID_URL"}
+            )
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        try:
+            addrs = await asyncio.to_thread(self._resolver, host, port)
+        except Exception as exc:  # DNS failure must fail closed
+            await self._audit_event(
+                AuditEventCategory.NETWORK_REQUEST, identity, url, "BLOCK",
+                f"NETWORK_DNS_FAILURE: {exc}", severity=AuditSeverity.CRITICAL,
+                fields={"reason_code": "NETWORK_DNS_FAILURE"},
+            )
+            raise NetworkDenied(
+                f"NETWORK_DNS_FAILURE: DNS resolution failed for {host!r}",
+                context={"reason_code": "NETWORK_DNS_FAILURE"},
+            ) from exc
+        try:
+            validate_targets(host, addrs)
+        except ValueError as exc:
+            code = str(exc).split(":", 1)[0]
+            await self._audit_event(
+                AuditEventCategory.NETWORK_REQUEST, identity, url, "BLOCK", str(exc),
+                severity=AuditSeverity.CRITICAL, fields={"reason_code": code},
+            )
+            raise NetworkDenied(str(exc), context={"reason_code": code}) from exc
 
     async def fetch_public(
         self,
@@ -124,6 +166,10 @@ class NetworkGateway:
                 f"network destination refused: {decision.reason}",
                 context={"destination": url},
             )
+
+        # STEP 3.5: string-level policy AND DNS-resolved reality must both
+        # say public before anything (including cached bodies) is served.
+        await self._validated(url, identity)
 
         # Cache hit → skip transport (BP §178).
         cached = self._cache.get(url)
@@ -152,6 +198,7 @@ class NetworkGateway:
         """GET with redirect re-checks (BP §196). Returns (body, final_url)."""
         current_url = url
         for _ in range(self._max_redirects + 1):
+            await self._validated(current_url, identity)
             request = NetworkRequest(method="GET", url=current_url)
             response = await self._transport.request(request)
             if response.status in (301, 302, 303, 307, 308):

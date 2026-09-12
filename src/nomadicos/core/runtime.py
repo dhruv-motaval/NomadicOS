@@ -315,9 +315,13 @@ class Runtime:
         if self._network_gateway is not None:
             return
         from nomadicos.network.base import HttpxTransport
+        from nomadicos.network.dns import system_resolver
 
+        # STEP 3.5: production network access is ALWAYS DNS-pinned — a
+        # hostname must resolve to public addresses before the transport
+        # touches it (resolver=None hermetic mode exists only for tests).
         self._network_gateway = NetworkGateway(
-            self.gate, self.audit, HttpxTransport()
+            self.gate, self.audit, HttpxTransport(), resolver=system_resolver
         )
         self.gateway.register(__import__(
             "nomadicos.network.web_tool", fromlist=["WebFetchTool"]
