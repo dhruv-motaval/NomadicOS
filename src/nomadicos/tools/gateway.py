@@ -23,6 +23,7 @@ from nomadicos.core.errors import (
 )
 from nomadicos.core.events import EventBus, TraceContext
 from nomadicos.core.logging import get_logger
+from nomadicos.core.task_ir import ActionKind, TaskAction
 from nomadicos.security.budgets import TaskBudgetTracker
 from nomadicos.security.capability_registry import (
     Capability,
@@ -31,7 +32,7 @@ from nomadicos.security.capability_registry import (
     resolve,
     risk_from_spec,
 )
-from nomadicos.security.gate import Decision, SecurityGate
+from nomadicos.security.gate import Decision, SecurityDecision, SecurityGate
 from nomadicos.security.permissions import SubjectIdentity
 from nomadicos.tools.base import Tool, ToolContext, ToolResult
 
@@ -47,10 +48,16 @@ class ToolGateway:
         audit_sink: AuditSink,
         bus: EventBus | None = None,
     ) -> None:
+        from nomadicos.agent.executor import GrantRegistry, TaskExecutor
+
         self._gate = security_gate
         self._audit = audit_sink
         self._bus = bus
         self._tools: dict[str, Tool] = {}
+        # STEP 5 split: the DISPATCH half lives in TaskExecutor, fed only by
+        # AuthorizedAction tokens this gateway issues after policy ALLOW.
+        self._grants = GrantRegistry()
+        self.executor = TaskExecutor(self._grants, audit_sink)
 
     # ---------------------------------------------------------------- registry
 
@@ -138,26 +145,22 @@ class ToolGateway:
 
     # --------------------------------------------------------------- execution
 
-    async def execute(
+    async def authorize_action(
         self,
         tool_name: str,
         arguments: dict[str, Any],
         identity: SubjectIdentity,
         budget: TaskBudgetTracker | None = None,
         *,
-        dry_run: bool = False,
-    ) -> ToolResult:
-        """Full mediated pipeline. Refusals return failure results and are
-        audited; only genuine tool faults raise (BP §241)."""
+        task_ref: TaskAction | None = None,
+    ) -> tuple[SecurityDecision, "Any", "ToolResult | None"]:
+        """POLICY side of the STEP 5 split: the ONLY producer of executable
+        AuthorizedAction tokens. Returns (decision, token-or-None, refusal-or-None);
+        raises exactly as the legacy pipeline does (schema/budget fail fast)."""
+        from nomadicos.agent.executor import AuthorizedAction
+
         started = time.monotonic()
         tool = self.get(tool_name)  # unknown tool ⇒ PermissionDenied (fail closed)
-        context = ToolContext(
-            user_id=identity.user_id,
-            session_id=identity.session_id,
-            task_id=identity.task_id,
-            run_id=identity.run_id,
-            step_id=identity.step_id,
-        )
 
         # 1. Schema validation — reject, never guess (BP §142).
         try:
@@ -172,7 +175,7 @@ class ToolGateway:
                 context={"tool": tool_name},
             ) from exc
 
-        # 2. Budget check (BP §72, I10).
+        # 2. Budget check (BP §72, I10) — scheduler-side, stays in the pipeline.
         if budget is not None:
             try:
                 budget.check_tool_call()
@@ -201,24 +204,88 @@ class ToolGateway:
             classification=classification,
         )
         if decision.refused:
-            return ToolResult.failure(
-                f"security gate refused: {decision.decision.value} — {decision.reason}",
-                evidence={"decision": decision.decision.value},
+            return (
+                decision,
+                None,
+                ToolResult.failure(
+                    f"security gate refused: {decision.decision.value} — {decision.reason}",
+                    evidence={"decision": decision.decision.value},
+                ),
             )
         if decision.decision is Decision.ASK:
-            # ASK flow: the caller must obtain confirmation and re-submit with
-            # a grant. Execution does not proceed on an unconfirmed ASK.
-            return ToolResult.failure(
-                "security gate requires user confirmation (ASK)",
-                evidence={"decision": "ASK"},
+            # ASK flow: caller must obtain confirmation and re-submit (BP §36.2).
+            return (
+                decision,
+                None,
+                ToolResult.failure(
+                    "security gate requires user confirmation (ASK)",
+                    evidence={"decision": "ASK"},
+                ),
             )
 
-        # 4. Execute (or dry-run first per policy — BP §139).
+        # ALLOW: mint the single-use grant + token (policy ends HERE; the
+        # executor cannot invent either of these).
+        stamp = decision.audit_id or f"anon-{tool_name}-{time.monotonic()}"
+        self._grants.issue(tool_name, stamp)
+        task = task_ref or TaskAction(
+            kind=ActionKind.TOOL_CALL,
+            tool=tool_name,
+            arguments=arguments,
+            risk=capability.risk,
+            capabilities=(capability.id,),
+            task_id=identity.task_id or "unbound",
+            step_id=identity.step_id or "unbound",
+            attempt=1,
+        )
+        token = AuthorizedAction(
+            action=task,
+            tool_name=tool_name,
+            capability=capability.id,
+            resource=resource,
+            identity=identity,
+            grant_signature=stamp,
+            policy_version=decision.policy_version,
+            tool=tool,
+        )
+        return decision, token, None
+
+    async def execute(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+        identity: SubjectIdentity,
+        budget: TaskBudgetTracker | None = None,
+        *,
+        dry_run: bool = False,
+    ) -> ToolResult:
+        """Full mediated pipeline — DEPRECATED composition retained for the
+        tool-level API: authorize_action + immediate legacy dispatch.
+        Refusals return failure results; only genuine tool faults raise
+        (BP §241). The agent runtime does NOT use this (see _mediated_execute:
+        it authorizes, then runs TaskExecutor)."""
+        started = time.monotonic()
+        _decision, prepared, refusal = await self.authorize_action(
+            tool_name, arguments, identity, budget
+        )
+        assert prepared is not None or refusal is not None
+        if prepared is None:
+            assert refusal is not None
+            return refusal
+
+        # 4. Legacy inline dispatch (raises like the pre-STEP-5 pipeline).
+        tool = prepared.tool
+        context = ToolContext(
+            user_id=identity.user_id,
+            session_id=identity.session_id,
+            task_id=identity.task_id,
+            run_id=identity.run_id,
+            step_id=identity.step_id,
+        )
         try:
             if dry_run:
-                result = await tool.dry_run(arguments, context)
+                result = await tool.dry_run(prepared.action.arguments, context)
             else:
-                result = await tool.execute(arguments, context)
+                result = await tool.execute(prepared.action.arguments, context)
         except Exception as exc:
             await self._audit_result(
                 tool_name, identity, "FAILED", str(exc), started,

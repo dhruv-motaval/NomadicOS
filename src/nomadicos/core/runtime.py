@@ -427,7 +427,9 @@ class Runtime:
         """Sync wrapper for CLI callers."""
         return asyncio.run(self.run_goal(goal, user_id=user_id))
 
-    async def run_goal(self, goal: str, *, user_id: str = "local-owner") -> TaskReport:
+    async def run_goal(
+        self, goal: str, *, user_id: str = "local-owner", model_id: str | None = None
+    ) -> TaskReport:
         """BP §78: user task → memory context → model selection → tools →
         verify → experience → report."""
         from nomadicos.agent.runtime import TaskReport
@@ -536,11 +538,13 @@ class Runtime:
                 reply=result.synthesis,
             )
 
+        exec_kwargs: dict = {"model_id": model_id} if model_id else {}
         report = await runtime.execute_task(
             goal,
             identity,
             state_sink=self._state_sink(task_id),
             stop_requested=lambda: self._emergency_stopped,
+            **exec_kwargs,
         )
 
         # Session continuity (BP §376): remember this exchange so follow-ups

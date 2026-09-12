@@ -120,6 +120,12 @@ class TerminalTool(Tool):
         }
 
         started = time.monotonic()
+        process: asyncio.subprocess.Process | None = None
+        popen_kwargs: dict = {}
+        if os.name == "nt":
+            import subprocess as _sp
+
+            popen_kwargs["creationflags"] = _sp.CREATE_NO_WINDOW  # no GUI dialogs from start
         try:
             process = await asyncio.create_subprocess_exec(
                 *argv,
@@ -127,12 +133,24 @@ class TerminalTool(Tool):
                 env=env,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                **popen_kwargs,
             )
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
         except TimeoutError as exc:
+            # STEP 5 finding (live trace): a timed-out command MUST NOT survive
+            # as an orphan shell — kill the child process before reporting.
+            with_context = {"timeout_seconds": timeout}
+            if process is not None:
+                try:
+                    if process.returncode is None:
+                        process.kill()
+                        with_context["killed"] = True
+                    await asyncio.wait_for(process.wait(), timeout=5.0)
+                except Exception:  # noqa: BLE001 — reaping best effort
+                    with_context["killed"] = False
             raise ValidationError(
                 f"command timed out after {timeout}s",
-                context={"timeout_seconds": timeout},
+                context=with_context,
             ) from exc
         except FileNotFoundError as exc:
             raise ValidationError(

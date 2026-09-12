@@ -18,6 +18,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from nomadicos.agent.executor import ExecutionResult
 from nomadicos.agent.selector import ModelSelector
 from nomadicos.agent.skills import SkillStore
 from nomadicos.audit.base import (
@@ -292,6 +293,19 @@ class AgentRuntime:
                         f" (task {task_id})"
                     ) from exc
             state.transition(to)
+            # lifecycle-owned audit: explicit state transitions are first-class
+            # events (plan STEP 5 §8 TASK_STATE_TRANSITION)
+            await self._audit.append(
+                AuditEvent(
+                    category=AuditEventCategory.TASK_EVENT,
+                    user_id=trace.user_id,
+                    session_id=trace.session_id,
+                    task_id=task_id,
+                    run_id=trace.run_id,
+                    decision=f"STATE_TRANSITION:{current.value}>{to.value}",
+                    subject=task_id,
+                )
+            )
             return True
 
         async def _terminal(to: TaskStatus) -> None:
@@ -555,6 +569,28 @@ class AgentRuntime:
                                 [(c.name, c.passed) for c in verdict.checks],
                             )
                             verification_notes.append(verdict.summary)
+                            # VERIFICATION_RESULT event (plan STEP 5 §8): the
+                            # verdict belongs to evidence assessment, NOT to the
+                            # executor (which only reported success/failure).
+                            await self._audit.append(
+                                AuditEvent(
+                                    category=AuditEventCategory.TASK_EVENT,
+                                    user_id=run_trace.user_id,
+                                    session_id=run_trace.session_id,
+                                    task_id=task_id,
+                                    run_id=run_trace.run_id,
+                                    step_id=run_trace.step_id,
+                                    subject=model_id,
+                                    decision="VERIFICATION_RESULT",
+                                    reason=verdict.summary[:1024],
+                                    fields={
+                                        "checks_passed": sum(
+                                            1 for c in verdict.checks if c.passed
+                                        ),
+                                        "checks_total": len(verdict.checks),
+                                    },
+                                )
+                            )
                         except VerificationFailed as exc:
                             verification_notes.append(f"no verifier: {exc}")
 
@@ -1058,30 +1094,52 @@ class AgentRuntime:
         action: object,
         identity: SubjectIdentity,
         budget: TaskBudgetTracker,
-    ) -> ToolResult:
-        """Execute ONLY a canonical TaskAction. Raw model dicts/strings can
-        never arrive here — trust boundary (rebuild plan S3/S6)."""
+    ) -> ExecutionResult:
+        """STEP 5 boundary: policy (gateway.authorize_action) decides; the
+        TaskExecutor dispatches; THIS method only adapts outcomes into the
+        structured ExecutionResult the loop consumes. It performs no policy,
+        no parsing of model data, and no lifecycle mutation itself."""
         if not isinstance(action, TaskAction):
             raise ValidationError(
                 f"executor requires canonical TaskAction, got {type(action).__name__}"
             )
         tool_name = action.tool or ""
-        try:
-            return await self._gateway.execute(
-                tool_name, action.arguments, identity, budget
-            )
-        except ToolExecutionError as exc:
-            return ToolResult.failure(str(exc))
-        except ValidationError as exc:
-            # Blocked/malformed commands (BP §194) fail the STEP, never the task.
-            return ToolResult.failure(f"invalid command: {exc}")
-        except (PermissionDenied, SecurityPolicyViolation) as exc:
-            return ToolResult.failure(
-                f"security refusal: {exc}", evidence={"decision": "REFUSED"}
+        capability = action.capabilities[0] if action.capabilities else "none"
+
+        def _no(capability_id: str, error: str, evidence: dict[str, Any]) -> ExecutionResult:
+            return ExecutionResult(
+                success=False,
+                action=tool_name,
+                capability=capability_id,
+                task_id=action.task_id,
+                step_id=action.step_id,
+                attempt=action.attempt,
+                error=error,
+                evidence=evidence,
             )
 
+        try:
+            _decision, prepared, refusal = await self._gateway.authorize_action(
+                tool_name, action.arguments, identity, budget, task_ref=action
+            )
+        except ValidationError as exc:
+            return _no(capability, f"invalid command: {exc}", {})
+        except (PermissionDenied, SecurityPolicyViolation) as exc:
+            return _no(
+                capability,
+                f"security refusal: {exc}",
+                {"decision": "REFUSED"},
+            )
+        except ToolExecutionError as exc:
+            # schema violation at the gateway (BP §142): failed step, not task
+            return _no(capability, str(exc), {})
+        if prepared is None:
+            assert refusal is not None
+            return _no(capability, refusal.error or "not authorized", dict(refusal.evidence))
+        return await self._gateway.executor.run(prepared)
+
     @staticmethod
-    def _evidence_from(tool_name: str, result: ToolResult) -> Any:
+    def _evidence_from(tool_name: str, result: "ToolResult | ExecutionResult") -> Any:
         from nomadicos.evaluation.base import Evidence
 
         facts = dict(result.evidence)
