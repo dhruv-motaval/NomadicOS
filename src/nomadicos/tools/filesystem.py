@@ -41,11 +41,37 @@ def safe_resolve(path: str, workspace_root: str | None) -> Path:
 
     Relative paths resolve against the task workspace (BP §92); absolute paths
     must stay inside it; traversal segments are rejected outright.
+
+    Deterministic normalization (STEP 3 review): a model may hand back the
+    workspace's own directory name as a prefix (observed: writing
+    'data/task-workspaces/ir-live.txt' produced
+    'data/task-workspaces/data/task-workspaces/ir-live.txt'). Leading
+    segments that echo the root's own tail are stripped — repeated, bounded.
     """
     raw = Path(path)
     if workspace_root:
         root = Path(workspace_root).resolve()
-        resolved = (raw if raw.is_absolute() else root / raw).resolve()
+        candidate = raw if raw.is_absolute() else root / raw
+        # strip echoed workspace tail segments: data/task-workspaces/x -> x
+        try:
+            relative = candidate.relative_to(root)
+        except ValueError:
+            relative = None
+        if relative is not None:
+            parts = list(relative.parts)
+            root_tail = list(root.parts)
+            changed = True
+            while changed and parts:
+                changed = False
+                for take in range(min(len(parts), len(root_tail)), 0, -1):
+                    if parts[:take] == root_tail[-take:] or (
+                        take == 1 and parts[0].lower() == root_tail[-1].lower()
+                    ):
+                        parts = parts[take:]
+                        changed = True
+                        break
+            candidate = root.joinpath(*parts) if parts else root
+        resolved = candidate.resolve()
         if not resolved.is_relative_to(root):
             raise ValidationError(
                 f"path escapes the task workspace: {path}",

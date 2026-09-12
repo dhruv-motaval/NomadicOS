@@ -210,3 +210,66 @@ Live Ollama case F: real gemma/qwen run wrote the file, status SUCCESS verified=
   STEP_DONE events (tasks table remains the task authority); api GoalRegistry
   entry.status + orchestrator final_status strings are DERIVED views (justified),
   not stores.
+
+---
+
+# STEP 3 — Deterministic policy / capability enforcement 2026-09-12
+
+## New: security/capability_registry.py
+Formal registry (ids only the runtime can enforce today): filesystem.read/
+write/list/delete, terminal.execute, network.fetch,
+generated_tool.execute. Each cap: id, operation, resource_kind, risk class,
+requires_user_authorization, network/sandbox/audit flags. is_managed() keeps
+unknown FILESYSTEM actions denied; owner-registered tools without explicit
+enumeration get deterministic generic contract (fake.echo.execute style,
+verified via EchoTool). resolve(tool,args) = single capability-resolution
+site; unknown => PermissionDenied(CAPABILITY_NOT_REGISTERED) BEFORE policy.
+
+## Gate now authoritative-deterministic
+- authorize(tool, risk, identity, arguments, classification, capability, resource)
+  -> SecurityDecision(+capability, resource, reason_code, policy_version, audit_id).
+- capability.requires_user_authorization: filesystem.delete AND
+  generated_tool.execute ALWAYS need an explicit owner grant; a granted-once
+  one-shot grant is consumed after ALLOW so repeats re-ask (step-9 rule:
+  generated tools never trusted for having worked before).
+- risk comes from the REGISTRY (filesystem.delete=CRITICAL was previously
+  hidden behind spec-level "medium") — never model-supplied fields.
+- Network: localhost/loopback/private/link-local/metadata/bad-scheme/no-host
+  -> BLOCK reason_code NON_PUBLIC_DESTINATION / INVALID_SCHEME etc. Deterministic
+  (no DNS); public hostnames allowed; .local/.internal blocked.
+- policy_version via PolicyEngine.document_version.
+- Every refusal (also registry-stage denials via gateway.audit_denial)
+  appends TOOL_DECISION audit with reason_code/capability/resource; audit_id
+  equals decision.audit_id (event_id passed through). No arg dumps logged.
+
+## ToolGateway
+- action_descriptor + resolve_capability route through registry; execute
+  pipeline order: registry resolve -> schema -> budget -> policy -> exec ->
+  audit(+resource label). describe_resource: path/command/url/script only
+  (truncated 240 chars I12).
+- filesystem.safe_resolve: deterministic workspace-prefix echo normalization
+  (C:\Windows\System32\... and data/task-workspaces/x stay confined;
+  task-workspaces/file.txt -> file.txt; traversal and external escapes
+  rejected pre-policy).
+
+## Tests: tests/security/test_capability_authority.py (all 12 plan items, 18
+functions incl. parameterized fake-authority fields, escalation by retry /
+stronger model / memory / planner / tool output / generated tools,
+path/network/determinism/audit checks).
+Live trace (temp/live_s3.py): A SUCCESS; B escape refused; C system.root
+registry-denied + audited; D unknown action denied; E allowed/risk fields
+rejected pre-policy; F hostile text = data only; G identical retry outcomes;
+H ASK => executor never reached (runtime status BLOCKED).
+
+## Full run
+uv run pytest tests -> 366 passed, 4 skipped (from 348 pre-step-3, +18).
+mypy src/nomadicos: Success 101+2 files. ruff: clean. STEP-2 IR and STEP-4
+lifecycle regression suites pass unchanged.
+
+## NOT at 100% yet / notes
+- SSRF via DNS-resolving-to-private hostnames: UNKNOWN residual (no resolver
+  check by design; note for later).
+- symlink/junction escape inside workspace: path.resolve() applied BEFORE
+  containment; test only proves textual traversal; live-symlink case MISSING.
+- git.write/process.spawn/desktop.* capabilities intentionally absent
+  (runtime cannot enforce yet).

@@ -11,9 +11,10 @@ Fail closed on unknown state (BP §85). Every decision is audited (BP §36.5).
 """
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any
+from uuid import UUID, uuid4
 
 from nomadicos.audit.base import (
     AuditEvent,
@@ -25,9 +26,42 @@ from nomadicos.constitution.policy_loader import PolicyEngine
 from nomadicos.constitution.policy_schema import RiskLevel
 from nomadicos.core.errors import SecurityPolicyViolation
 from nomadicos.core.logging import get_logger
+from nomadicos.security.capability_registry import Capability
 from nomadicos.security.permissions import PermissionEngine, SubjectIdentity
 
 logger = get_logger("security.gate")
+
+_NON_PUBLIC_HOST_SUFFIXES = (".localhost", ".local", ".internal", ".home", ".lan")
+
+
+def _non_public_reason(destination: str) -> tuple[str, str] | None:
+    """Deterministic SSRF guard: only public http(s) hosts are allowed.
+    (DNS-resolved private addresses remain an accepted residual risk for v0.1.)"""
+    import ipaddress
+    from urllib.parse import urlparse
+
+    parsed = urlparse(destination)
+    if parsed.scheme not in ("http", "https"):
+        return (f"unsupported URL scheme: {parsed.scheme or '(none)'}", "INVALID_SCHEME")
+    host = (parsed.hostname or "").lower().strip("[]")
+    if not host:
+        return ("destination has no hostname", "UNPARSEABLE_DESTINATION")
+    if host == "localhost" or host.endswith(_NON_PUBLIC_HOST_SUFFIXES):
+        return (f"non-public destination blocked: {host}", "NON_PUBLIC_DESTINATION")
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return None  # public hostname literal: allowed pending denied_domains check
+    if (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    ):
+        return (f"non-public destination blocked: {host}", "NON_PUBLIC_DESTINATION")
+    return None
 
 
 class Decision(StrEnum):
@@ -49,6 +83,11 @@ class SecurityDecision:
     policy_rules_matched: int
     requires_user_authorization: bool
     decision_latency_ms: float = field(default=0.0)
+    capability: str | None = None
+    resource: str | None = None
+    reason_code: str = "POLICY_EVALUATED"
+    policy_version: str = "unversioned"
+    audit_id: str = ""
 
     @property
     def allowed(self) -> bool:
@@ -81,11 +120,16 @@ class SecurityGate:
         identity: SubjectIdentity,
         arguments: dict[str, Any] | None = None,
         classification: str = "internal",
+        capability: Capability | None = None,
+        resource: str | None = None,
     ) -> SecurityDecision:
-        """Authorize one mediated action. Never raises for policy outcomes —
-        refusals are returned as decisions and audited (BP §36.2)."""
+        """Authorize one mediated action deterministically: registry capability
+        + owner policy + user grants — never model output (BP §36.1, §257).
+        Never raises for policy outcomes — refusals are decisions, audited
+        (BP §36.2). Given identical inputs, the decision is identical (§4)."""
         started = time.monotonic()
         arguments = arguments or {}
+        version = getattr(self._policy, "document_version", "unversioned")
 
         # 1. Emergency stop latch (BP §122, ADR-0016) — blocks everything.
         if getattr(self, "_emergency_stopped", False):
@@ -96,34 +140,87 @@ class SecurityGate:
                 0,
                 False,
                 (time.monotonic() - started) * 1000,
+                capability=capability.id if capability else None,
+                resource=resource,
+                reason_code="EMERGENCY_STOP",
+                policy_version=version,
             )
+            decision = self._stamp(decision)
             await self._audit_decision(tool, identity, decision, arguments)
             return decision
 
-        # 2. Policy lookup (fail closed when no rules match — BP §85).
-        has_authorization = self._permissions.has_authorization(tool)
-        decision_value = self._policy.decision_for(tool, risk, has_authorization)
-        matched = len(self._policy.rules_for(tool))
+        # 2. Registered capabilities demand explicit user authorization
+        #    regardless of permissive default rules (fail closed, BP §85/§90).
+        #    Policy rules and grants key on the ACTUAL tool name (so owners
+        #    can write a rule for "script.<name>" specifically) — the
+        #    capability supplies risk + posture, never a rule bypass.
+        policy_tool = tool
+        if capability is not None and not capability.tool.endswith("."):
+            policy_tool = capability.tool or tool
+        has_authorization = self._permissions.has_authorization(policy_tool)
+        if capability is not None and capability.requires_user_authorization:
+            if not has_authorization:
+                decision = SecurityDecision(
+                    Decision.DENY,
+                    f"capability {capability.id} requires explicit user authorization",
+                    capability.risk,
+                    0,
+                    True,
+                    (time.monotonic() - started) * 1000,
+                    capability=capability.id,
+                    resource=resource,
+                    reason_code="CAPABILITY_REQUIRES_USER_AUTHORIZATION",
+                    policy_version=version,
+                )
+                decision = self._stamp(decision)
+                await self._audit_decision(tool, identity, decision, arguments)
+                self._permissions.record_denial(tool, decision.reason)
+                return decision
 
-        # 3. Sensitive data requires stricter handling (BP §264-266: uncertain ⇒ stricter).
+        # 3. Policy lookup (fail closed when no rules match — BP §85).
+        effective_risk = capability.risk if capability else risk
+        decision_value = self._policy.decision_for(
+            policy_tool, effective_risk, has_authorization
+        )
+        matched = len(self._policy.rules_for(policy_tool))
+
+        # 4. Sensitive data requires stricter handling (BP §264-266: uncertain ⇒ stricter).
+        reason_code = "POLICY_EVALUATED"
         if classification == "sensitive" and decision_value == "allow":
             decision_value = "ask"
+            reason_code = "CLASSIFICATION_ESCALATED"
+
+        if matched == 0:
+            reason_code = "NO_MATCHING_RULE"
+        elif decision_value == "deny":
+            reason_code = "POLICY_DENY"
+        elif decision_value == "ask":
+            reason_code = reason_code if reason_code != "POLICY_EVALUATED" else "POLICY_ASK"
+        elif decision_value == "allow":
+            reason_code = "POLICY_ALLOW"
 
         decision = SecurityDecision(
             Decision(decision_value.upper()),
             reason=self._reason_for(decision_value, matched, has_authorization),
-            risk=risk,
+            risk=effective_risk,
             policy_rules_matched=matched,
             requires_user_authorization=not has_authorization,
             decision_latency_ms=(time.monotonic() - started) * 1000,
+            capability=capability.id if capability else None,
+            resource=resource,
+            reason_code=reason_code,
+            policy_version=version,
         )
 
+        decision = self._stamp(decision)
         await self._audit_decision(tool, identity, decision, arguments)
         if decision.refused:
             self._permissions.record_denial(tool, decision.reason)
         # consume one-shot grants on successful use
         if decision.allowed:
-            self._permissions.consume(tool)
+            self._permissions.consume(policy_tool)
+            if capability and capability.tool != policy_tool:
+                self._permissions.consume(tool)
         return decision
 
     async def authorize_network(
@@ -133,45 +230,54 @@ class SecurityGate:
         identity: SubjectIdentity,
         method: str = "GET",
     ) -> SecurityDecision:
-        """Network destination check (BP §99, §195-196)."""
+        """Network destination check (BP §99, §195-196, §200): public HTTPS
+        information only — no private/loopback/link-local targets (SSRF guard,
+        deterministic and policy-level: the model can never raise the bar)."""
         network_policy = self._policy.external_network()
         started = time.monotonic()
+        version = getattr(self._policy, "document_version", "unversioned")
+
+        def _block(reason: str, code: str) -> SecurityDecision:
+            decision = SecurityDecision(
+                Decision.BLOCK,
+                reason,
+                RiskLevel.HIGH,
+                0,
+                False,
+                (time.monotonic() - started) * 1000,
+                capability="network.fetch",
+                resource=None,
+                reason_code=code,
+                policy_version=version,
+            )
+            return decision
+
         if network_policy is None:
-            decision = SecurityDecision(
-                Decision.BLOCK,
-                "no network policy loaded (fail closed)",
-                RiskLevel.HIGH,
-                0,
-                False,
-                (time.monotonic() - started) * 1000,
-            )
+            decision = _block("no network policy loaded (fail closed)", "NO_NETWORK_POLICY")
         elif not network_policy.allow_public_get:
-            decision = SecurityDecision(
-                Decision.BLOCK,
-                "public GET disabled by policy",
-                RiskLevel.HIGH,
-                0,
-                False,
-                (time.monotonic() - started) * 1000,
-            )
-        elif self._destination_denied(destination, network_policy.denied_domains):
-            decision = SecurityDecision(
-                Decision.BLOCK,
-                f"destination is denied: {destination}",
-                RiskLevel.HIGH,
-                0,
-                False,
-                (time.monotonic() - started) * 1000,
-            )
+            decision = _block("public GET disabled by policy", "POLICY_DENY")
         else:
-            decision = SecurityDecision(
-                Decision.ALLOW,
-                "public GET allowed",
-                RiskLevel.HIGH,
-                0,
-                False,
-                (time.monotonic() - started) * 1000,
-            )
+            reject = _non_public_reason(destination)
+            if reject:
+                decision = _block(reject[0], reject[1])
+            elif self._destination_denied(destination, network_policy.denied_domains):
+                decision = _block(
+                    f"destination is denied: {destination}", "DENIED_DOMAIN"
+                )
+            else:
+                decision = SecurityDecision(
+                    Decision.ALLOW,
+                    "public GET allowed",
+                    RiskLevel.MEDIUM,
+                    0,
+                    False,
+                    (time.monotonic() - started) * 1000,
+                    capability="network.fetch",
+                    resource=destination[:300],
+                    reason_code="POLICY_ALLOW",
+                    policy_version=version,
+                )
+        decision = self._stamp(decision)
         await self._audit_decision(
             f"network.{method.lower()}", identity, decision, {"destination": destination}
         )
@@ -190,6 +296,10 @@ class SecurityGate:
             if host == denied or host.endswith("." + denied):
                 return True
         return False
+
+    @staticmethod
+    def _stamp(decision: SecurityDecision) -> SecurityDecision:
+        return replace(decision, audit_id=str(uuid4()))
 
     def raise_if_refused(self, decision: SecurityDecision) -> None:
         """Bridge to exception style for callers that prefer fail-fast."""
@@ -234,6 +344,7 @@ class SecurityGate:
         )
         await self._audit.append(
             AuditEvent(
+                event_id=UUID(decision.audit_id) if decision.audit_id else uuid4(),
                 category=AuditEventCategory.TOOL_DECISION,
                 severity=severity,
                 user_id=identity.user_id,
@@ -244,7 +355,13 @@ class SecurityGate:
                 subject=tool,
                 decision=decision.decision.value,
                 reason=decision.reason,
-                fields={"argument_count": len(arguments)},  # never raw arguments (I12)
+                fields={
+                    "argument_count": len(arguments),  # never raw arguments (I12)
+                    "capability": decision.capability,
+                    "resource": decision.resource,
+                    "reason_code": decision.reason_code,
+                    "policy_version": decision.policy_version,
+                },
             )
         )
 

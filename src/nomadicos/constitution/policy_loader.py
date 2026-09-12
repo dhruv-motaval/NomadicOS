@@ -34,6 +34,11 @@ class PolicyEngine:
     def versioned(self) -> bool:
         return bool(self._documents)
 
+    @property
+    def document_version(self) -> str:
+        """Highest loaded policy version (audit attribution, BP §258)."""
+        return max((d.version for d in self._documents), default="unversioned")
+
     def load_file(self, path: str | Path) -> PolicyDocument:
         path = Path(path)
         try:

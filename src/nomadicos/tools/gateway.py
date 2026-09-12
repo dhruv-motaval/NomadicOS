@@ -24,6 +24,13 @@ from nomadicos.core.errors import (
 from nomadicos.core.events import EventBus, TraceContext
 from nomadicos.core.logging import get_logger
 from nomadicos.security.budgets import TaskBudgetTracker
+from nomadicos.security.capability_registry import (
+    Capability,
+    default_capability,
+    is_managed,
+    resolve,
+    risk_from_spec,
+)
 from nomadicos.security.gate import Decision, SecurityGate
 from nomadicos.security.permissions import SubjectIdentity
 from nomadicos.tools.base import Tool, ToolContext, ToolResult
@@ -70,16 +77,64 @@ class ToolGateway:
         self, tool_name: str, arguments: dict[str, Any]
     ) -> tuple[RiskLevel, tuple[str, ...]]:
         """SYSTEM-derived (risk, capabilities) for IR binding — the ONLY
-        source these fields may come from. Unknown action ⇒ PermissionDenied
-        (fail closed, BP §85) BEFORE the claim can reach policy/executor."""
-        tool = self.get(tool_name)  # unknown ⇒ PermissionDenied
-        action_arg = arguments.get("action") if isinstance(arguments, dict) else None
-        capability = (
-            f"{tool_name}.{action_arg}"
-            if isinstance(action_arg, str) and action_arg
-            else f"{tool_name}.invoke"
+        source these fields may come from: the registered tool + FORMAL
+        CAPABILITY REGISTRY. Unknown tool or unregistered action ⇒
+        PermissionDenied (fail closed, BP §85) BEFORE policy/executor sees it."""
+        capability = self.resolve_capability(tool_name, arguments)
+        return capability.risk, (capability.id,)
+
+    def resolve_capability(self, tool_name: str, arguments: dict[str, Any]) -> Capability:
+        """Single capability-resolution site (trust boundary)."""
+        tool = self.get(tool_name)  # unknown tool ⇒ PermissionDenied
+        if is_managed(tool_name):
+            # explicit action contract: unknown filesystem action etc. STAYS denied
+            return resolve(tool_name, arguments if isinstance(arguments, dict) else {})
+        try:
+            return resolve(tool_name, arguments if isinstance(arguments, dict) else {})
+        except PermissionDenied:
+            # owner-registered tool without registry enumeration →
+            # deterministic generic contract bound to its declared risk
+            return default_capability(tool_name, risk_from_spec(tool.spec.risk.value))
+
+    async def audit_denial(
+        self, tool_name: str, reason: str, identity: SubjectIdentity,
+        reason_code: str = "CAPABILITY_NOT_REGISTERED",
+    ) -> None:
+        """Every refusal — even one that never reaches the policy engine —
+        leaves an audit trail (rebuild plan §11/§18)."""
+        await self._audit.append(
+            AuditEvent(
+                category=AuditEventCategory.TOOL_DECISION,
+                severity=AuditSeverity.WARNING,
+                user_id=identity.user_id,
+                session_id=identity.session_id,
+                task_id=identity.task_id,
+                run_id=identity.run_id,
+                step_id=identity.step_id,
+                subject=tool_name,
+                decision="DENY",
+                reason=reason[:1024],
+                fields={"reason_code": reason_code, "resource": None,
+                        "capability": None, "policy_version": "pre-policy"},
+            )
         )
-        return self._risk_of(tool), (capability,)
+
+    @staticmethod
+    def describe_resource(
+        tool_name: str, capability: Capability, arguments: dict[str, Any]
+    ) -> str | None:
+        """Small human-auditable resource label (path/command/url/script) —
+        never argument dumps, never secrets (I12)."""
+        if capability.resource_kind == "path":
+            return str(arguments.get("path", ""))[:240] or None
+        if capability.resource_kind == "command":
+            command = str(arguments.get("command", ""))
+            return (command[:120] + (" …" if len(command) > 120 else "")) or None
+        if capability.resource_kind == "url":
+            return str(arguments.get("url", ""))[:240] or None
+        if capability.resource_kind == "script":
+            return tool_name[:240] or None
+        return None
 
     # --------------------------------------------------------------- execution
 
@@ -128,12 +183,22 @@ class ToolGateway:
                 )
                 raise
 
-        # 3. Security decision (BP §36).
+        # 3. Capability resolution (registry-only) + Security decision (BP §36).
+        capability = self.resolve_capability(tool_name, arguments)
+        resource = self.describe_resource(tool_name, capability, arguments)
+        classification = (
+            tool.classification(arguments)
+            if hasattr(tool, "classification")
+            else "internal"
+        )
         decision = await self._gate.authorize(
             tool=tool_name,
-            risk=self._risk_of(tool),
+            risk=capability.risk,
             identity=identity,
             arguments=arguments,
+            capability=capability,
+            resource=resource,
+            classification=classification,
         )
         if decision.refused:
             return ToolResult.failure(

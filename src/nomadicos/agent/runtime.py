@@ -509,6 +509,10 @@ class AgentRuntime:
                         )
                     except (PermissionDenied, ValidationError, ValueError) as exc:
                         failed.append(f"{tool_name or 'invalid claim'}: {exc}")
+                        # registry-stage refusals are audited too (plan §11/18)
+                        await self._gateway.audit_denial(
+                            tool_name or "invalid", str(exc), identity,
+                        )
                         budget.check_retry()
                         continue
 
