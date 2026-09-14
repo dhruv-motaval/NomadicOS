@@ -98,9 +98,7 @@ class WindowsComputerControl(ComputerControl):
         except ValidationError:
             raise
         except Exception as exc:
-            return ActionResult(
-                action=action, success=False, verified=False, error=str(exc)
-            )
+            return ActionResult(action=action, success=False, verified=False, error=str(exc))
         return ActionResult(action=action, success=True, verified=False, evidence=evidence)
 
     @staticmethod

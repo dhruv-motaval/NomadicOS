@@ -58,6 +58,7 @@ def test_dry_run_default_unsupported() -> None:
     result = asyncio.run(tool.dry_run({}, ToolContext(user_id="u")))
     assert result.success is False
 
+
 def test_builtin_start_routes_through_cmd() -> None:
     from nomadicos.tools.terminal import build_command
 

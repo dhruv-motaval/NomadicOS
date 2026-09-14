@@ -3,6 +3,7 @@
 A fake resolver stands in for DNS; the transport handler records whether the
 transport was EVER touched. No live network, no real DNS.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -70,9 +71,7 @@ def _gateway(tmp_path, table, transport=None):
 
 # ---- integration-style requirement: public LOOKING hostname + private addr --
 def test_public_looking_name_resolving_private_blocks_before_transport(tmp_path):
-    gateway, transport, sink = _gateway(
-        tmp_path, {"internal.example.com": ["127.0.0.1"]}
-    )
+    gateway, transport, sink = _gateway(tmp_path, {"internal.example.com": ["127.0.0.1"]})
     with pytest.raises(NetworkDenied) as exc:
         asyncio.run(gateway.fetch_public("https://internal.example.com/x", IDENT))
     assert transport.requests == []
@@ -84,10 +83,18 @@ def test_public_looking_name_resolving_private_blocks_before_transport(tmp_path)
 @pytest.mark.parametrize(
     "addr",
     [
-        "127.0.0.1", "127.5.5.5",
-        "10.1.2.3", "172.16.9.9", "192.168.1.1",
-        "169.254.169.254", "100.64.0.1", "0.0.0.0",
-        "::1", "fd12:3456::789a", "fe80::1", "::",
+        "127.0.0.1",
+        "127.5.5.5",
+        "10.1.2.3",
+        "172.16.9.9",
+        "192.168.1.1",
+        "169.254.169.254",
+        "100.64.0.1",
+        "0.0.0.0",
+        "::1",
+        "fd12:3456::789a",
+        "fe80::1",
+        "::",
         "::ffff:127.0.0.1",
     ],
 )
@@ -99,18 +106,14 @@ def test_blocked_address_families(tmp_path, addr):
 
 
 def test_private_sibling_in_multi_record_blocks(tmp_path):
-    gateway, transport, _ = _gateway(
-        tmp_path, {"mixed.test": [PUBLIC, "10.0.0.8"]}
-    )
+    gateway, transport, _ = _gateway(tmp_path, {"mixed.test": [PUBLIC, "10.0.0.8"]})
     with pytest.raises(NetworkDenied):
         asyncio.run(gateway.fetch_public("https://mixed.test/p", IDENT))
     assert transport.requests == []
 
 
 def test_all_public_multi_record_passes(tmp_path):
-    gateway, transport, _ = _gateway(
-        tmp_path, {"ok.test": [PUBLIC, "2606:2800:220:1::26"]}
-    )
+    gateway, transport, _ = _gateway(tmp_path, {"ok.test": [PUBLIC, "2606:2800:220:1::26"]})
     doc = asyncio.run(gateway.fetch_public("https://ok.test/p", IDENT))
     assert doc.untrusted is True
     assert len(transport.requests) == 1
@@ -145,8 +148,11 @@ def test_redirect_host_change_revalidated(tmp_path):
     def handler(request: NetworkRequest) -> NetworkResponse:
         if request.url == "https://start.test/":
             return NetworkResponse(
-                status=302, headers={"location": "http://pivot.test/"},
-                body=b"", url=request.url, elapsed_ms=1.0,
+                status=302,
+                headers={"location": "http://pivot.test/"},
+                body=b"",
+                url=request.url,
+                elapsed_ms=1.0,
             )
         return NetworkResponse(status=200, body=b"<p>x</p>", url=request.url, elapsed_ms=1.0)
 

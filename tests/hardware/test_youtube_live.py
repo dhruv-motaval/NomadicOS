@@ -41,7 +41,7 @@ def find_latest() -> tuple[str, str, str]:
         response.raise_for_status()
         vid = re.findall(r'"videoId":"([A-Za-z0-9_-]{11})"', response.text)[0]
         index = response.text.find(f'"videoId":"{vid}"')
-        window = response.text[index: index + 4000]
+        window = response.text[index : index + 4000]
         title_match = re.search(r'"title":\{"content":"(.*?)"', window, re.DOTALL)
         title = title_match.group(1) if title_match else "latest upload"
         return handle, vid, title

@@ -21,8 +21,17 @@ SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 SENSITIVE_NAME_MARKERS = (
-    "credential", "secret", "password", "wallet", "private",
-    "apikey", "api_key", "token", ".ssh", "id_rsa", ".kube",
+    "credential",
+    "secret",
+    "password",
+    "wallet",
+    "private",
+    "apikey",
+    "api_key",
+    "token",
+    ".ssh",
+    "id_rsa",
+    ".kube",
 )
 SENSITIVE_EXTENSIONS = {".pem", ".key", ".p12", ".pfx", ".kdbx", ".env"}
 PUBLIC_EXTENSIONS = {".md", ".txt", ".rst"}

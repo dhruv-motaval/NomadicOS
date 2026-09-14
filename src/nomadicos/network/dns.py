@@ -4,6 +4,7 @@ A public-looking hostname that RESOLVES to a non-public address is treated
 like a private destination: blocked before any transport request is made.
 Resolution is injected so tests are hermetic (no live DNS needed).
 """
+
 from __future__ import annotations
 
 import ipaddress
@@ -39,8 +40,12 @@ def is_forbidden_address(raw: str) -> bool:
     if ip.version == 4 and any(ip in net for net in _EXTRA_FORBIDDEN_V4):
         return True
     return bool(
-        ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-        or ip.is_multicast or ip.is_unspecified
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
     )
 
 

@@ -1,4 +1,3 @@
-
 from nomadicos.memory.base import MemoryQuery, MemoryRecord, MemoryScope
 from nomadicos.memory.fake import FakeMemoryStore
 
@@ -36,9 +35,7 @@ async def make_store() -> FakeMemoryStore:
 
 async def test_scoped_search() -> None:
     store = await make_store()
-    results = await store.search(
-        MemoryQuery(text="PostgreSQL", project_id="project-x")
-    )
+    results = await store.search(MemoryQuery(text="PostgreSQL", project_id="project-x"))
     assert len(results) == 1
     assert "PostgreSQL 18" in results[0].content
 
@@ -46,17 +43,13 @@ async def test_scoped_search() -> None:
 async def test_project_isolation() -> None:
     """BP §381: Project B memories are not auto-exposed to Project A."""
     store = await make_store()
-    results = await store.search(
-        MemoryQuery(text="SQLite database", project_id="project-x")
-    )
+    results = await store.search(MemoryQuery(text="SQLite database", project_id="project-x"))
     assert results == []
 
 
 async def test_scope_filter() -> None:
     store = await make_store()
-    results = await store.search(
-        MemoryQuery(text="directory", scope=MemoryScope.SESSION)
-    )
+    results = await store.search(MemoryQuery(text="directory", scope=MemoryScope.SESSION))
     assert len(results) == 1
 
 

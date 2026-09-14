@@ -48,8 +48,7 @@ def test_unknown_fields_fail_closed(tmp_path) -> None:
         engine.load_file(
             write(
                 tmp_path,
-                VALID_POLICY
-                + "\n  privileged_backdoor: true\n",
+                VALID_POLICY + "\n  privileged_backdoor: true\n",
                 "bad.yaml",
             )
         )

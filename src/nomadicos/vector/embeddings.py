@@ -40,9 +40,7 @@ class FakeEmbedder(Embedder):
 
     def __init__(self, dimensions: int = 384, model_id: str = "fake/hash-embed") -> None:
         self._dimensions = dimensions
-        self._info = EmbedderInfo(
-            model_id=model_id, version="1.0.0", dimensions=dimensions
-        )
+        self._info = EmbedderInfo(model_id=model_id, version="1.0.0", dimensions=dimensions)
 
     @property
     def info(self) -> EmbedderInfo:

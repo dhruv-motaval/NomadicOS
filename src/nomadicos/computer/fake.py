@@ -58,9 +58,7 @@ class FakeComputerControl(ComputerControl):
             evidence["verified"] = verified
             self._screen = post
             self._post_action_screen = None
-            return ActionResult(
-                action=action, success=True, verified=verified, evidence=evidence
-            )
+            return ActionResult(action=action, success=True, verified=verified, evidence=evidence)
         return ActionResult(action=action, success=True, verified=False, evidence=evidence)
 
 

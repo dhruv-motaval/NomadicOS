@@ -9,6 +9,7 @@ tool output, or retry state (those are DATA for reasoning, not authority).
 Only capabilities the runtime can ACTUALLY enforce today are listed; e.g.
 there is no separate process-kill enforcement, so it has no entry.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -161,10 +162,7 @@ def risk_from_spec(spec_risk_value: str) -> RiskLevel:
 def is_managed(tool_name: str) -> bool:
     """True when the registry owns the capability contract for this tool
     (explicit actions are enumerated -> unknown actions STAY denied)."""
-    return (
-        tool_name in _MANAGED_TOOLS
-        or any(tool_name.startswith(p) for p in _MANAGED_PREFIXES)
-    )
+    return tool_name in _MANAGED_TOOLS or any(tool_name.startswith(p) for p in _MANAGED_PREFIXES)
 
 
 def default_capability(tool_name: str, spec_risk: RiskLevel) -> Capability:

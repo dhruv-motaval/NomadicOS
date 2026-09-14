@@ -5,6 +5,7 @@ knows what Chrome IS - it lacks the local launch verb (start chrome) and OS
 facts (no bash/which on Windows). The profile is generated locally (registry
 scan + static verb table) and stored under data/ (I11: never leaves the PC).
 """
+
 from __future__ import annotations
 
 import subprocess
@@ -100,9 +101,7 @@ def build_profile(installed_apps: list[str] | None = None) -> str:
         "- Music/videos: launch the browser with a URL as an argument, e.g. "
         "start chrome https://www.youtube.com/results?search_query=<q>"
     )
-    lines.append(
-        "- Files written for tasks go under the task workspace, not /tmp or /home."
-    )
+    lines.append("- Files written for tasks go under the task workspace, not /tmp or /home.")
     lines.append(
         "- NOT AVAILABLE YET (reply honestly that this capability is not built, "
         "do NOT substitute other commands): keyboard/mouse control, pressing key "

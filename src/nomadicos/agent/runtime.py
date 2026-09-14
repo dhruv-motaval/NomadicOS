@@ -140,9 +140,7 @@ class TaskReport(BaseModel):
             "Completed:",
             *completed_lines,
         ]
-        lines.append(
-            f"Time: {self.duration_seconds}s total | model {self.model_latency_ms} ms"
-        )
+        lines.append(f"Time: {self.duration_seconds}s total | model {self.model_latency_ms} ms")
         if self.verification:
             lines.append("Verification: " + "; ".join(self.verification))
         if self.failed:
@@ -242,15 +240,14 @@ class AgentRuntime:
         *,
         model_id: str | None = None,
         max_steps: int = 8,
-        state_sink: (
-            "Callable[[str, TaskStatus, TaskStatus], Awaitable[None]] | None"
-        ) = None,
+        state_sink: ("Callable[[str, TaskStatus, TaskStatus], Awaitable[None]] | None") = None,
         stop_requested: Callable[[], bool] | None = None,
     ) -> TaskReport:
         """Run one task through the canonical loop (BP Â§185, Â§78)."""
         started = time.monotonic()
         budget = TaskBudgetTracker(self._budget_cfg)
         import uuid
+
         task_id = identity.task_id or str(uuid.uuid4())
         trace = TraceContext(
             request_id=identity.run_id or task_id,
@@ -275,22 +272,18 @@ class AgentRuntime:
             if current is to:
                 return True
             if to not in TASK_TRANSITIONS[current]:
-                raise StateTransitionError(
-                    f"illegal transition {current.value} -> {to.value}"
-                )
+                raise StateTransitionError(f"illegal transition {current.value} -> {to.value}")
             if state_sink is not None:
                 try:
                     await state_sink(task_id, current, to)
                 except Exception as exc:  # noqa: BLE001 — durable-first rule
                     failed.append(
-                        f"state persistence failed for {to.value}: "
-                        f"{type(exc).__name__}: {exc}"
+                        f"state persistence failed for {to.value}: {type(exc).__name__}: {exc}"
                     )
                     if soft:
                         return False
                     raise StatePersistenceError(
-                        f"cannot continue without persisting state {to.value}"
-                        f" (task {task_id})"
+                        f"cannot continue without persisting state {to.value} (task {task_id})"
                     ) from exc
             state.transition(to)
             # lifecycle-owned audit: explicit state transitions are first-class
@@ -352,6 +345,7 @@ class AgentRuntime:
                 else:
                     return
             await _advance(TaskStatus.CANCELLED, soft=True)
+
         # 1. Model selection + handling as agents (BP Â§97, Â§320, Â§364).
         abort = await _hard(TaskStatus.PLANNED)
         if abort is not None:
@@ -378,7 +372,6 @@ class AgentRuntime:
         abort = await _hard(TaskStatus.RUNNING)
         if abort is not None:
             return abort
-
 
         await self._audit_task(trace, task_id, "TASK_START", model_id)
         # Failure evidence accumulates ACROSS attempts: an attempt-2 wipe of
@@ -424,9 +417,7 @@ class AgentRuntime:
                             )
                             if decision.model_id != model_id:
                                 chat_model = model_latency.wrap(
-                                    await self.handler_agent.ensure_model(
-                                        decision.model_id
-                                    )
+                                    await self.handler_agent.ensure_model(decision.model_id)
                                 )
                                 logger.info(
                                     "chat escalated to %s for context synthesis",
@@ -455,9 +446,7 @@ class AgentRuntime:
 
                     # 2a. Model proposes; parser validates into the claim IR.
                     budget.check_model_call()
-                    claim = await self._propose(
-                        model, goal, completed, reasoning_history
-                    )
+                    claim = await self._propose(model, goal, completed, reasoning_history)
                     if claim.reasoning:
                         reasoning_history.append(claim.reasoning)
 
@@ -525,7 +514,9 @@ class AgentRuntime:
                         failed.append(f"{tool_name or 'invalid claim'}: {exc}")
                         # registry-stage refusals are audited too (plan §11/18)
                         await self._gateway.audit_denial(
-                            tool_name or "invalid", str(exc), identity,
+                            tool_name or "invalid",
+                            str(exc),
+                            identity,
                         )
                         budget.check_retry()
                         continue
@@ -538,13 +529,9 @@ class AgentRuntime:
                     if completed and signature == completed[-1]:
                         break
 
-                    gate_result = await self._mediated_execute(
-                        action, identity_step, budget
-                    )
+                    gate_result = await self._mediated_execute(action, identity_step, budget)
                     if not gate_result.success:
-                        failed.append(
-                            f"{tool_name}: {gate_result.error or 'unknown gate failure'}"
-                        )
+                        failed.append(f"{tool_name}: {gate_result.error or 'unknown gate failure'}")
                         if "requires user confirmation" in (gate_result.error or ""):
                             # ASK cannot flip to ALLOW mid-task — there is no
                             # approver inside this execution. Stop without
@@ -584,9 +571,7 @@ class AgentRuntime:
                                     decision="VERIFICATION_RESULT",
                                     reason=verdict.summary[:1024],
                                     fields={
-                                        "checks_passed": sum(
-                                            1 for c in verdict.checks if c.passed
-                                        ),
+                                        "checks_passed": sum(1 for c in verdict.checks if c.passed),
                                         "checks_total": len(verdict.checks),
                                     },
                                 )
@@ -612,9 +597,7 @@ class AgentRuntime:
                     # Conversational answer only: partial completion.
                     await _terminal(TaskStatus.PARTIALLY_COMPLETED)
                 else:
-                    failed.append(
-                        "model declared the goal finished without executing any steps"
-                    )
+                    failed.append("model declared the goal finished without executing any steps")
                     await _terminal(TaskStatus.FAILED)
                 # (a plain-language explanation is added post-mortem below)
             except (BudgetExceeded, TaskTimeout, NomadicError) as exc:
@@ -634,10 +617,7 @@ class AgentRuntime:
             all_failures.extend(failed)
             if state.status is TaskStatus.CANCELLED:
                 break
-            if (
-                state.status not in TERMINAL_STATUSES
-                and state.status is not TaskStatus.BLOCKED
-            ):
+            if state.status not in TERMINAL_STATUSES and state.status is not TaskStatus.BLOCKED:
                 failed.append("attempt ended without a terminal state")
                 await _ensure_failed()
             if state.status is not TaskStatus.FAILED:
@@ -671,12 +651,7 @@ class AgentRuntime:
         # Post-mortem: on total failure with zero executed steps, fetch a
         # plain-language explanation for the user. Best effort and truthful â€”
         # the FAILED status is never softened (BP Â§366).
-        if (
-            state.status is TaskStatus.FAILED
-            and not completed
-            and reply is None
-            and all_failures
-        ):
+        if state.status is TaskStatus.FAILED and not completed and reply is None and all_failures:
             reply = await self._explain_failure(
                 model, goal, failed[0] if failed else all_failures[0]
             )
@@ -685,9 +660,7 @@ class AgentRuntime:
         # task that wrote+ran a script may deserve a permanent generated tool.
         # One bounded model call, best effort, all local (I11) — the script is
         # saved under data/scripts/ where the owner can read or delete it (I4).
-        if state.status is TaskStatus.SUCCESS and any(
-            "filesystem" in c for c in completed
-        ):
+        if state.status is TaskStatus.SUCCESS and any("filesystem" in c for c in completed):
             try:
                 await self._learn_tool(model, goal, completed)
             except Exception:  # noqa: BLE001 — tool learning is best effort
@@ -754,14 +727,10 @@ class AgentRuntime:
         tool-argument generation, i.e. the biggest brain available)."""
         text = goal.lower()
         if _ACTION_VERB.search(text) or any(
-            w in text
-            for w in ("code", "script", "function", "program", "debug", "refactor")
+            w in text for w in ("code", "script", "function", "program", "debug", "refactor")
         ):
             return "automation"
-        if any(
-            w in text
-            for w in ("why", "reason", "explain", "compare", "analyze", "plan")
-        ):
+        if any(w in text for w in ("why", "reason", "explain", "compare", "analyze", "plan")):
             return "reasoning"
         return "general"
 
@@ -814,9 +783,7 @@ class AgentRuntime:
             f"Message: {goal}"
         )
         try:
-            result = await model.generate(
-                GenerateRequest(prompt=prompt, max_output_tokens=8)
-            )
+            result = await model.generate(GenerateRequest(prompt=prompt, max_output_tokens=8))
             first = result.text.strip().lower().split()
             return bool(first) and first[0].startswith("chat")
         except Exception:  # noqa: BLE001 — classification failure ⇒ task (fail closed)
@@ -840,19 +807,13 @@ class AgentRuntime:
                 "Recent conversation with the owner (this is your memory - use "
                 "the FACTS in it to answer; if the owner asks where a file is "
                 "and a path appears below, state the exact full path; do not "
-                "invent paths):\n"
-                + _format_conversation(conversation)
-                + "\n"
+                "invent paths):\n" + _format_conversation(conversation) + "\n"
             )
         prompt += f"Message: {goal}"
-        result = await model.generate(
-            GenerateRequest(prompt=prompt, max_output_tokens=256)
-        )
+        result = await model.generate(GenerateRequest(prompt=prompt, max_output_tokens=256))
         return result.text.strip() or "â€¦"
 
-    async def _explain_failure(
-        self, model: LocalModel, goal: str, failure: str
-    ) -> str | None:
+    async def _explain_failure(self, model: LocalModel, goal: str, failure: str) -> str | None:
         """Plain-language explanation when the goal could not be executed.
 
         Best effort: any error here leaves ``reply`` unset (truthful report
@@ -869,9 +830,7 @@ class AgentRuntime:
             f"Goal: {goal}"
         )
         try:
-            result = await model.generate(
-                GenerateRequest(prompt=prompt, max_output_tokens=128)
-            )
+            result = await model.generate(GenerateRequest(prompt=prompt, max_output_tokens=128))
             text = result.text.strip()
             return text or None
         except Exception:  # noqa: BLE001 â€” explanation is best effort
@@ -909,9 +868,7 @@ class AgentRuntime:
             f"Goal: {goal}\n"
             f"Failures: {json.dumps(failed[:3])}"
         )
-        result = await model.generate(
-            GenerateRequest(prompt=prompt, max_output_tokens=256)
-        )
+        result = await model.generate(GenerateRequest(prompt=prompt, max_output_tokens=256))
         text = result.text.strip()
         if not text or "SKIP" in text.upper()[:20]:
             return
@@ -930,9 +887,7 @@ class AgentRuntime:
                 return
         self._skills.save(goal, text)
 
-    async def _learn_tool(
-        self, model: LocalModel, goal: str, completed: list[str]
-    ) -> None:
+    async def _learn_tool(self, model: LocalModel, goal: str, completed: list[str]) -> None:
         """Persist a reusable script born from this task (self-implementation).
 
         One bounded model call: if the completed steps show a script was
@@ -958,9 +913,7 @@ class AgentRuntime:
             f"Goal: {goal}\n"
             f"Completed steps: {json.dumps(completed[-6:])}"
         )
-        result = await model.generate(
-            GenerateRequest(prompt=prompt, max_output_tokens=1600)
-        )
+        result = await model.generate(GenerateRequest(prompt=prompt, max_output_tokens=1600))
         text = result.text.strip()
         if not text or text.upper().startswith("SKIP"):
             return
@@ -1081,11 +1034,7 @@ class AgentRuntime:
                 reasoning = reason_match.group(1).strip()[:400]
 
         claim = ActionClaim.from_model_text(raw)
-        if (
-            reasoning
-            and claim.reasoning is None
-            and claim.kind is not ActionKind.INVALID
-        ):
+        if reasoning and claim.reasoning is None and claim.kind is not ActionKind.INVALID:
             claim = claim.model_copy(update={"reasoning": reasoning[:400]})
         return claim
 
@@ -1106,7 +1055,12 @@ class AgentRuntime:
         tool_name = action.tool or ""
         capability = action.capabilities[0] if action.capabilities else "none"
 
-        def _no(capability_id: str, error: str, evidence: dict[str, Any]) -> ExecutionResult:
+        def _no(
+            capability_id: str,
+            error: str,
+            evidence: dict[str, Any],
+            code: str = "NOT_AUTHORIZED",
+        ) -> ExecutionResult:
             return ExecutionResult(
                 success=False,
                 action=tool_name,
@@ -1115,6 +1069,7 @@ class AgentRuntime:
                 step_id=action.step_id,
                 attempt=action.attempt,
                 error=error,
+                error_code=code,
                 evidence=evidence,
             )
 
@@ -1123,19 +1078,39 @@ class AgentRuntime:
                 tool_name, action.arguments, identity, budget, task_ref=action
             )
         except ValidationError as exc:
-            return _no(capability, f"invalid command: {exc}", {})
+            return _no(
+                capability,
+                f"invalid command: {exc}",
+                {},
+                code=str(getattr(exc, "context", {}).get("code") or "INVALID_ARGUMENTS"),
+            )
         except (PermissionDenied, SecurityPolicyViolation) as exc:
             return _no(
                 capability,
                 f"security refusal: {exc}",
                 {"decision": "REFUSED"},
+                code=str(
+                    getattr(exc, "context", {}).get("code")
+                    or getattr(exc, "context", {}).get("reason_code")
+                    or "PERMISSION_DENIED"
+                ),
             )
         except ToolExecutionError as exc:
             # schema violation at the gateway (BP §142): failed step, not task
-            return _no(capability, str(exc), {})
+            return _no(
+                capability,
+                str(exc),
+                {},
+                code=str(getattr(exc, "context", {}).get("code") or "TOOL_EXECUTION_ERROR"),
+            )
         if prepared is None:
             assert refusal is not None
-            return _no(capability, refusal.error or "not authorized", dict(refusal.evidence))
+            return _no(
+                capability,
+                refusal.error or "not authorized",
+                dict(refusal.evidence),
+                refusal.error_code or "NOT_AUTHORIZED",
+            )
         return await self._gateway.executor.run(prepared)
 
     @staticmethod
@@ -1147,9 +1122,7 @@ class AgentRuntime:
             for key in ("exit_code", "stdout", "path", "exists", "action", "entries", "content"):
                 if key in result.data:
                     facts[key] = result.data[key]
-        return Evidence(
-            kind="filesystem" if tool_name == "filesystem" else "terminal", facts=facts
-        )
+        return Evidence(kind="filesystem" if tool_name == "filesystem" else "terminal", facts=facts)
 
     async def _audit_task(
         self, trace: TraceContext, task_id: str, event: str, model_id: str | None

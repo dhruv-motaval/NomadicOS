@@ -103,7 +103,8 @@ class ObservationParser:
     ) -> ScreenObservation:
         if self._vision_model is not None:
             description = await self._vision_model.describe(
-                b"", question  # engine passes bytes; parser test path passes pre-set desc
+                b"",
+                question,  # engine passes bytes; parser test path passes pre-set desc
             )
             return parse_observation(observation, description=description)
         return parse_observation(observation)

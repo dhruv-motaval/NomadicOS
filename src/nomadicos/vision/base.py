@@ -198,9 +198,7 @@ class VisionEngine:
             self._store.store(frame, reason)
 
         if self._vision_model is not None:
-            observation.description = await self._describe_with_retry(
-                frame, question
-            )
+            observation.description = await self._describe_with_retry(frame, question)
         self.last_unchanged = observation
         return observation
 

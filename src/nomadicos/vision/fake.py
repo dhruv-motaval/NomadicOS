@@ -59,9 +59,13 @@ class FakeGemmaVision:
         if self.fail_next > 0:
             self.fail_next -= 1
             raise RuntimeError("simulated vision failure")
-        return self.responses.pop(0) if self.responses else (
-            "A window 'Untitled' with button 'Save' at (120, 340) and text field "
-            "'Search' at (40, 20)."
+        return (
+            self.responses.pop(0)
+            if self.responses
+            else (
+                "A window 'Untitled' with button 'Save' at (120, 340) and text field "
+                "'Search' at (40, 20)."
+            )
         )
 
     def queue_response(self, text: str) -> None:
@@ -99,9 +103,7 @@ class RetentionStore:
     def evict_expired(self, retention_seconds: float | None = None) -> int:
         import time
 
-        retention = (
-            retention_seconds if retention_seconds is not None else self.retention_seconds
-        )
+        retention = retention_seconds if retention_seconds is not None else self.retention_seconds
         now = time.monotonic()
         keep = [(f, r, t) for f, r, t in self.stored if now - t <= retention]
         removed = len(self.stored) - len(keep)

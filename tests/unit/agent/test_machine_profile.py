@@ -1,4 +1,5 @@
 """Tests for the machine profile (environment facts injected into every task)."""
+
 from __future__ import annotations
 
 import asyncio

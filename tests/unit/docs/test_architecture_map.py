@@ -78,8 +78,13 @@ def test_flow_covers_the_canonical_loop() -> None:
     steps = [step["title"].lower() + " " + step["what"].lower() for step in data["flow"]]
     joined = " ".join(steps)
     stages = (
-        "intake", "model selection", "proposal", "security gate",
-        "execution", "verification", "report",
+        "intake",
+        "model selection",
+        "proposal",
+        "security gate",
+        "execution",
+        "verification",
+        "report",
     )
     for stage in stages:
         assert stage in joined, f"flow missing stage: {stage}"

@@ -4,6 +4,7 @@ Flow since the arrow-menu refactor: run() opens the menu (typed fallback when
 stdin is piped); selecting "1" enters chat mode where lines are goals and
 /close exits the whole app.
 """
+
 from nomadicos.cli_interactive import InteractiveCLI
 
 

@@ -102,9 +102,7 @@ async def test_staleness_detection(engine: MemoryEngine) -> None:
     assert record is not None
     assert MemoryEngine.is_stale(record, max_age_days=30) is False
     # simulate old memory
-    old_record = record.model_copy(
-        update={"created_at": datetime.now(UTC) - timedelta(days=60)}
-    )
+    old_record = record.model_copy(update={"created_at": datetime.now(UTC) - timedelta(days=60)})
     assert MemoryEngine.is_stale(old_record, max_age_days=30) is True
 
 

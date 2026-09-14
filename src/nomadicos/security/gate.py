@@ -179,14 +179,14 @@ class SecurityGate:
 
         # 3. Policy lookup (fail closed when no rules match — BP §85).
         effective_risk = capability.risk if capability else risk
-        decision_value = self._policy.decision_for(
-            policy_tool, effective_risk, has_authorization
-        )
+        decision_value = self._policy.decision_for(policy_tool, effective_risk, has_authorization)
         matched = len(self._policy.rules_for(policy_tool))
 
         # 4. Sensitive data requires stricter handling (BP §264-266: uncertain ⇒ stricter).
+        #    An explicit owner grant IS the confirmation for this action (BP §36.2:
+        #    ASK → confirm → re-submit); one-shot grants are consumed below on ALLOW.
         reason_code = "POLICY_EVALUATED"
-        if classification == "sensitive" and decision_value == "allow":
+        if classification == "sensitive" and decision_value == "allow" and not has_authorization:
             decision_value = "ask"
             reason_code = "CLASSIFICATION_ESCALATED"
 
@@ -261,9 +261,7 @@ class SecurityGate:
             if reject:
                 decision = _block(reject[0], reject[1])
             elif self._destination_denied(destination, network_policy.denied_domains):
-                decision = _block(
-                    f"destination is denied: {destination}", "DENIED_DOMAIN"
-                )
+                decision = _block(f"destination is denied: {destination}", "DENIED_DOMAIN")
             else:
                 decision = SecurityDecision(
                     Decision.ALLOW,

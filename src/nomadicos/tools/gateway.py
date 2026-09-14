@@ -104,7 +104,10 @@ class ToolGateway:
             return default_capability(tool_name, risk_from_spec(tool.spec.risk.value))
 
     async def audit_denial(
-        self, tool_name: str, reason: str, identity: SubjectIdentity,
+        self,
+        tool_name: str,
+        reason: str,
+        identity: SubjectIdentity,
         reason_code: str = "CAPABILITY_NOT_REGISTERED",
     ) -> None:
         """Every refusal — even one that never reaches the policy engine —
@@ -121,8 +124,12 @@ class ToolGateway:
                 subject=tool_name,
                 decision="DENY",
                 reason=reason[:1024],
-                fields={"reason_code": reason_code, "resource": None,
-                        "capability": None, "policy_version": "pre-policy"},
+                fields={
+                    "reason_code": reason_code,
+                    "resource": None,
+                    "capability": None,
+                    "policy_version": "pre-policy",
+                },
             )
         )
 
@@ -167,12 +174,19 @@ class ToolGateway:
             arguments = await tool.validate_arguments(arguments)
         except Exception as exc:
             await self._audit_result(
-                tool_name, identity, "REJECTED", "schema violation", started,
+                tool_name,
+                identity,
+                "REJECTED",
+                "schema violation",
+                started,
                 severity=AuditSeverity.WARNING,
             )
             raise ToolExecutionError(
                 f"invalid arguments for {tool_name}: {exc}",
-                context={"tool": tool_name},
+                context={
+                    "tool": tool_name,
+                    "code": str(getattr(exc, "context", {}).get("code") or "INVALID_TOOL_ARGS"),
+                },
             ) from exc
 
         # 2. Budget check (BP §72, I10) — scheduler-side, stays in the pipeline.
@@ -181,7 +195,11 @@ class ToolGateway:
                 budget.check_tool_call()
             except BudgetExceeded as exc:
                 await self._audit_result(
-                    tool_name, identity, "BLOCKED", str(exc), started,
+                    tool_name,
+                    identity,
+                    "BLOCKED",
+                    str(exc),
+                    started,
                     severity=AuditSeverity.WARNING,
                 )
                 raise
@@ -190,9 +208,7 @@ class ToolGateway:
         capability = self.resolve_capability(tool_name, arguments)
         resource = self.describe_resource(tool_name, capability, arguments)
         classification = (
-            tool.classification(arguments)
-            if hasattr(tool, "classification")
-            else "internal"
+            tool.classification(arguments) if hasattr(tool, "classification") else "internal"
         )
         decision = await self._gate.authorize(
             tool=tool_name,
@@ -210,6 +226,7 @@ class ToolGateway:
                 ToolResult.failure(
                     f"security gate refused: {decision.decision.value} — {decision.reason}",
                     evidence={"decision": decision.decision.value},
+                    error_code=f"POLICY_{decision.decision.value}",
                 ),
             )
         if decision.decision is Decision.ASK:
@@ -220,6 +237,7 @@ class ToolGateway:
                 ToolResult.failure(
                     "security gate requires user confirmation (ASK)",
                     evidence={"decision": "ASK"},
+                    error_code="POLICY_ASK",
                 ),
             )
 
@@ -237,6 +255,12 @@ class ToolGateway:
             step_id=identity.step_id or "unbound",
             attempt=1,
         )
+        # STEP 6A contract: the token must carry the VALIDATED arguments (tools
+        # normalize/confinement-resolve in validate_arguments). Before this, the
+        # task_ref path dispatched raw model arguments and silently dropped the
+        # gateway-validated copy.
+        if task_ref is not None and task_ref.arguments != arguments:
+            task = task_ref.model_copy(update={"arguments": arguments})
         token = AuthorizedAction(
             action=task,
             tool_name=tool_name,
@@ -288,7 +312,11 @@ class ToolGateway:
                 result = await tool.execute(prepared.action.arguments, context)
         except Exception as exc:
             await self._audit_result(
-                tool_name, identity, "FAILED", str(exc), started,
+                tool_name,
+                identity,
+                "FAILED",
+                str(exc),
+                started,
                 severity=AuditSeverity.WARNING,
             )
             raise ToolExecutionError(
@@ -297,13 +325,21 @@ class ToolGateway:
             ) from exc
 
         await self._audit_result(
-            tool_name, identity,
+            tool_name,
+            identity,
             "DRY_RUN" if dry_run else "EXECUTED",
-            None, started,
+            None,
+            started,
             severity=AuditSeverity.INFO,
         )
         await self._emit("TOOL_EXECUTED", identity, tool_name, result.success)
-        return result
+        # identity correlation stamped at the boundary (plan B)
+        return result.model_copy(
+            update={
+                "task_id": identity.task_id,
+                "step_id": identity.step_id,
+            }
+        )
 
     # ------------------------------------------------------------------ audit
 

@@ -19,9 +19,9 @@ def test_fake_model_lifecycle() -> None:
 async def test_fake_model_generate() -> None:
     model = FakeLocalModel(responses=["hello world"])
     await model.load()
-    request = __import__(
-        "nomadicos.models.base", fromlist=["GenerateRequest"]
-    ).GenerateRequest(prompt="say hello", max_output_tokens=32)
+    request = __import__("nomadicos.models.base", fromlist=["GenerateRequest"]).GenerateRequest(
+        prompt="say hello", max_output_tokens=32
+    )
     result = await model.generate(request)
     assert result.text == "hello world"
     assert model.generate_calls == [request]

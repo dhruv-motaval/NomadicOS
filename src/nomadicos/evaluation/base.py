@@ -76,9 +76,7 @@ def hash_changed_check(
         passed = (before is None and bool(after)) or (
             bool(before) and bool(after) and before != after
         )
-        return VerificationCheck(
-            name="hash_changed", passed=passed, detail=f"{before} -> {after}"
-        )
+        return VerificationCheck(name="hash_changed", passed=passed, detail=f"{before} -> {after}")
 
     return _check
 
@@ -87,9 +85,7 @@ def exit_code_check(field_name: str = "exit_code", expected: int = 0) -> CheckFn
     def _check(evidence: Evidence) -> VerificationCheck:
         code = evidence.facts.get(field_name)
         passed = isinstance(code, int) and code == expected
-        return VerificationCheck(
-            name=f"exit_code=={expected}", passed=passed, detail=f"got {code}"
-        )
+        return VerificationCheck(name=f"exit_code=={expected}", passed=passed, detail=f"got {code}")
 
     return _check
 

@@ -91,8 +91,6 @@ async def test_unload_frees_residency() -> None:
 
 def test_load_cost_zero_when_resident() -> None:
     manager = make_manager(max_resident=1)
-    a = FakeLocalModel(
-        "fake/a", resources=ResourceRequirements(estimated_load_seconds=2.5)
-    )
+    a = FakeLocalModel("fake/a", resources=ResourceRequirements(estimated_load_seconds=2.5))
     manager.register(a, status=ModelStatus.ENABLED)
     assert manager.load_cost("fake/a") == 2.5

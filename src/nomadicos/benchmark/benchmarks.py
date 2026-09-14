@@ -41,9 +41,7 @@ class BenchmarkMatrix:
         queries: list[tuple[list[float], list[str]]],  # (vector, relevant_ids)
         top_k: int = 5,
     ) -> BenchmarkResult:
-        store = ExactVectorStore(
-            dimensions=len(corpus[0][1]) if corpus else 1, metric=metric
-        )
+        store = ExactVectorStore(dimensions=len(corpus[0][1]) if corpus else 1, metric=metric)
         for vector_id, vector, metadata in corpus:
             store.upsert(vector_id, vector, metadata)
 

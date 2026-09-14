@@ -79,7 +79,9 @@ class PostgresExperienceStore(ExperienceStore):
             summary=row["summary"],
             failure_class=row["failure_class"],
             quality_score=row["quality_score"],
-            evidence=row["fields"] if "fields" in row else json.loads(
+            evidence=row["fields"]
+            if "fields" in row
+            else json.loads(
                 row["evidence"] if isinstance(row["evidence"], str) else json.dumps(row["evidence"])
             ),
         )

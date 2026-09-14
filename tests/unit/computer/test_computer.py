@@ -1,6 +1,5 @@
 """Phase 6 tests: verify-loop, evidence, fake adapter (BP §50-51, §145, §177)."""
 
-
 from nomadicos.computer.base import (
     ActionKind,
     ComputerAction,
@@ -28,9 +27,7 @@ def make_vision_loop(control: FakeComputerControl, vision: FakeGemmaVision) -> V
         def capture(self):  # type: ignore[override]
             return __import__(
                 "nomadicos.vision.base", fromlist=["CapturedFrame"]
-            ).CapturedFrame.create(
-                control._screen, 800, 600
-            )
+            ).CapturedFrame.create(control._screen, 800, 600)
 
     return VisionEngine(
         SyncProvider(), vision_model=vision, policy=CapturePolicy(min_interval_ms=0)
@@ -174,9 +171,7 @@ async def test_hotkey_combination_sends_modifier_sequence() -> None:
     try:
         control = wa.WindowsComputerControl.__new__(wa.WindowsComputerControl)
         control._delay = 0
-        result = await control.perform(
-            ComputerAction(kind=ActionKind.KEY_PRESS, key="winleft+d")
-        )
+        result = await control.perform(ComputerAction(kind=ActionKind.KEY_PRESS, key="winleft+d"))
     finally:
         wa.pyautogui = real
 

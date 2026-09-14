@@ -44,9 +44,7 @@ class WebFetchTool(Tool):
             raise ValidationError("web.fetch requires an http(s) URL")
         return {"url": url}
 
-    async def execute(
-        self, arguments: dict[str, Any], context: ToolContext
-    ) -> ToolResult:
+    async def execute(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
         identity = self.last_identity or SubjectIdentity(
             user_id=context.user_id,
             session_id=context.session_id,
@@ -57,8 +55,13 @@ class WebFetchTool(Tool):
         try:
             document = await self._gateway.fetch_public(arguments["url"], identity)
         except NetworkDenied as exc:
+            code = str(getattr(exc, "context", {}).get("reason_code") or "")
+            if not code:
+                code = "NETWORK_REDIRECT" if "redirect" in str(exc).lower() else "NETWORK_DENIED"
             return ToolResult.failure(
-                str(exc), evidence={"url": arguments["url"], "denied": True}
+                str(exc),
+                evidence={"url": arguments["url"], "denied": True},
+                error_code=code,
             )
         return ToolResult(
             success=True,

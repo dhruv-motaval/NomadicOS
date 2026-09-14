@@ -73,9 +73,7 @@ class PolicyEngine:
                 context={"directory": directory.name},
             )
         loaded = [
-            self.load_file(path)
-            for path in sorted(directory.glob("*.yaml"))
-            if path.is_file()
+            self.load_file(path) for path in sorted(directory.glob("*.yaml")) if path.is_file()
         ]
         if not loaded:
             raise SecurityPolicyViolation(
@@ -87,9 +85,7 @@ class PolicyEngine:
     def replace_policy(self, document: PolicyDocument) -> None:
         """Owner action (BP §259): replaces an existing document version,
         only after schema + invariant validation already succeeded."""
-        self._documents = [
-            d for d in self._documents if d.version != document.version
-        ]
+        self._documents = [d for d in self._documents if d.version != document.version]
         self._documents.append(document)
         logger.info("policy replaced version=%s", document.version)
 
@@ -99,9 +95,7 @@ class PolicyEngine:
             rules.extend(document.rules_for(tool_name))
         return rules
 
-    def decision_for(
-        self, tool_name: str, risk, has_user_authorization: bool = False
-    ) -> str:
+    def decision_for(self, tool_name: str, risk, has_user_authorization: bool = False) -> str:
         from nomadicos.constitution.policy_schema import resolve_decision
 
         return resolve_decision(self.rules_for(tool_name), risk, has_user_authorization)

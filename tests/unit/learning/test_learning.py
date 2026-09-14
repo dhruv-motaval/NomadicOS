@@ -119,9 +119,7 @@ async def test_full_promotion_lifecycle_with_versioning(engine: LearningEngine) 
 async def test_learning_pause_on_resource_pressure(engine: LearningEngine) -> None:
     """BP §245: foreground work has priority."""
     engine.pause_learning()
-    candidate = await engine.propose(
-        CandidateKind.WORKFLOW_UPDATE, "x", {"a": 1}, source="test"
-    )
+    candidate = await engine.propose(CandidateKind.WORKFLOW_UPDATE, "x", {"a": 1}, source="test")
     with pytest.raises(ImprovementRejected, match="paused"):
         await engine.run_sandboxed(candidate, lambda payload: None)
     engine.resume_learning()

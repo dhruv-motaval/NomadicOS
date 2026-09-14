@@ -100,6 +100,7 @@ async def test_consolidation_creates_higher_level_experience(
     assert remaining[0].summary.startswith("[consolidated ×3]")
     assert len(remaining[0].evidence["consolidated_from"]) == 3
 
+
 async def test_experience_reuse_requires_revalidation(recorder: ExperienceRecorder) -> None:
     """BP §352/§353: retrieved experience is a reference, revalidated before reuse."""
     await recorder.finish(

@@ -6,6 +6,7 @@ confusion, injected JSON) route an imperative to chat and report a phantom
 SUCCESS. The corrected contract: only a positive 'chat' routes to chat;
 everything else fails closed to the enforced task path (BP §6, §85).
 """
+
 import asyncio
 
 from nomadicos.agent.runtime import AgentRuntime

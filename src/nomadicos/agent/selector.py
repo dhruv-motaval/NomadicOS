@@ -104,10 +104,7 @@ class ModelSelector:
         history = self._history_score(model_id, task_family, project_context)
         capability = self._capability_score(model_id, task_family, descriptor)
         # BP §320: capability + history composite; project bonus may apply.
-        score = (
-            self._policy.capability_weight * capability
-            + self._policy.history_weight * history
-        )
+        score = self._policy.capability_weight * capability + self._policy.history_weight * history
         reason: dict[str, Any] = {
             "capability_score": round(capability, 3),
             "history_score": round(history, 3),
@@ -138,9 +135,7 @@ class ModelSelector:
                 return max(global_score, project_score)
         return global_score
 
-    def _capability_score(
-        self, model_id: str, task_family: str, descriptor: Any = None
-    ) -> float:
+    def _capability_score(self, model_id: str, task_family: str, descriptor: Any = None) -> float:
         """BP §320: family fit + model capability. Until Phase 13 benchmarks
         arrive, intelligence is estimated from model size (params ≈ capability)
         plus verified capability flags — NOT a static constant, so bigger
@@ -165,7 +160,7 @@ class ModelSelector:
         size_match = _re.search(r"(\d+(?:\.\d+)?)b\b", model_id.lower())
         params_b = float(size_match.group(1)) if size_match else 7.0
         # Diminishing returns: 4b→~6.6, 8b→~7.2, 14b→~7.9, 30b→~8.5
-        size_score = min(6.0 + (params_b ** 0.5) * 0.55, 9.5)
+        size_score = min(6.0 + (params_b**0.5) * 0.55, 9.5)
 
         if task_family == "general":
             # Speed-first: chat and greetings want the small fast model;

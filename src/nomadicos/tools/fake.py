@@ -43,17 +43,13 @@ class FakeTool(Tool):
         validate_against_schema(arguments, self._spec.arguments_schema)
         return dict(arguments)
 
-    async def execute(
-        self, arguments: dict[str, Any], context: ToolContext
-    ) -> ToolResult:
+    async def execute(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
         self.executed.append(dict(arguments))
         if self._raise is not None:
             raise self._raise
         return self._result
 
-    async def dry_run(
-        self, arguments: dict[str, Any], context: ToolContext
-    ) -> ToolResult:
+    async def dry_run(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
         if not self._spec.supports_dry_run:
             return ToolResult.failure(
                 f"tool {self._spec.name} does not support dry-run",

@@ -11,6 +11,7 @@ tool-call *proposals* may not be stored or replayed (STEP 2 removed that
 dead path: every executable action must flow through the canonical
 task/action IR, never a model-authored dict).
 """
+
 from __future__ import annotations
 
 import re
@@ -45,11 +46,7 @@ class SkillStore:
     def save(self, goal: str, content: str) -> Path:
         """Persist a skill NOTE (facts only). Action replay is deliberately
         unsupported — canonical IR is the only route to execution."""
-        lines = [
-            line.strip()
-            for line in content.strip().splitlines()
-            if line.strip()
-        ][:_MAX_LINES]
+        lines = [line.strip() for line in content.strip().splitlines() if line.strip()][:_MAX_LINES]
         path = self._root / f"{_slug(goal)}.md"
         text = "\n".join(lines)
         path.write_text(text + ("\n" if text else ""), encoding="utf-8")

@@ -101,9 +101,7 @@ class FleetSynchronizer:
             else:
                 self._manager.set_status(model_id, ModelStatus.QUARANTINED)
                 report.failed.append(model_id)
-                logger.warning(
-                    "fleet: model added but unhealthy (quarantined) model=%s", model_id
-                )
+                logger.warning("fleet: model added but unhealthy (quarantined) model=%s", model_id)
             report.added.append(model_id)
 
         # 2. Disappeared models → quarantine (history retained, never deleted).

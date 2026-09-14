@@ -127,9 +127,7 @@ class LearningEngine:
             candidate.state = CandidateState.REJECTED
             candidate.rejection_reason = str(exc)
             await self._store.save(candidate)
-            logger.warning(
-                "improvement rejected id=%s reason=%s", candidate.candidate_id, exc
-            )
+            logger.warning("improvement rejected id=%s reason=%s", candidate.candidate_id, exc)
             return PromotionDecision(
                 candidate_id=candidate.candidate_id, promoted=False, reason=str(exc)
             )
@@ -147,16 +145,12 @@ class LearningEngine:
             version_id=version_id,
         )
 
-    async def reject(
-        self, candidate: ImprovementCandidate, reason: str
-    ) -> PromotionDecision:
+    async def reject(self, candidate: ImprovementCandidate, reason: str) -> PromotionDecision:
         candidate.state = CandidateState.REJECTED
         candidate.rejection_reason = reason
         await self._store.save(candidate)
         logger.warning("improvement rejected id=%s reason=%s", candidate.candidate_id, reason)
-        return PromotionDecision(
-            candidate_id=candidate.candidate_id, promoted=False, reason=reason
-        )
+        return PromotionDecision(candidate_id=candidate.candidate_id, promoted=False, reason=reason)
 
     # ----------------------------------------------------------------- rollback
 

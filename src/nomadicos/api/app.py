@@ -4,6 +4,7 @@ Six endpoints: POST /v1/goals, GET /v1/goals/{id}, GET /v1/events/{id},
 POST /v1/memory/search, GET /v1/status, POST /v1/emergency-stop.
 Goals run as background asyncio tasks; state lives in an in-memory registry.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -130,7 +131,9 @@ def create_app(runtime: Runtime | None = None, *, token: str | None = None) -> F
         items = []
         for r in results:
             items.append(
-                r if isinstance(r, dict) else {
+                r
+                if isinstance(r, dict)
+                else {
                     "content": getattr(r, "content", str(r)),
                     "scope": str(getattr(r, "scope", "")),
                     "score": getattr(r, "score", None),

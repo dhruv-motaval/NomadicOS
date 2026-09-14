@@ -1,4 +1,5 @@
 """Tests for machine-local skill learning (caveman/ponytail notes)."""
+
 from __future__ import annotations
 
 import asyncio

@@ -147,9 +147,7 @@ class Runtime:
             original_execute = runtime.execute_task
             role_name = role.name
 
-            async def execute_with_role_model(
-                goal: str, identity: Any, **kwargs: Any
-            ) -> Any:
+            async def execute_with_role_model(goal: str, identity: Any, **kwargs: Any) -> Any:
                 if kwargs.get("model_id") is None:
                     decision = (
                         await runtime.selector_agent.select(goal)
@@ -197,9 +195,7 @@ class Runtime:
                 self._pg_client, self.REPO_ROOT / "src/nomadicos/postgres/migrations"
             ).run()
         except Exception as exc:  # noqa: BLE001 â€” BP Â§237 degrade, never crash
-            logger.warning(
-                "persistence degraded: PostgreSQL unavailable (%s)", type(exc).__name__
-            )
+            logger.warning("persistence degraded: PostgreSQL unavailable (%s)", type(exc).__name__)
             self._pg_client = None
             return
 
@@ -323,9 +319,11 @@ class Runtime:
         self._network_gateway = NetworkGateway(
             self.gate, self.audit, HttpxTransport(), resolver=system_resolver
         )
-        self.gateway.register(__import__(
-            "nomadicos.network.web_tool", fromlist=["WebFetchTool"]
-        ).WebFetchTool(self._network_gateway))
+        self.gateway.register(
+            __import__("nomadicos.network.web_tool", fromlist=["WebFetchTool"]).WebFetchTool(
+                self._network_gateway
+            )
+        )
         logger.info("network gateway enabled (public GET only)")
 
     # ------------------------------------------------------------------ status
@@ -367,9 +365,7 @@ class Runtime:
 
             from nomadicos.postgres.repositories import TaskRepository
 
-            await TaskRepository(self._pg_client).advance_status(
-                UUID(tid), expected, to
-            )
+            await TaskRepository(self._pg_client).advance_status(UUID(tid), expected, to)
 
         return sink
 
@@ -428,7 +424,13 @@ class Runtime:
         return asyncio.run(self.run_goal(goal, user_id=user_id))
 
     async def run_goal(
-        self, goal: str, *, user_id: str = "local-owner", model_id: str | None = None
+        self,
+        goal: str,
+        *,
+        user_id: str = "local-owner",
+        model_id: str | None = None,
+        max_steps: int = 8,
+        max_duration_seconds: float = 600.0,
     ) -> TaskReport:
         """BP §78: user task → memory context → model selection → tools →
         verify → experience → report."""
@@ -483,9 +485,7 @@ class Runtime:
                 import uuid as uuid_mod
 
                 task_id = str(
-                    await tasks.create(
-                        user_id, goal, session_id=uuid_mod.UUID(session_id)
-                    )
+                    await tasks.create(user_id, goal, session_id=uuid_mod.UUID(session_id))
                 )
             except Exception as exc:  # noqa: BLE001 â€” degrade (BP Â§237)
                 logger.warning("task persistence degraded: %s", type(exc).__name__)
@@ -499,7 +499,10 @@ class Runtime:
             evaluator=self.evaluator,
             memory=memory_engine,
             memory_context=memory_context,
-            budget=TaskBudget(max_steps=8),
+            budget=TaskBudget(
+                max_steps=max_steps,
+                max_duration_seconds=max_duration_seconds,
+            ),
             skills=self._skill_store,
             machine_profile=self._machine_profile,
             workspace_root=self.workspace_root,
@@ -515,9 +518,7 @@ class Runtime:
             from nomadicos.agent.orchestrator import Orchestrator
 
             planner_decision = await runtime.selector_agent.select_for_role(goal, "planner")
-            planner_model = await runtime.handler_agent.ensure_model(
-                planner_decision.model_id
-            )
+            planner_model = await runtime.handler_agent.ensure_model(planner_decision.model_id)
             orchestrator = Orchestrator(
                 planner=planner_model,
                 audit_sink=self.audit,
@@ -544,6 +545,7 @@ class Runtime:
             identity,
             state_sink=self._state_sink(task_id),
             stop_requested=lambda: self._emergency_stopped,
+            max_steps=max_steps,
             **exec_kwargs,
         )
 
@@ -575,7 +577,6 @@ class Runtime:
         )
         return report
 
-
     @staticmethod
     def _load_dotenv() -> None:
         """Minimal .env loader (repo root) â€” sets only unset variables (BP Â§103)."""
@@ -594,5 +595,6 @@ class Runtime:
             if " #" in value:
                 value = value.split(" #", 1)[0].strip()
             os.environ.setdefault(key.strip(), value.strip("'").strip('"'))
+
 
 __all__ = ["Runtime"]

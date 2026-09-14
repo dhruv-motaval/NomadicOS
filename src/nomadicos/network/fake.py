@@ -16,9 +16,7 @@ class FakeNetworkTransport(NetworkTransport):
         for prefix, response in self._responses.items():
             if request.url.startswith(prefix):
                 return response
-        return NetworkResponse(
-            status=404, body=b"not found", url=request.url, elapsed_ms=0.1
-        )
+        return NetworkResponse(status=404, body=b"not found", url=request.url, elapsed_ms=0.1)
 
 
 __all__ = ["FakeNetworkTransport"]

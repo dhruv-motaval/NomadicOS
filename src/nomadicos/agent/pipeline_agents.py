@@ -9,6 +9,7 @@ model manager so the pipeline reads as agents:
 - ModelHandlerAgent: model_id → loaded LocalModel, handling residency
   (ensure_loaded with bounded wait) and unloading on emergencies.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -47,9 +48,7 @@ class SelectorAgent:
         """Cheap keyword routing: automation (action verbs) > coding/reasoning
         words > general chat. The selector scores candidates inside the family."""
         text = goal.lower()
-        if _ACTION_VERB.search(text) or any(
-            w in text for w in _TASK_FAMILY_WORDS["coding"]
-        ):
+        if _ACTION_VERB.search(text) or any(w in text for w in _TASK_FAMILY_WORDS["coding"]):
             return "automation"
         if any(w in text for w in _TASK_FAMILY_WORDS["reasoning"]):
             return "reasoning"
@@ -66,9 +65,7 @@ class SelectorAgent:
                 reason={"pinned": True},
             )
         family = self.task_family(goal)
-        model_id, fallbacks, score, reason = self._rt._selector.select(
-            task_family=family
-        )
+        model_id, fallbacks, score, reason = self._rt._selector.select(task_family=family)
         decision = SelectionDecision(
             goal=goal,
             task_family=family,
@@ -114,9 +111,7 @@ class SelectorAgent:
         """Per-agent model choice (BP §364): planner/synthesizer need the
         strongest reasoner (reasoning family); workers follow the goal."""
         if role_name in ("planner", "synthesizer"):
-            model_id, fallbacks, score, reason = self._rt._selector.select(
-                task_family="reasoning"
-            )
+            model_id, fallbacks, score, reason = self._rt._selector.select(task_family="reasoning")
             return SelectionDecision(
                 goal=goal,
                 task_family="reasoning",

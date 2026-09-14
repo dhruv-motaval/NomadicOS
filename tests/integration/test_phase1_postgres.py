@@ -51,11 +51,11 @@ def test_migrations_apply_and_are_idempotent(db) -> None:
     runner = MigrationRunner(db, MIGRATIONS)
     applied_first = runner.run()
     assert applied_first == [
-    "001_core_state.sql",
-    "002_memory.sql",
-    "003_audit_correlation_text.sql",
-    "004_tasks_lifecycle_status.sql",
-]
+        "001_core_state.sql",
+        "002_memory.sql",
+        "003_audit_correlation_text.sql",
+        "004_tasks_lifecycle_status.sql",
+    ]
     applied_second = runner.run()
     assert applied_second == []  # idempotent
 
@@ -66,9 +66,7 @@ def test_session_and_task_lifecycle(db) -> None:
     sessions = SessionRepository(db)
     tasks = TaskRepository(db)
 
-    session_id = __import__("asyncio").run(
-        sessions.create("user-1", title="test session")
-    )
+    session_id = __import__("asyncio").run(sessions.create("user-1", title="test session"))
     session = __import__("asyncio").run(sessions.get(session_id))
     assert session["user_id"] == "user-1"
 
@@ -134,9 +132,7 @@ def test_audit_is_append_only(db) -> None:
         decision="ALLOW",
     )
     __import__("asyncio").run(repo.append(event))
-    events = __import__("asyncio").run(
-        repo.query(category=AuditEventCategory.TOOL_REQUESTED)
-    )
+    events = __import__("asyncio").run(repo.query(category=AuditEventCategory.TOOL_REQUESTED))
     assert len(events) == 1
     assert events[0].subject == "filesystem.read"
 

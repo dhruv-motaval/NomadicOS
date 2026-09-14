@@ -13,6 +13,7 @@ Structural guarantees (enforced, not just documented):
 - The executor never decides task state; it merely reports evidence. The
   scheduler/lifecycle layer turns results into transitions.
 """
+
 from __future__ import annotations
 
 import time
@@ -87,6 +88,7 @@ class ExecutionResult:
     attempt: int
     data: Any = None
     error: str | None = None
+    error_code: str | None = None
     evidence: dict[str, Any] = field(default_factory=dict)
     observations: tuple[str, ...] = ()
     duration_ms: float = 0.0
@@ -158,7 +160,10 @@ class TaskExecutor:
             )
         except Exception as exc:  # tool faults become structured failures
             await self._audit_dispatch(
-                prepared, "ACTION_FAILED", str(exc), started,
+                prepared,
+                "ACTION_FAILED",
+                str(exc),
+                started,
                 severity=AuditSeverity.WARNING,
             )
             return ExecutionResult(
@@ -169,12 +174,15 @@ class TaskExecutor:
                 step_id=task.step_id,
                 attempt=task.attempt,
                 error=str(exc),
+                error_code=str(getattr(exc, "context", {}).get("code") or "TOOL_EXCEPTION"),
                 duration_ms=round((time.monotonic() - started) * 1000, 1),
             )
         observations = _observe(prepared, result)
         await self._audit_dispatch(
-            prepared, "EXECUTED" if result.success else "ACTION_FAILED",
-            result.error, started,
+            prepared,
+            "EXECUTED" if result.success else "ACTION_FAILED",
+            result.error,
+            started,
             severity=AuditSeverity.INFO if result.success else AuditSeverity.WARNING,
         )
         return ExecutionResult(
@@ -186,6 +194,7 @@ class TaskExecutor:
             attempt=task.attempt,
             data=result.data,
             error=result.error,
+            error_code=None if result.success else (result.error_code or "TOOL_FAILURE"),
             evidence=dict(result.evidence),
             observations=observations,
             duration_ms=round((time.monotonic() - started) * 1000, 1),

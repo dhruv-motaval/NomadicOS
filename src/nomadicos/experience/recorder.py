@@ -152,9 +152,7 @@ class ExperienceRecorder:
             procedure = TaskExperience(
                 summary=f"[consolidated ×{len(group)}] {representative}",
                 outcome=Outcome.SUCCESS if successes == len(group) else Outcome.PARTIAL,
-                quality_score=round(
-                    min(10.0, sum(g.quality_score for g in group) / len(group)), 2
-                ),
+                quality_score=round(min(10.0, sum(g.quality_score for g in group) / len(group)), 2),
                 evidence={"consolidated_from": [str(g.experience_id) for g in group]},
                 steps=group[0].steps,
             )

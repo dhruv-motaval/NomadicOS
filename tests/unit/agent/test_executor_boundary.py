@@ -4,6 +4,7 @@ Proves: only gateway-issued AuthorizedAction tokens execute; the executor is
 structurally incapable of policy, lifecycle, model, or grant decisions;
 verification/retry/audit ownership holds. Also asserts the import-boundary.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -143,8 +144,17 @@ def test_authorized_token_executes_structured_result(tmp_path):
     assert res.duration_ms >= 0.0
     assert (ws / "x.txt").read_text(encoding="utf-8") == "hi"
     assert set(res.as_dict()) == {
-        "success", "action", "capability", "task_id", "step_id", "attempt",
-        "data", "error", "evidence", "observations", "duration_ms",
+        "success",
+        "action",
+        "capability",
+        "task_id",
+        "step_id",
+        "attempt",
+        "data",
+        "error",
+        "evidence",
+        "observations",
+        "duration_ms",
     }
     json.dumps(res.as_dict())  # JSON-serializable envelope
 
@@ -163,9 +173,14 @@ def test_unauthorized_delete_and_forged_tokens_rejected(tmp_path):
     with pytest.raises(PermissionDenied):
         _run(gw.executor.run(None))
     forged = AuthorizedAction(
-        action=_task(), tool_name="filesystem", capability="filesystem.write",
-        resource="x.txt", identity=IDENT, grant_signature="i-made-this-up",
-        policy_version="9.9.9", tool=gw.get("filesystem"),
+        action=_task(),
+        tool_name="filesystem",
+        capability="filesystem.write",
+        resource="x.txt",
+        identity=IDENT,
+        grant_signature="i-made-this-up",
+        policy_version="9.9.9",
+        tool=gw.get("filesystem"),
     )
     with pytest.raises(PermissionDenied):
         _run(gw.executor.run(forged))
@@ -220,9 +235,7 @@ def test_executor_exposes_no_lifecycle_hooks():
     for name in vars(TaskExecutor):
         if name.startswith("__"):
             continue
-        offenders = (
-            "advance", "state", "transition", "authorize", "retry"
-        )
+        offenders = ("advance", "state", "transition", "authorize", "retry")
         assert not any(k in name.lower() for k in offenders)
 
 
@@ -251,9 +264,12 @@ def test_retry_and_verification_outside_executor(tmp_path):
             ModelPerformanceTracker(),
             hardware=HardwareConstraints(ram_mb=8192),
         ),
-        manager=mgr, gateway=gw, audit_sink=sink,
+        manager=mgr,
+        gateway=gw,
+        audit_sink=sink,
         recorder=ExperienceRecorder(InMemoryExperienceStore()),
-        evaluator=EvaluationEngine(), budget=TaskBudget(max_steps=2, max_retries=1),
+        evaluator=EvaluationEngine(),
+        budget=TaskBudget(max_steps=2, max_retries=1),
         workspace_root=str(ws),
     )
     rep = _run(rt.execute_task("open tool ghost.tool now", IDENT, max_steps=2))
@@ -271,24 +287,14 @@ def test_retry_and_verification_outside_executor(tmp_path):
 
 
 def retry_seen_count(sink: FakeAuditSink) -> int:
-    return len(
-        [
-            e
-            for e in sink.events
-            if e.decision in ("STATE_TRANSITION:CREATED>PLANNED",)
-        ]
-    )
+    return len([e for e in sink.events if e.decision in ("STATE_TRANSITION:CREATED>PLANNED",)])
 
 
 # 9: a tool that throws becomes a structured failure + audit ----------------
 def test_tool_exception_structured_failure(tmp_path):
     gw, sink, _ = _stack(tmp_path)
-    task = _task(
-        tool="echo.boom", arguments={"msg": "x"}, capabilities=("echo.boom.execute",)
-    )
-    _d, token, _r = _run(
-        gw.authorize_action("echo.boom", {"msg": "x"}, IDENT, task_ref=task)
-    )
+    task = _task(tool="echo.boom", arguments={"msg": "x"}, capabilities=("echo.boom.execute",))
+    _d, token, _r = _run(gw.authorize_action("echo.boom", {"msg": "x"}, IDENT, task_ref=task))
     assert token is not None
     res = _run(gw.executor.run(token))
     assert res.success is False
@@ -324,11 +330,15 @@ def test_cancellation_never_reaches_executor(tmp_path):
     policy = PolicyEngine()
     policy.load_file(pf) if pf.exists() else None
     model = FakeLocalModel("fake/planner")
-    model._responses = [json.dumps({
-        "tool": "filesystem",
-        "arguments": {"action": "write", "path": "y.txt", "content": "z"},
-        "finished": False,
-    })] * 6
+    model._responses = [
+        json.dumps(
+            {
+                "tool": "filesystem",
+                "arguments": {"action": "write", "path": "y.txt", "content": "z"},
+                "finished": False,
+            }
+        )
+    ] * 6
     mgr = ModelManager()
     mgr.register(model, status=ModelStatus.ENABLED)
     rt = AgentRuntime(
@@ -337,9 +347,12 @@ def test_cancellation_never_reaches_executor(tmp_path):
             ModelPerformanceTracker(),
             hardware=HardwareConstraints(ram_mb=8192),
         ),
-        manager=mgr, gateway=gw, audit_sink=sink,
+        manager=mgr,
+        gateway=gw,
+        audit_sink=sink,
         recorder=ExperienceRecorder(InMemoryExperienceStore()),
-        evaluator=EvaluationEngine(), budget=TaskBudget(max_steps=4, max_retries=1),
+        evaluator=EvaluationEngine(),
+        budget=TaskBudget(max_steps=4, max_retries=1),
         workspace_root=str(ws),
     )
     rep = _run(

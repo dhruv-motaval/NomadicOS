@@ -13,6 +13,7 @@ Script contract (inside each .py, comment header):
 Execution contract: print a JSON object to stdout:
     {"summary": "<one line>", "data": {...optional...}}
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -33,6 +34,8 @@ from nomadicos.tools.base import (
 
 _HEADER_MARKER = "# nomadicos-tool"
 _MAX_SCRIPT_LINES = 200
+SCRIPT_TIMEOUT_SECONDS = 120.0
+SCRIPT_KILL_GRACE_SECONDS = 5.0
 
 
 def parse_script_header(path: Path) -> dict[str, Any] | None:
@@ -45,13 +48,13 @@ def parse_script_header(path: Path) -> dict[str, Any] | None:
         return None
     description = ""
     schema: dict[str, Any] = {}
-    for line in lines[1 : 12]:
+    for line in lines[1:12]:
         stripped = line.strip()
         if stripped.startswith("# description:"):
-            description = stripped[len("# description:"):].strip()
+            description = stripped[len("# description:") :].strip()
         elif stripped.startswith("# arguments_schema:"):
             try:
-                schema = json.loads(stripped[len("# arguments_schema:"):].strip())
+                schema = json.loads(stripped[len("# arguments_schema:") :].strip())
             except json.JSONDecodeError:
                 schema = {}
     if not description:
@@ -91,14 +94,13 @@ class GeneratedScriptTool(Tool):
         validate_against_schema(arguments, self._spec.arguments_schema)
         return dict(arguments)
 
-    async def execute(
-        self, arguments: dict[str, Any], context: ToolContext
-    ) -> ToolResult:
+    async def execute(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
         # refresh the header: the owner may have edited the script (I4)
         header = parse_script_header(self._path)
         if header is None:
             raise ToolExecutionError(
-                f"generated script {self._path.name} is missing a valid header"
+                f"generated script {self._path.name} is missing a valid header",
+                context={"code": "SCRIPT_HEADER_INVALID"},
             )
         args_json = json.dumps(arguments)
         import time as _t
@@ -114,22 +116,53 @@ class GeneratedScriptTool(Tool):
                 cwd=str(self._path.parent),
             )
             stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=120
+                process.communicate(), timeout=SCRIPT_TIMEOUT_SECONDS
             )
-        except TimeoutError as exc:
-            raise ToolExecutionError("generated script timed out after 120s") from exc
+        except (TimeoutError, asyncio.CancelledError) as exc:
+            # STEP 6A: same defect class STEP 5 found in terminal — a
+            # timed-out or cancelled generated script must never survive as an orphan.
+            killed = False
+            if process is not None:
+                try:
+                    if process.returncode is None:
+                        process.kill()
+                        killed = True
+                    await asyncio.wait_for(process.wait(), timeout=SCRIPT_KILL_GRACE_SECONDS)
+                except Exception:  # noqa: BLE001 — reaping best effort
+                    pass
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            raise ToolExecutionError(
+                f"generated script timed out after {SCRIPT_TIMEOUT_SECONDS}s",
+                context={
+                    "code": "SCRIPT_TIMEOUT",
+                    "killed": killed,
+                    "script": self._path.name,
+                },
+            ) from exc
         latency = (_t.monotonic() - started) * 1000
         stdout_text = stdout.decode("utf-8", errors="replace")
         if process.returncode != 0:
-            raise ToolExecutionError(
+            # Structured FAILURE envelope (plan B): the script RAN and
+            # failed like any program — not a pipeline exception, and
+            err = (
                 f"generated script failed (exit {process.returncode}): "
                 f"{stderr.decode('utf-8', errors='replace')[:300]}"
+            )
+            return ToolResult.failure(
+                err,
+                evidence={
+                    "exit_code": process.returncode,
+                    "stderr": stderr.decode("utf-8", errors="replace")[:200],
+                },
+                error_code="SCRIPT_NONZERO_EXIT",
             )
         try:
             payload = json.loads(stdout_text.strip().splitlines()[-1])
         except (json.JSONDecodeError, IndexError) as exc:
             raise ToolExecutionError(
-                "generated script did not print a valid JSON result"
+                "generated script did not print a valid JSON result",
+                context={"code": "SCRIPT_INVALID_OUTPUT"},
             ) from exc
         return ToolResult(
             success=True,

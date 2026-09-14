@@ -4,6 +4,7 @@ Regression: a boot time mypy defect (``ToolResult.success(...)`` — a non-exist
 API) meant a generated tool could never return a result. These tests execute a
 real generated script end-to-end and assert the structured envelope.
 """
+
 from pathlib import Path
 
 from nomadicos.security.permissions import SubjectIdentity

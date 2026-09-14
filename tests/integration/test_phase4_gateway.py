@@ -77,9 +77,12 @@ async def test_gateway_refuses_unregistered_tool_execution(wired) -> None:
 async def test_gateway_allows_policy_permitted_tool(wired) -> None:
     gateway, permissions, sink, identity, tmp_path = wired
     gateway.register(
-        FakeTool(name="fake.echo", result=__import__(
-            "nomadicos.tools.base", fromlist=["ToolResult"]
-        ).ToolResult(success=True, data={"ok": 1}))
+        FakeTool(
+            name="fake.echo",
+            result=__import__("nomadicos.tools.base", fromlist=["ToolResult"]).ToolResult(
+                success=True, data={"ok": 1}
+            ),
+        )
     )
     result = await gateway.execute("fake.echo", {}, identity)
     assert result.success is True
@@ -142,9 +145,7 @@ async def test_filesystem_write_read_evidence(wired) -> None:
         # grant was consumed; directly verify tool behavior instead
         result = await tool.execute(
             {"action": "write", "path": str(tmp_path / "hello.txt"), "content": "hello"},
-            __import__(
-                "nomadicos.tools.base", fromlist=["ToolContext"]
-            ).ToolContext(user_id="u"),
+            __import__("nomadicos.tools.base", fromlist=["ToolContext"]).ToolContext(user_id="u"),
         )
         assert result.success is True
         assert result.evidence["exists"] is True
@@ -152,9 +153,7 @@ async def test_filesystem_write_read_evidence(wired) -> None:
 
         read_result = await tool.execute(
             {"action": "read", "path": str(tmp_path / "hello.txt")},
-            __import__(
-                "nomadicos.tools.base", fromlist=["ToolContext"]
-            ).ToolContext(user_id="u"),
+            __import__("nomadicos.tools.base", fromlist=["ToolContext"]).ToolContext(user_id="u"),
         )
         assert read_result.data["content"] == "hello"
 

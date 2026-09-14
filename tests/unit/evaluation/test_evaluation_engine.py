@@ -74,8 +74,14 @@ async def test_empty_evidence_scores_zero(engine: EvaluationEngine) -> None:
 
 def test_run_record_score_bounds() -> None:
     record = RunRecord(
-        task_id="t", run_id="r", verified=False, verdict_summary="",
-        checks_passed=3, checks_total=4, steps_taken=1, retries_used=0,
+        task_id="t",
+        run_id="r",
+        verified=False,
+        verdict_summary="",
+        checks_passed=3,
+        checks_total=4,
+        steps_taken=1,
+        retries_used=0,
         duration_seconds=1.0,
     )
     assert 0.0 <= record.score <= 4.0
@@ -88,8 +94,11 @@ def test_tracker_records_and_scores() -> None:
     tracker = ModelPerformanceTracker()
     for _ in range(9):
         tracker.record(
-            model_id="llama/3b", task_family="coding",
-            success=True, duration_seconds=1.2, verified=True,
+            model_id="llama/3b",
+            task_family="coding",
+            success=True,
+            duration_seconds=1.2,
+            verified=True,
         )
     tracker.record(
         model_id="llama/3b",

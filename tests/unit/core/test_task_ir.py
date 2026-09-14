@@ -1,5 +1,6 @@
 """Canonical task/action IR — validation matrix (rebuild plan §6 tests 1-10,
 12, 14-15 at the IR boundary; executor-boundary proof in tests/integration)."""
+
 import json
 
 import pytest
@@ -94,9 +95,7 @@ def test_unknown_extra_field_rejected() -> None:
 # --- 9. oversized arguments ---------------------------------------------------
 def test_oversized_arguments_rejected() -> None:
     many = {f"k{i}": 1 for i in range(200)}
-    claim = ActionClaim.from_model_text(
-        json.dumps({"tool": "x", "arguments": many})
-    )
+    claim = ActionClaim.from_model_text(json.dumps({"tool": "x", "arguments": many}))
     assert claim.kind is ActionKind.INVALID
     big = json.dumps({"tool": "x", "arguments": {"blob": "y" * 9000}})
     assert ActionClaim.from_model_text(big).kind is ActionKind.INVALID

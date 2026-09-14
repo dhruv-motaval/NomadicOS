@@ -4,6 +4,7 @@ Runs against a FakeRuntime — no models, no PostgreSQL, no network.
 Every test proves the six endpoints behave per the contract: auth fail-closed,
 idempotent goal creation, truthful status surfacing, SSE stream termination.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -30,7 +31,9 @@ class FakeRuntime:
         return SimpleNamespace(
             status=TaskStatus.SUCCESS,
             model_dump=lambda mode="dict": {
-                "goal": goal, "status": "SUCCESS", "completed": ["fake"],
+                "goal": goal,
+                "status": "SUCCESS",
+                "completed": ["fake"],
             },
         )
 
@@ -95,12 +98,8 @@ def test_goal_lifecycle(client):
 def test_idempotency_key_returns_same_goal(client):
     h = _h(client)
     key = "retry-abc-123"
-    r1 = client.post(
-        "/v1/goals", json={"goal": "task one", "idempotency_key": key}, headers=h
-    )
-    r2 = client.post(
-        "/v1/goals", json={"goal": "task one", "idempotency_key": key}, headers=h
-    )
+    r1 = client.post("/v1/goals", json={"goal": "task one", "idempotency_key": key}, headers=h)
+    r2 = client.post("/v1/goals", json={"goal": "task one", "idempotency_key": key}, headers=h)
     assert r1.json()["goal_id"] == r2.json()["goal_id"]
     assert r2.json()["duplicate"] is True
 
@@ -111,9 +110,7 @@ def test_unknown_goal_404(client):
 
 
 def test_memory_search(client):
-    r = client.post(
-        "/v1/memory/search", json={"query": "postgres", "limit": 3}, headers=_h(client)
-    )
+    r = client.post("/v1/memory/search", json={"query": "postgres", "limit": 3}, headers=_h(client))
     assert r.status_code == 200
     body = r.json()
     assert body["count"] >= 1
@@ -129,9 +126,7 @@ def test_emergency_stop(client):
 def test_sse_stream_terminates_with_report(client):
     h = _h(client)
     goal_id = client.post("/v1/goals", json={"goal": "sse test"}, headers=h).json()["goal_id"]
-    with client.stream(
-        "GET", f"/v1/events/{goal_id}", headers=h
-    ) as resp:
+    with client.stream("GET", f"/v1/events/{goal_id}", headers=h) as resp:
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/event-stream")
         body = b"".join(resp.iter_bytes()).decode()

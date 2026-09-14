@@ -100,8 +100,11 @@ def test_learning_promotes_successful_model(manager, tracker) -> None:
     # model/basic earns verified coding history
     for _ in range(6):
         tracker.record(
-            model_id="model/basic", task_family="coding",
-            success=True, duration_seconds=1.0, verified=True,
+            model_id="model/basic",
+            task_family="coding",
+            success=True,
+            duration_seconds=1.0,
+            verified=True,
         )
     primary, _, _, reason = selector(manager, tracker).select(task_family="coding")
     assert primary == "model/basic"
@@ -111,8 +114,11 @@ def test_learning_promotes_successful_model(manager, tracker) -> None:
 def test_unproven_models_capped(manager, tracker) -> None:
     """BP §67: one lucky run must not dominate — cap until min attempts."""
     tracker.record(
-        model_id="model/basic", task_family="coding",
-        success=True, duration_seconds=1.0, verified=True,
+        model_id="model/basic",
+        task_family="coding",
+        success=True,
+        duration_seconds=1.0,
+        verified=True,
     )  # single attempt
     policy = SelectionPolicy(min_attempts_for_learning=3, unverified_quality_cap=5.0)
     selector_instance = ModelSelector(manager, tracker, policy=policy)
@@ -128,7 +134,9 @@ def test_project_specific_experience_wins(manager, tracker) -> None:
         tracker.record(
             model_id="model/coder",
             task_family="coding:project-x",
-            success=True, duration_seconds=1.0, verified=True,
+            success=True,
+            duration_seconds=1.0,
+            verified=True,
         )
     primary, _, _, reason = selector(manager, tracker).select(
         task_family="coding", project_context="project-x"

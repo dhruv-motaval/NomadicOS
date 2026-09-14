@@ -4,6 +4,7 @@ The token is generated once at first boot and persisted to data/api-token with
 user-only permissions. It is never logged (I12). Every endpoint requires
 `Authorization: Bearer <token>`.
 """
+
 from __future__ import annotations
 
 import secrets
@@ -17,7 +18,7 @@ _TOKEN_FILE = Path("data") / "api-token"
 
 def get_or_create_token(data_dir: Path | None = None) -> str:
     """Return the API token, creating it on first use."""
-    path = (_TOKEN_FILE if data_dir is None else data_dir / "api-token")
+    path = _TOKEN_FILE if data_dir is None else data_dir / "api-token"
     if path.exists():
         token = path.read_text(encoding="utf-8").strip()
         if token:
@@ -40,9 +41,7 @@ def require_token(
     expected: str,
 ) -> None:
     """Fail closed on missing/invalid tokens (BP §85)."""
-    if credentials is None or not secrets.compare_digest(
-        credentials.credentials, expected
-    ):
+    if credentials is None or not secrets.compare_digest(credentials.credentials, expected):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="invalid or missing API token",

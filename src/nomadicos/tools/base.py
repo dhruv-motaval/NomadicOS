@@ -36,7 +36,7 @@ class ToolSpec(BaseModel):
     description: str = Field(min_length=1, max_length=2048)
     risk: ToolRisk
     arguments_schema: dict[str, Any]  # JSON-schema style; validated at the gateway
-    evidence_kind: str = 'terminal'  # BP §144 verifier kind for this tool's results
+    evidence_kind: str = "terminal"  # BP §144 verifier kind for this tool's results
     side_effects: list[str] = Field(default_factory=list)
     supports_dry_run: bool = False
 
@@ -49,11 +49,21 @@ class ToolResult(BaseModel):
     success: bool
     data: Any = None
     error: str | None = None
+    error_code: str | None = None
     evidence: dict[str, Any] = Field(default_factory=dict)
+    # identity correlation (stamped at the gateway/executor boundary)
+    task_id: str | None = None
+    step_id: str | None = None
+    attempt: int | None = None
 
     @classmethod
-    def failure(cls, error: str, evidence: dict[str, Any] | None = None) -> "ToolResult":
-        return cls(success=False, error=error, evidence=evidence or {})
+    def failure(
+        cls,
+        error: str,
+        evidence: dict[str, Any] | None = None,
+        error_code: str | None = None,
+    ) -> "ToolResult":
+        return cls(success=False, error=error, evidence=evidence or {}, error_code=error_code)
 
 
 class ToolContext(BaseModel):
@@ -83,13 +93,9 @@ class Tool(ABC):
         (BP §142: reject, never guess)."""
 
     @abstractmethod
-    async def execute(
-        self, arguments: dict[str, Any], context: ToolContext
-    ) -> ToolResult: ...
+    async def execute(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult: ...
 
-    async def dry_run(
-        self, arguments: dict[str, Any], context: ToolContext
-    ) -> ToolResult:
+    async def dry_run(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
         """Default: unsupported (BP §139 — tools opt in via supports_dry_run)."""
         return ToolResult.failure(
             f"tool {self.spec.name} does not support dry-run",

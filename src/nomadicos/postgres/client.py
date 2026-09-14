@@ -61,8 +61,7 @@ class PostgresClient:
                 "or services.msc → postgresql-x64-17"
             )
             raise DatabaseUnavailable(
-                f"cannot reach PostgreSQL at {self._config.host}:"
-                f"{self._config.port} — {hint}",
+                f"cannot reach PostgreSQL at {self._config.host}:{self._config.port} — {hint}",
                 context={"host": self._config.host, "port": self._config.port},
             ) from exc
 

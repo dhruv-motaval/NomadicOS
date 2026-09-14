@@ -43,9 +43,7 @@ def make_permissive_runtime_factory(tracker):
             from nomadicos.constitution.policy_schema import RiskLevel
             from nomadicos.security.gate import Decision, SecurityDecision
 
-            return SecurityDecision(
-                Decision.ALLOW, "test-permissive", RiskLevel.LOW, 1, False, 0.0
-            )
+            return SecurityDecision(Decision.ALLOW, "test-permissive", RiskLevel.LOW, 1, False, 0.0)
 
         gateway = ToolGateway(None, FakeAuditSink())
         gateway.register(tool)
@@ -87,9 +85,7 @@ async def test_plan_rejects_forward_dependency(identity) -> None:
             ]
         }
     )
-    orchestrator = Orchestrator(
-        ScriptedModel(forward), FakeAuditSink(), lambda aid, role: None
-    )
+    orchestrator = Orchestrator(ScriptedModel(forward), FakeAuditSink(), lambda aid, role: None)
     with pytest.raises(ModelFailure, match="invalid dependencies"):
         await orchestrator.plan("goal", identity)
 
@@ -112,8 +108,6 @@ async def test_plan_rejects_invalid_task_type(identity) -> None:
     bad = json.dumps(
         {"subtasks": [{"id": "s1", "description": "d", "task_type": "pigeon", "depends_on": []}]}
     )
-    orchestrator = Orchestrator(
-        ScriptedModel(bad), FakeAuditSink(), lambda aid, role: None
-    )
+    orchestrator = Orchestrator(ScriptedModel(bad), FakeAuditSink(), lambda aid, role: None)
     with pytest.raises(ModelFailure, match="invalid task_type"):
         await orchestrator.plan("goal", identity)

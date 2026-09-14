@@ -60,10 +60,7 @@ Commands:
   /close             exit NomadicOS
 """
 
-BANNER = (
-    "\n  NomadicOS v0.1.0 — local-first AI operating environment\n"
-    + "─" * 56
-)
+BANNER = "\n  NomadicOS v0.1.0 — local-first AI operating environment\n" + "─" * 56
 
 
 class InteractiveCLI:
@@ -131,8 +128,13 @@ class InteractiveCLI:
                 if line == "0":
                     return False
                 await self._slash_command(
-                    {"2": "/sessions", "3": "/models", "4": "/sync",
-                     "5": "/memory", "6": "/status"}[line]
+                    {
+                        "2": "/sessions",
+                        "3": "/models",
+                        "4": "/sync",
+                        "5": "/memory",
+                        "6": "/status",
+                    }[line]
                 )
                 continue
             if line.startswith("/"):

@@ -78,8 +78,7 @@ def verify_against_expectation(
     if expectation is None:
         return True
     haystack = " ".join(
-        str(e.get("label", "")) + " " + str(e.get("kind", ""))
-        for e in (parsed_elements or [])
+        str(e.get("label", "")) + " " + str(e.get("kind", "")) for e in (parsed_elements or [])
     ).lower()
     return expectation.lower() in haystack
 

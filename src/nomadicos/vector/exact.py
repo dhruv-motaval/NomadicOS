@@ -83,9 +83,7 @@ class ExactVectorStore(VectorStore):
             for vid in self._order
             if not filters or all(self._metadata[vid].get(k) == v for k, v in filters.items())
         ]
-        scored = [
-            (self._distance(vector, self._vectors[vid]), vid) for vid in candidates
-        ]
+        scored = [(self._distance(vector, self._vectors[vid]), vid) for vid in candidates]
         if self.metric == "l2":
             scored.sort(key=lambda pair: (pair[0], candidates.index(pair[1])))
         else:

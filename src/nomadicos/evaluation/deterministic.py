@@ -30,6 +30,7 @@ class FilesystemVerifier(Verifier):
             return [output_not_empty_check("entries")]
         if action == "read":
             return [output_not_empty_check("content"), file_exists_check()]
+
         # delete: evidence records exists=False after removal
         def deleted_check(ev) -> "object":
             from nomadicos.evaluation.base import VerificationCheck

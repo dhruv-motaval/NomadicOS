@@ -1,6 +1,7 @@
-﻿"""STEP 4: the production loop must run through the lifecycle — and never
+"""STEP 4: the production loop must run through the lifecycle — and never
 claim a state it could not persist. Real gateway/gate/filesystem; sinks are
 recorded (no DB needed)."""
+
 import asyncio
 import json
 from pathlib import Path
@@ -94,9 +95,7 @@ DONE = '{"finished": true}'
 def test_success_walks_lifecycle_through_sink(tmp_path):
     sink, calls = _rec_sink()
     rt, ws = build(tmp_path, [WRITE, DONE])
-    rep = asyncio.run(
-        rt.execute_task("Write l.txt please", IDENT, max_steps=4, state_sink=sink)
-    )
+    rep = asyncio.run(rt.execute_task("Write l.txt please", IDENT, max_steps=4, state_sink=sink))
     assert rep.status is TaskStatus.SUCCESS
     assert (ws / "l.txt").read_text(encoding="utf-8").strip() == "ok"
     assert calls[0] == (TaskStatus.CREATED, TaskStatus.PLANNED)
@@ -124,9 +123,7 @@ def test_persist_failure_never_claims_success(tmp_path):
 def test_ask_without_approver_becomes_blocked(tmp_path):
     sink, calls = _rec_sink()
     rt, _ = build(tmp_path, [WRITE], fs_decision="ask")
-    rep = asyncio.run(
-        rt.execute_task("Write l.txt please", IDENT, max_steps=3, state_sink=sink)
-    )
+    rep = asyncio.run(rt.execute_task("Write l.txt please", IDENT, max_steps=3, state_sink=sink))
     assert rep.status is TaskStatus.BLOCKED
     assert (TaskStatus.RUNNING, TaskStatus.BLOCKED) in calls
     assert calls[-1][1] is TaskStatus.BLOCKED
@@ -152,9 +149,7 @@ def test_retry_goes_failed_recovering_running(tmp_path):
     sink, calls = _rec_sink()
     bad = "not json at all"
     rt, _ = build(tmp_path, [bad] * 10)
-    rep = asyncio.run(
-        rt.execute_task("Do the thing", IDENT, max_steps=2, state_sink=sink)
-    )
+    rep = asyncio.run(rt.execute_task("Do the thing", IDENT, max_steps=2, state_sink=sink))
     assert rep.status is not TaskStatus.SUCCESS
     tos = [t for _, t in calls]
     assert TaskStatus.FAILED in tos

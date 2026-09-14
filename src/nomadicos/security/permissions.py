@@ -67,9 +67,7 @@ class PermissionEngine:
             remaining.append(grant)
         self._grants = remaining
 
-    def satisfies_requirements(
-        self, required: list[Requirement], tool: str
-    ) -> dict[str, bool]:
+    def satisfies_requirements(self, required: list[Requirement], tool: str) -> dict[str, bool]:
         return {
             Requirement.EXPLICIT_USER_AUTHORIZATION.value: self.has_authorization(tool),
             Requirement.USER_CONFIRMATION.value: self.has_authorization(tool),

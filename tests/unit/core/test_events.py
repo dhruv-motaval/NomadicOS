@@ -1,4 +1,3 @@
-
 from nomadicos.core.events import Event, EventBus, TraceContext, new_id
 
 

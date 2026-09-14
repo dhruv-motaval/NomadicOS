@@ -52,17 +52,13 @@ async def test_mediated_flow_allow_with_audit(wired) -> None:
     gate, permissions, sink, bus, audit_events = wired
     identity = SubjectIdentity(user_id="u", session_id="s", task_id="t", step_id="st-1")
 
-    decision = await gate.authorize(
-        tool="filesystem.read", risk=RiskLevel.LOW, identity=identity
-    )
+    decision = await gate.authorize(tool="filesystem.read", risk=RiskLevel.LOW, identity=identity)
     assert decision.allowed
     assert sink.events[-1].category is AuditEventCategory.TOOL_DECISION
     assert sink.events[-1].step_id == "st-1"  # correlation reaches the audit trail
 
     # one-shot denial path
-    decision = await gate.authorize(
-        tool="no.rule", risk=RiskLevel.HIGH, identity=identity
-    )
+    decision = await gate.authorize(tool="no.rule", risk=RiskLevel.HIGH, identity=identity)
     assert decision.refused
     assert permissions.denial_count("no.rule") == 1
 
@@ -70,9 +66,7 @@ async def test_mediated_flow_allow_with_audit(wired) -> None:
 async def test_ask_decision_flow(wired) -> None:
     gate, permissions, sink, bus, audit_events = wired
     identity = SubjectIdentity(user_id="u")
-    decision = await gate.authorize(
-        tool="terminal.exec", risk=RiskLevel.HIGH, identity=identity
-    )
+    decision = await gate.authorize(tool="terminal.exec", risk=RiskLevel.HIGH, identity=identity)
     assert decision.decision is Decision.ASK
     # ASK is a hard policy posture: the user confirms through the ASK channel
     # (UI/CLI prompt), not by pre-granting (BP §182: confirmation is interactive).

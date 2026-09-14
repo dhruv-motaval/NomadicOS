@@ -119,9 +119,7 @@ class OwnerPolicy(_StrictPolicyModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    autonomy_level: Literal["manual", "assisted", "autonomous", "full_autonomy"] = (
-        "assisted"
-    )
+    autonomy_level: Literal["manual", "assisted", "autonomous", "full_autonomy"] = "assisted"
     tools: list[ToolPolicy] = Field(default_factory=list)
     external_network: ExternalNetworkPolicy = Field(default_factory=ExternalNetworkPolicy)
 
@@ -163,10 +161,7 @@ def resolve_decision(
         return "deny"  # BP §85: unknown tool/permission → BLOCK
     decisions: list[str] = []
     for rule in rules:
-        if (
-            Requirement.EXPLICIT_USER_AUTHORIZATION in rule.requires
-            and not has_user_authorization
-        ):
+        if Requirement.EXPLICIT_USER_AUTHORIZATION in rule.requires and not has_user_authorization:
             decisions.append("deny")
         else:
             decisions.append(rule.default_decision)

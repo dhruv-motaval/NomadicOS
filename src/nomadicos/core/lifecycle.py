@@ -39,9 +39,7 @@ class TaskStatus(StrEnum):
 
 # Legal transitions (BP §137/§52/§121/§135). Anything else is a bug, not a state.
 TASK_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
-    TaskStatus.CREATED: frozenset(
-        {TaskStatus.PLANNED, TaskStatus.CANCELLED, TaskStatus.FAILED}
-    ),
+    TaskStatus.CREATED: frozenset({TaskStatus.PLANNED, TaskStatus.CANCELLED, TaskStatus.FAILED}),
     TaskStatus.PLANNED: frozenset(
         {
             TaskStatus.AUTHORIZED,
@@ -50,9 +48,7 @@ TASK_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
             TaskStatus.FAILED,
         }
     ),
-    TaskStatus.AUTHORIZED: frozenset(
-        {TaskStatus.RUNNING, TaskStatus.CANCELLED, TaskStatus.FAILED}
-    ),
+    TaskStatus.AUTHORIZED: frozenset({TaskStatus.RUNNING, TaskStatus.CANCELLED, TaskStatus.FAILED}),
     TaskStatus.RUNNING: frozenset(
         {
             TaskStatus.WAITING,
@@ -136,8 +132,7 @@ class TaskState(BaseModel):
         allowed = TASK_TRANSITIONS[self.status]
         if to not in allowed:
             raise StateTransitionError(
-                f"illegal transition {self.status.value} -> {to.value} "
-                f"(task {self.task_id})"
+                f"illegal transition {self.status.value} -> {to.value} (task {self.task_id})"
             )
         self.status = to
         return self.status

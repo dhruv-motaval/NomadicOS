@@ -3,6 +3,7 @@
 Uses the LOCAL Ollama server (no external API — BP §345 holds). Recommended
 model: nomic-embed-text (274 MB, 768-d). Any installed Ollama model works.
 """
+
 from __future__ import annotations
 
 import httpx

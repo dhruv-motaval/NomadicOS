@@ -76,9 +76,7 @@ class PostgresMemoryStore(MemoryStore):
         lands with Phase 9 semantic wiring."""
         import re as _re
 
-        keywords = [
-            w for w in _re.findall(r"[a-z0-9]+", query.text.lower()) if len(w) > 2
-        ][:6]
+        keywords = [w for w in _re.findall(r"[a-z0-9]+", query.text.lower()) if len(w) > 2][:6]
         if not keywords:
             return []
         clauses = " OR ".join(["content ILIKE %s"] * len(keywords))
@@ -120,9 +118,7 @@ class PostgresMemoryStore(MemoryStore):
                     except Exception:  # noqa: BLE001 — one bad record ≠ no rerank
                         return None
 
-                vecs = await asyncio.gather(
-                    *(safe_embed(r.content) for r in records)
-                )
+                vecs = await asyncio.gather(*(safe_embed(r.content) for r in records))
                 from nomadicos.vector.ollama_embedder import cosine
 
                 scored = sorted(
@@ -155,9 +151,7 @@ class PostgresMemoryStore(MemoryStore):
             recency = 1.0 if rec.created_at is not None else 0.0
             return (score, recency)
 
-        order = sorted(
-            range(len(records)), key=lambda i: relevance(i, records[i]), reverse=True
-        )
+        order = sorted(range(len(records)), key=lambda i: relevance(i, records[i]), reverse=True)
         ranked = [records[i] for i in order]
         return ranked[: query.limit]
 

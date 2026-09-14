@@ -77,12 +77,8 @@ async def test_engine_change_detection_returns_cached_observation() -> None:
 async def test_engine_describes_with_vision_model() -> None:
     provider = FakeScreenshotProvider([b"frame-1"])
     vision = FakeGemmaVision()
-    vision.queue_response(
-        "A window 'Editor' with button 'Run Tests' at (120, 340)."
-    )
-    engine = VisionEngine(
-        provider, vision_model=vision, policy=CapturePolicy(min_interval_ms=0)
-    )
+    vision.queue_response("A window 'Editor' with button 'Run Tests' at (120, 340).")
+    engine = VisionEngine(provider, vision_model=vision, policy=CapturePolicy(min_interval_ms=0))
     observation = await engine.observe(CaptureReason.STEP_VERIFY, question="what is on screen?")
     assert "Run Tests" in observation.description
     assert len(vision.describe_calls) == 1
@@ -94,9 +90,7 @@ async def test_engine_degrades_gracefully_on_vision_failure() -> None:
     provider = FakeScreenshotProvider([b"frame-1"])
     vision = FakeGemmaVision()
     vision.set_fail_next(5)  # exhaust retries
-    engine = VisionEngine(
-        provider, vision_model=vision, policy=CapturePolicy(min_interval_ms=0)
-    )
+    engine = VisionEngine(provider, vision_model=vision, policy=CapturePolicy(min_interval_ms=0))
     observation = await engine.observe(CaptureReason.STEP_START)
     assert observation.description == ""
     assert observation.content_hash  # capture evidence still present

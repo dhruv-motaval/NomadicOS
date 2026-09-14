@@ -1,6 +1,5 @@
 """FleetSynchronizer tests (BP §8.4, §148, §107, §151)."""
 
-
 from nomadicos.core.errors import NomadicError
 from nomadicos.models.base import ModelStatus
 from nomadicos.models.fake import FakeLocalModel
@@ -16,10 +15,11 @@ def make_sync(models: dict[str, str] | None = None):
 
     def discover_fn():
         out = []
-        for mid in (models or {}):
+        for mid in models or {}:
             if mid not in registry:
                 registry[mid] = FakeLocalModel(
-                    mid, capabilities=__import__(
+                    mid,
+                    capabilities=__import__(
                         "nomadicos.models.base", fromlist=["ModelCapabilities"]
                     ).ModelCapabilities(text_generation=True),
                 )
@@ -41,9 +41,10 @@ async def test_new_model_detected_and_enabled() -> None:
     sync.discover = sync._discover_fn  # type: ignore[attr-defined]
     report = await sync.sync(force=True)
     assert "ollama/new-model" in report.healthy
-    assert manager.get("ollama/new-model").is_loaded or manager.snapshot()["status"][
-        "ollama/new-model"
-    ] == ModelStatus.ENABLED.value
+    assert (
+        manager.get("ollama/new-model").is_loaded
+        or manager.snapshot()["status"]["ollama/new-model"] == ModelStatus.ENABLED.value
+    )
 
 
 async def test_removed_model_quarantined() -> None:

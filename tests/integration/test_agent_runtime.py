@@ -45,9 +45,7 @@ def build_runtime(tmp_path, model: FakeLocalModel) -> AgentRuntime:
     manager.register(model, status=ModelStatus.ENABLED)
     tracker = ModelPerformanceTracker()
     return AgentRuntime(
-        selector=__import__(
-            "nomadicos.agent.selector", fromlist=["ModelSelector"]
-        ).ModelSelector(
+        selector=__import__("nomadicos.agent.selector", fromlist=["ModelSelector"]).ModelSelector(
             manager, tracker, hardware=HardwareConstraints(ram_mb=8192)
         ),
         manager=manager,
@@ -101,9 +99,7 @@ async def test_milestone_write_and_verify(tmp_path, identity) -> None:
         ]
     )
     runtime = build_runtime(tmp_path, model)
-    report = await runtime.execute_task(
-        "Write a report file", identity, max_steps=4
-    )
+    report = await runtime.execute_task("Write a report file", identity, max_steps=4)
     print("DEBUG:", report.status, report.completed, report.failed)
     assert report.status is TaskStatus.SUCCESS
     assert any("filesystem" in c for c in report.completed)

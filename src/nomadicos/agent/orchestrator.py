@@ -33,10 +33,20 @@ logger = get_logger("agent.orchestrator")
 
 MAX_SUBTASKS = 6
 _VALID_TASK_TYPES = {
-    "coding", "reasoning", "research", "instruction_following",
-    "tool_use", "long_context", "general_generation",
-    "knowledge_lookup", "summarization", "planning",
-    "automation", "analysis", "creative_generation", "mixed",
+    "coding",
+    "reasoning",
+    "research",
+    "instruction_following",
+    "tool_use",
+    "long_context",
+    "general_generation",
+    "knowledge_lookup",
+    "summarization",
+    "planning",
+    "automation",
+    "analysis",
+    "creative_generation",
+    "mixed",
 }
 
 
@@ -153,8 +163,7 @@ class Orchestrator:
                 s
                 for s in pending.values()
                 if all(
-                    d in results and results[d].status == "SUCCESS"
-                    for d in s.get("depends_on", [])
+                    d in results and results[d].status == "SUCCESS" for d in s.get("depends_on", [])
                 )
             ]
             if not ready:
@@ -170,9 +179,7 @@ class Orchestrator:
                 break
 
             wave = [pending.pop(s["id"]) for s in ready]
-            outcomes = await asyncio.gather(
-                *(self._run_worker(s, identity, goal) for s in wave)
-            )
+            outcomes = await asyncio.gather(*(self._run_worker(s, identity, goal) for s in wave))
             for subtask, (report, _) in zip(wave, outcomes, strict=True):
                 results[subtask["id"]] = SubtaskResult(
                     subtask_id=subtask["id"],
@@ -187,7 +194,8 @@ class Orchestrator:
         final_status = (
             "SUCCESS"
             if all(s == "SUCCESS" for s in statuses)
-            else "PARTIALLY_COMPLETED" if any(s == "SUCCESS" for s in statuses)
+            else "PARTIALLY_COMPLETED"
+            if any(s == "SUCCESS" for s in statuses)
             else "FAILED"
         )
 

@@ -75,12 +75,15 @@ def safe_resolve(path: str, workspace_root: str | None) -> Path:
         if not resolved.is_relative_to(root):
             raise ValidationError(
                 f"path escapes the task workspace: {path}",
-                context={"path_kind": "escape"},
+                context={"path_kind": "escape", "code": "PATH_ESCAPE"},
             )
     else:
         resolved = raw.resolve()
     if ".." in raw.parts:
-        raise ValidationError("path traversal segments are not allowed")
+        raise ValidationError(
+            "path traversal segments are not allowed",
+            context={"code": "PATH_TRAVERSAL"},
+        )
     return resolved
 
 
@@ -98,7 +101,7 @@ class FilesystemTool(Tool):
             description="read, write, list, and delete files inside the task workspace",
             risk=ToolRisk.STATE_CHANGING,  # worst case; gate sees action-aware risk below
             arguments_schema=FILESYSTEM_SCHEMA,
-            evidence_kind='filesystem',
+            evidence_kind="filesystem",
             side_effects=["creates files", "modifies files", "deletes files"],
             supports_dry_run=True,
         )
@@ -117,15 +120,15 @@ class FilesystemTool(Tool):
         args = dict(arguments)
         safe_resolve(args["path"], self._workspace_root)  # structural check early
         if args["action"] == "write" and "content" not in args:
-            raise ValueError("write requires content")
+            raise ValidationError(
+                "write requires content", context={"code": "WRITE_MISSING_CONTENT"}
+            )
         return args
 
     def classification(self, arguments: dict[str, Any]) -> str:
         return classify(arguments["path"], arguments.get("content"))
 
-    async def execute(
-        self, arguments: dict[str, Any], context: ToolContext
-    ) -> ToolResult:
+    async def execute(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
         action = arguments["action"]
         target = safe_resolve(arguments["path"], self._workspace_root)
 
@@ -139,9 +142,7 @@ class FilesystemTool(Tool):
             return self._delete(target)
         raise ValidationError(f"unknown action {action}")
 
-    async def dry_run(
-        self, arguments: dict[str, Any], context: ToolContext
-    ) -> ToolResult:
+    async def dry_run(self, arguments: dict[str, Any], context: ToolContext) -> ToolResult:
         target = safe_resolve(arguments["path"], self._workspace_root)
         action = arguments["action"]
         return ToolResult(
@@ -160,7 +161,11 @@ class FilesystemTool(Tool):
 
     def _read(self, target: Path) -> ToolResult:
         if not target.is_file():
-            return ToolResult.failure("file does not exist", evidence={"exists": False})
+            return ToolResult.failure(
+                "file does not exist",
+                evidence={"exists": False},
+                error_code="FILE_NOT_FOUND",
+            )
         data = target.read_bytes()[:MAX_READ_BYTES]
         return ToolResult(
             success=True,
@@ -170,7 +175,11 @@ class FilesystemTool(Tool):
 
     def _list(self, target: Path) -> ToolResult:
         if not target.is_dir():
-            return ToolResult.failure("directory does not exist", evidence={"exists": False})
+            return ToolResult.failure(
+                "directory does not exist",
+                evidence={"exists": False},
+                error_code="DIRECTORY_NOT_FOUND",
+            )
         entries = []
         for p in sorted(target.iterdir())[:200]:
             entry: dict[str, Any] = {"name": p.name, "is_dir": p.is_dir()}
@@ -181,11 +190,12 @@ class FilesystemTool(Tool):
 
     def _write(self, target: Path, content: str) -> ToolResult:
         existed = target.exists()
-        hash_before = (
-            hashlib.sha256(target.read_bytes()).hexdigest() if existed else None
-        )
+        hash_before = hashlib.sha256(target.read_bytes()).hexdigest() if existed else None
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        # newline="": write the bytes exactly as proposed (read decodes raw
+        # bytes); Python's default would rewrite \n -> \r\n on Windows and
+        # break the write/read round-trip contract (STEP 6A audit finding).
+        target.write_text(content, encoding="utf-8", newline="")
         hash_after = hashlib.sha256(target.read_bytes()).hexdigest()
         return ToolResult(
             success=True,
@@ -200,12 +210,17 @@ class FilesystemTool(Tool):
 
     def _delete(self, target: Path) -> ToolResult:
         if not target.exists():
-            return ToolResult.failure("file does not exist", evidence={"exists": False})
-        hash_before = (
-            hashlib.sha256(target.read_bytes()).hexdigest() if target.is_file() else None
-        )
+            return ToolResult.failure(
+                "file does not exist",
+                evidence={"exists": False},
+                error_code="FILE_NOT_FOUND",
+            )
+        hash_before = hashlib.sha256(target.read_bytes()).hexdigest() if target.is_file() else None
         if target.is_dir():
-            raise ValidationError("directory deletion requires dedicated tooling (BP §197)")
+            raise ValidationError(
+                "directory deletion requires dedicated tooling (BP §197)",
+                context={"code": "DIRECTORY_DELETE_BLOCKED"},
+            )
         target.unlink()
         return ToolResult(
             success=True,

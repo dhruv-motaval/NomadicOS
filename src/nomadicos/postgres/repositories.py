@@ -63,16 +63,13 @@ class TaskRepository:
         return tid
 
     async def get(self, task_id: UUID) -> dict[str, Any] | None:
-        rows = self._client.execute(
-            "SELECT * FROM nomadicos.tasks WHERE task_id = %s", (task_id,)
-        )
+        rows = self._client.execute("SELECT * FROM nomadicos.tasks WHERE task_id = %s", (task_id,))
         return rows[0] if rows else None
 
     async def recent(self, limit: int = 3) -> list[dict[str, Any]]:
         """Most recent tasks (cross-session conversation seeding, BP §376)."""
         return self._client.execute(
-            "SELECT goal, status FROM nomadicos.tasks "
-            "ORDER BY created_at DESC LIMIT %s",
+            "SELECT goal, status FROM nomadicos.tasks ORDER BY created_at DESC LIMIT %s",
             (limit,),
         )
 

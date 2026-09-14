@@ -55,9 +55,7 @@ def test_benchmark_matrix_rows_accumulate() -> None:
     matrix.run(
         engine_name="native-cosine", metric="cosine", corpus=corpus, queries=queries, top_k=3
     )
-    matrix.run(
-        engine_name="native-l2", metric="l2", corpus=corpus, queries=queries, top_k=3
-    )
+    matrix.run(engine_name="native-l2", metric="l2", corpus=corpus, queries=queries, top_k=3)
     rows = matrix.matrix()
     assert [r["engine"] for r in rows] == ["native-cosine", "native-l2"]
 

@@ -76,6 +76,7 @@ class StatePersistenceError(NomadicError):
     task truthfully (STEP 4): unrecorded states are never claimed or
     continued through."""
 
+
 class StateConflict(NomadicError):
     """Authoritative CAS violation on tasks.status (STEP 4): the row is not in
     the state we expected, so a race changed it first — never overwrite blindly."""

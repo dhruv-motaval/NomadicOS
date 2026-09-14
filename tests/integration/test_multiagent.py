@@ -71,9 +71,9 @@ class RecordingRuntime:
         self._agent_id = agent_id
 
     async def execute_task(self, goal, identity, *, model_id=None, max_steps=3):
-        request = __import__(
-            "nomadicos.models.base", fromlist=["GenerateRequest"]
-        ).GenerateRequest(prompt=goal, max_output_tokens=512, temperature=0.0)
+        request = __import__("nomadicos.models.base", fromlist=["GenerateRequest"]).GenerateRequest(
+            prompt=goal, max_output_tokens=512, temperature=0.0
+        )
         generation = await self._model.generate(request)
         try:
             proposal = json.loads(generation.text)
@@ -120,14 +120,10 @@ def build(plan: str, worker_scripts: dict[str, list[str]]) -> tuple:
 
     def factory(agent_id: str, role) -> RecordingRuntime:
         factory_calls.append((agent_id, role.name))
-        model = ScriptedModel(
-            worker_scripts.get(agent_id, [json.dumps({"finished": True})])
-        )
+        model = ScriptedModel(worker_scripts.get(agent_id, [json.dumps({"finished": True})]))
         return RecordingRuntime(model, gateway, audit, None, None, agent_id)
 
-    orchestrator = Orchestrator(
-        ScriptedModel([plan]), audit, factory, max_subtasks=6
-    )
+    orchestrator = Orchestrator(ScriptedModel([plan]), audit, factory, max_subtasks=6)
     return orchestrator, audit, tool, factory_calls
 
 
@@ -233,6 +229,7 @@ def test_failed_worker_cascades_to_dependents() -> None:
 
 def test_planner_failure_degrades_to_single_agent() -> None:
     """ADR-0030: planner error ⇒ graceful single-agent fallback, no crash."""
+
     class BrokenPlanner:
         async def generate(self, request):
             raise ModelFailure("planner returned garbage")

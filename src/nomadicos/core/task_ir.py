@@ -15,6 +15,7 @@ never as finished/success/approved (BP §6, §86, §366). Identity fields and
 risk/capability claims in the payload are rejected or ignored: authority to
 execute is never a model-supplied field.
 """
+
 from __future__ import annotations
 
 import json
@@ -233,9 +234,7 @@ class ActionClaim(BaseModel):
                 reasoning=parsed.reasoning,
             )
         if "finished" in cleaned and parsed.finished:
-            return cls(
-                kind=ActionKind.FINISH, finish=True, reasoning=parsed.reasoning
-            )
+            return cls(kind=ActionKind.FINISH, finish=True, reasoning=parsed.reasoning)
         return cls.invalid("model output has no tool, reply, or explicit finish field")
 
 
@@ -283,9 +282,7 @@ class TaskAction(BaseModel):
         """Canonical boundary function: validated claim + SYSTEM-supplied
         metadata -> the only object policy and the executor will accept."""
         if claim.kind is ActionKind.INVALID:
-            raise ValidationError(
-                f"cannot bind invalid claim: {claim.reason or 'unspecified'}"
-            )
+            raise ValidationError(f"cannot bind invalid claim: {claim.reason or 'unspecified'}")
         return cls(
             kind=claim.kind,
             tool=claim.tool,

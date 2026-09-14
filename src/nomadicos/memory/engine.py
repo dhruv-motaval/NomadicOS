@@ -70,9 +70,7 @@ class MemoryEngine:
         )
         return str(memory_id)
 
-    async def promote(
-        self, memory_id: str, *, to_scope: MemoryScope, source: str
-    ) -> str:
+    async def promote(self, memory_id: str, *, to_scope: MemoryScope, source: str) -> str:
         """Session → project/user/system promotion (BP §383): never automatic."""
         record = await self._store.get(self._as_uuid(memory_id))
         if record is None:
@@ -124,9 +122,7 @@ class MemoryEngine:
         limit: int = 5,
     ) -> list[MemoryRecord]:
         """BP §380/§412: 'use the same fix we discovered earlier' — cross-session query."""
-        return await self.search(
-            text, project_id=project_id, limit=limit
-        )
+        return await self.search(text, project_id=project_id, limit=limit)
 
     # ------------------------------------------------------- get/delete/forget
 

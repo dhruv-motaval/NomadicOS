@@ -30,13 +30,8 @@ class InMemoryExperienceStore(ExperienceStore):
     async def append(self, experience: TaskExperience) -> None:
         # BP §168: repeated identical traces are aggregated, not stored forever.
         for existing in self.records:
-            if (
-                existing.summary == experience.summary
-                and existing.outcome is experience.outcome
-            ):
-                existing.quality_score = round(
-                    min(10.0, existing.quality_score + 0.5), 2
-                )
+            if existing.summary == experience.summary and existing.outcome is experience.outcome:
+                existing.quality_score = round(min(10.0, existing.quality_score + 0.5), 2)
                 existing.steps = max(existing.steps, experience.steps)
                 logger.info("experience deduplicated (aggregated) id=%s", existing.experience_id)
                 return
@@ -64,5 +59,6 @@ class InMemoryExperienceStore(ExperienceStore):
 
     async def all(self) -> list[TaskExperience]:
         return list(self.records)
+
 
 __all__ = ["ExperienceStore", "InMemoryExperienceStore"]

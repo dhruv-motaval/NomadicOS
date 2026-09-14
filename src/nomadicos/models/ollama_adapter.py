@@ -116,9 +116,7 @@ class OllamaModel(LocalModel):
             response.raise_for_status()
             payload = response.json()
             for entry in payload.get("data", []):
-                model = cls(
-                    f"ollama/{entry['id']}", base_url=base_url, transport=transport
-                )
+                model = cls(f"ollama/{entry['id']}", base_url=base_url, transport=transport)
                 await model._verify_capabilities(client)
                 await model._verify_digest(client, entry)
                 models.append(model)
@@ -149,9 +147,7 @@ class OllamaModel(LocalModel):
     async def _verify_capabilities(self, client: httpx.AsyncClient) -> None:
         """BP §150/§151: validate capability claims against the server."""
         try:
-            response = await client.post(
-                "/api/show", json={"model": self._ollama_name}
-            )
+            response = await client.post("/api/show", json={"model": self._ollama_name})
             response.raise_for_status()
             capabilities = response.json().get("capabilities", [])
             has_vision = "vision" in capabilities
@@ -239,9 +235,7 @@ class OllamaModel(LocalModel):
         try:
             payload = response.json()
         except ValidationError as exc:
-            raise ModelFailure(
-                "ollama invalid JSON", context={"model": self._ollama_name}
-            ) from exc
+            raise ModelFailure("ollama invalid JSON", context={"model": self._ollama_name}) from exc
         latency_ms = (time.monotonic() - started) * 1000
         choice = (payload.get("choices") or [{}])[0]
         usage = payload.get("usage") or {}

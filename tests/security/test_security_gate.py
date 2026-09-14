@@ -45,18 +45,14 @@ def gate(tmp_path, identity) -> SecurityGate:
 
 
 async def test_known_tool_allowed(gate: SecurityGate, identity) -> None:
-    decision = await gate.authorize(
-        tool="filesystem.read", risk=RiskLevel.LOW, identity=identity
-    )
+    decision = await gate.authorize(tool="filesystem.read", risk=RiskLevel.LOW, identity=identity)
     assert decision.allowed is True
     assert decision.decision is Decision.ALLOW
 
 
 async def test_unknown_tool_fails_closed(gate: SecurityGate, identity) -> None:
     """BP §85: unknown tool ⇒ BLOCK."""
-    decision = await gate.authorize(
-        tool="mystery.exec", risk=RiskLevel.HIGH, identity=identity
-    )
+    decision = await gate.authorize(tool="mystery.exec", risk=RiskLevel.HIGH, identity=identity)
     assert decision.refused is True
     assert "fail closed" in decision.reason
 
@@ -109,14 +105,10 @@ async def test_one_shot_grant_consumed_after_use(tmp_path, identity) -> None:
 async def test_emergency_stop_blocks_everything(gate: SecurityGate, identity) -> None:
     """BP §122/§288: stop halts execution without model cooperation."""
     gate.pull_emergency_stop()
-    decision = await gate.authorize(
-        tool="filesystem.read", risk=RiskLevel.LOW, identity=identity
-    )
+    decision = await gate.authorize(tool="filesystem.read", risk=RiskLevel.LOW, identity=identity)
     assert decision.decision is Decision.BLOCK
     gate.reset_emergency_stop()
-    decision = await gate.authorize(
-        tool="filesystem.read", risk=RiskLevel.LOW, identity=identity
-    )
+    decision = await gate.authorize(tool="filesystem.read", risk=RiskLevel.LOW, identity=identity)
     assert decision.allowed is True
 
 

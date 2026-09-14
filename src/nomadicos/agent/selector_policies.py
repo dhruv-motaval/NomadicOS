@@ -1,6 +1,5 @@
 """Selection policy (BP §8.6, §187, §371): bounded, explainable, local-only."""
 
-
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from nomadicos.core.errors import ModelUnavailable
@@ -22,9 +21,7 @@ class SelectionPolicy(BaseModel):
     def _weights_sum(self) -> "SelectionPolicy":
         total = self.history_weight + self.capability_weight
         if abs(total - 1.0) > 1e-6:
-            raise ModelUnavailable(
-                "selection weights must sum to 1.0", context={"total": total}
-            )
+            raise ModelUnavailable("selection weights must sum to 1.0", context={"total": total})
         return self
 
 

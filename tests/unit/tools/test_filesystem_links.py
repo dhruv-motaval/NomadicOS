@@ -5,6 +5,7 @@ workspace, then proves read/write/delete are refused and the resolved target
 is checked BEFORE any operation. Skips (explicitly, visibly) only if the
 platform forbids every link mechanism available.
 """
+
 from __future__ import annotations
 
 import os
@@ -23,7 +24,8 @@ def _make_link(link: Path, target: Path) -> str | None:
         # junctions need no privileges on Windows
         r = subprocess.run(
             ["cmd", "/c", "mklink", "/J", str(link), str(target)],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if r.returncode == 0 and link.exists():
             return "junction"
@@ -82,9 +84,9 @@ def test_write_through_link_rejected_before_touching_fs(links) -> None:
     import asyncio
 
     with pytest.raises(ValidationError):
-        asyncio.run(tool.validate_arguments(
-            {"action": "write", "path": "link/planted.txt", "content": "x"}
-        ))
+        asyncio.run(
+            tool.validate_arguments({"action": "write", "path": "link/planted.txt", "content": "x"})
+        )
     assert not (outside / "planted.txt").exists()
 
 
@@ -93,9 +95,7 @@ def test_delete_through_link_rejected(links) -> None:
     import asyncio
 
     with pytest.raises(ValidationError):
-        asyncio.run(tool.validate_arguments(
-            {"action": "delete", "path": "link/secret.txt"}
-        ))
+        asyncio.run(tool.validate_arguments({"action": "delete", "path": "link/secret.txt"}))
     assert (outside / "secret.txt").exists()
 
 
@@ -111,9 +111,7 @@ def test_execute_layer_rejects_too(links) -> None:
     with pytest.raises(ValidationError):
         asyncio.run(tool.execute({"action": "read", "path": "link/secret.txt"}, ctx))
     with pytest.raises(ValidationError):
-        asyncio.run(tool.execute(
-            {"action": "write", "path": "link/evil.txt", "content": "x"}, ctx
-        ))
+        asyncio.run(tool.execute({"action": "write", "path": "link/evil.txt", "content": "x"}, ctx))
     assert not (outside / "evil.txt").exists()
     _cleanup(link)
 
@@ -126,7 +124,5 @@ def test_confined_inside_operations_still_work(links) -> None:
     from nomadicos.tools.base import ToolContext
 
     ctx = ToolContext(user_id="u")
-    res = asyncio.run(tool.execute(
-        {"action": "write", "path": "ok.txt", "content": "fine"}, ctx
-    ))
+    res = asyncio.run(tool.execute({"action": "write", "path": "ok.txt", "content": "fine"}, ctx))
     assert res.success

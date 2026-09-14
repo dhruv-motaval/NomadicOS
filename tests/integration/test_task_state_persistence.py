@@ -1,5 +1,6 @@
-﻿"""STEP 4: persistence is authoritative. These tests exercise the REAL
+"""STEP 4: persistence is authoritative. These tests exercise the REAL
 PostgreSQL mirror of the lifecycle (skipped when the dev database is down)."""
+
 import asyncio
 import json
 import os
@@ -139,9 +140,7 @@ def test_runtime_and_db_agree_after_success(db, tmp_path) -> None:
     tid = asyncio.run(TaskRepository(db).create(USER, "success goal"))
     rt, sink = _runtime(db, [WRITE, '{"finished": true}'], tmp_path)
     ident = SubjectIdentity(user_id=USER, session_id="s", task_id=str(tid))
-    rep = asyncio.run(
-        rt.execute_task("Write d.txt please", ident, max_steps=4, state_sink=sink)
-    )
+    rep = asyncio.run(rt.execute_task("Write d.txt please", ident, max_steps=4, state_sink=sink))
     assert rep.status is TaskStatus.SUCCESS
     assert _row(db, tid) == "SUCCESS"  # runtime == DB: the STEP-2 bug, gone
     assert rep.status.value == _row(db, tid)
@@ -151,11 +150,29 @@ def test_runtime_and_db_agree_after_failure(db, tmp_path) -> None:
     tid = asyncio.run(TaskRepository(db).create(USER, "fail goal"))
     rt, sink = _runtime(db, ["not json"] * 6, tmp_path)
     ident = SubjectIdentity(user_id=USER, session_id="s", task_id=str(tid))
-    rep = asyncio.run(
-        rt.execute_task("Do the hopeless thing", ident, max_steps=2, state_sink=sink)
-    )
+    rep = asyncio.run(rt.execute_task("Do the hopeless thing", ident, max_steps=2, state_sink=sink))
     assert rep.status is TaskStatus.FAILED
     assert _row(db, tid) == "FAILED"
+
+
+def test_runtime_and_db_agree_after_controlled_tool_failure(db, tmp_path) -> None:
+    """PART H — Controlled tool failure through production runtime + PostgreSQL."""
+    fail_tool_call = json.dumps(
+        {
+            "tool": "filesystem",
+            "arguments": {"action": "read", "path": "missing_audit_target.txt"},
+            "finished": False,
+        }
+    )
+    tid = asyncio.run(TaskRepository(db).create(USER, "tool failure goal"))
+    rt, sink = _runtime(db, [fail_tool_call] * 6, tmp_path)
+    ident = SubjectIdentity(user_id=USER, session_id="s", task_id=str(tid))
+    rep = asyncio.run(rt.execute_task("Read missing file", ident, max_steps=2, state_sink=sink))
+    assert rep.status is TaskStatus.FAILED
+    assert _row(db, tid) == "FAILED"
+    assert any("file does not exist" in f for f in rep.failed)
+    # Verification never claimed on tool failure
+    assert len(rep.verification) == 0
 
 
 def test_duplicate_completion_lost_race_raises(db) -> None:
@@ -176,9 +193,7 @@ def test_reconcile_marks_interrupted_failed_keeps_blocked(db) -> None:
 
     parked = asyncio.run(repo.create(USER, "blocked goal"))
     asyncio.run(repo.advance_status(parked, TaskStatus.CREATED, TaskStatus.PLANNED))
-    asyncio.run(
-        repo.advance_status(parked, TaskStatus.PLANNED, TaskStatus.AUTHORIZED)
-    )
+    asyncio.run(repo.advance_status(parked, TaskStatus.PLANNED, TaskStatus.AUTHORIZED))
     asyncio.run(repo.advance_status(parked, TaskStatus.AUTHORIZED, TaskStatus.RUNNING))
     asyncio.run(repo.advance_status(parked, TaskStatus.RUNNING, TaskStatus.BLOCKED))
 
