@@ -173,3 +173,81 @@ def test_cli_parser_status_and_stop() -> None:
 
     assert build_parser().parse_args(["status"]).command == "status"
     assert build_parser().parse_args(["stop"]).command == "stop"
+
+
+# ------------------------------------------------------- observation feedback
+
+
+class _RecordingModel(FakeLocalModel):
+    """FakeLocalModel that keeps every prompt it was shown."""
+
+    def __init__(self) -> None:
+        super().__init__("fake/recording")
+        self.prompts: list[str] = []
+
+    async def generate(self, request: object) -> object:
+        self.prompts.append(str(getattr(request, "prompt", "")))
+        return await super().generate(request)  # type: ignore[misc]
+
+
+async def test_model_sees_execution_observations(tmp_path, identity) -> None:
+    """STEP 6A.5: the model's next proposal is informed by what the tools
+    actually produced — without it, proposals are blind and repair impossible."""
+    marker = "MARKER-FROM-READ-RESULT"
+    model = _RecordingModel()
+    model._responses = [
+        json.dumps(
+            {
+                "tool": "filesystem",
+                "arguments": {"action": "write", "path": "obs.txt", "content": marker},
+                "finished": False,
+            }
+        ),
+        json.dumps(
+            {
+                "tool": "filesystem",
+                "arguments": {"action": "read", "path": "obs.txt"},
+                "finished": False,
+            }
+        ),
+        json.dumps({"finished": True}),
+    ]
+    runtime = build_runtime(tmp_path, model)
+    report = await runtime.execute_task("Write then read obs.txt", identity, max_steps=3)
+    assert report.status is TaskStatus.SUCCESS
+    assert len(model.prompts) == 3
+    # after the write: observation present, but the big content payload is not echoed
+    assert "[OK]" in model.prompts[1] and "obs.txt" in model.prompts[1]
+    assert marker not in model.prompts[1]
+    # after the read: the ACTUAL file content (tool output) reached the model
+    assert marker in model.prompts[2]
+
+
+async def test_stuck_guard_refuses_third_identical_failure(tmp_path, identity) -> None:
+    """STEP 6A.5: a 30B model re-proposes just-failing commands verbatim; after
+    two identical failures the loop refuses to run it again and steers strategy.
+    The guard must live in the SYSTEM, not in prompt politeness."""
+    bad = json.dumps(
+        {
+            "tool": "filesystem",
+            "arguments": {"action": "read", "path": "ghost.txt"},
+            "finished": False,
+        }
+    )
+    alt = json.dumps(
+        {
+            "tool": "filesystem",
+            "arguments": {"action": "read", "path": "./ghost.txt"},
+            "finished": False,
+        }
+    )
+    model = _RecordingModel()
+    # bad and alt are the SAME action in different clothing (live runs showed
+    # the model paraphrasing evasions).
+    model._responses = [bad, alt, bad, alt, json.dumps({"reply": "stuck", "finished": True})]
+    runtime = build_runtime(tmp_path, model)
+    report = await runtime.execute_task("Read ghost.txt then finish", identity, max_steps=6)
+    # the third identical read must never EXECUTE: guard fires instead
+    assert any("STUCK GUARD" in p for p in model.prompts)
+    assert not report.completed  # the failing read never completed; finish has nothing to claim
+    assert report.status is not TaskStatus.SUCCESS

@@ -11,6 +11,7 @@ import asyncio
 import os
 import re
 import time
+from pathlib import Path
 from typing import Any
 
 from nomadicos.core.errors import ValidationError
@@ -72,6 +73,41 @@ CMD_BUILTINS = {
     "vol",
 }
 _SHELL_META = re.compile(r"[&|<>^%]")
+_TRAVERSAL = re.compile(r"\.\.([\\/]|$)|(^|[\\/])\.\.$")
+# drive-letter absolute path with a boundary (so "http://…" is not matched)
+_WIN_ABS = re.compile(r"(?<![A-Za-z])[A-Za-z]:[\\/][^\s\"']*")
+_POSIX_ABS = re.compile(r"(?<!\S)/\S+")
+
+
+def _reject_traversal(tok: str) -> None:
+    if _TRAVERSAL.search(str(tok)):
+        raise ValidationError(
+            "parent-directory ('..') path arguments are refused (workspace confinement)",
+            context={"reason": "filesystem confinement parity (BP §92)", "code": "PATH_TRAVERSAL"},
+        )
+
+
+def _reject_escaped_abs(tok: str, workspace_root: str | None) -> None:
+    """Absolute paths embedded in arguments must stay inside the workspace —
+    6A.5 caught `python -c "shutil.copy('../x','stolen')` style smuggling where
+    '..' was not adjacent to a separator boundary; the absolute-path arm of the
+    same confinement contract closes the direct-absolute variant."""
+    if not workspace_root:
+        return
+    root = Path(workspace_root).resolve()
+    candidates = _WIN_ABS.findall(str(tok))
+    if os.name != "nt":  # on Windows a leading '/' token is a cmd switch, not a path
+        candidates += _POSIX_ABS.findall(str(tok))
+    for raw in candidates:
+        try:
+            p = Path(raw).resolve()
+        except OSError:
+            continue
+        if p.is_absolute() and not p.is_relative_to(root) and root not in p.parents and p != root:
+            raise ValidationError(
+                f"absolute path outside the task workspace is refused: {raw}",
+                context={"reason": "workspace confinement (BP §92)", "code": "PATH_ESCAPE"},
+            )
 
 
 def build_command(arguments: dict[str, Any]) -> list[str]:
@@ -92,6 +128,10 @@ def build_command(arguments: dict[str, Any]) -> list[str]:
             },
         )
     args = [str(a) for a in arguments.get("args", [])]
+    # BP §92 parity with the filesystem tool: no command may address a path
+    # outside its (confined) working directory via parent-directory traversal.
+    for tok in [*tokens, *args]:
+        _reject_traversal(tok)
     if first in CMD_BUILTINS:
         for token in [*tokens, *args]:
             if _SHELL_META.search(token):
@@ -128,6 +168,8 @@ class TerminalTool(Tool):
         validate_against_schema(arguments, TERMINAL_SCHEMA)
         args = dict(arguments)
         build_command(args)  # structural check early (BP §194)
+        for tok in [str(args.get("command", "")), *[str(a) for a in args.get("args", [])]]:
+            _reject_escaped_abs(tok, self._workspace_root or args.get("working_dir"))
         if args.get("working_dir"):
             # STEP 6A contract parity: working_dir resolves against the task
             # workspace and cannot escape it — same rule as filesystem paths.

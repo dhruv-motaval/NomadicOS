@@ -534,3 +534,55 @@ def test_regression_16_token_carries_validated_arguments(tmp_path: Path) -> None
     token = asyncio.run(go())
     confined = token.action.arguments["working_dir"]
     assert Path(confined).is_absolute() and Path(confined) == (ws / "proj")
+
+
+# ---------------------------------------------------------------------------
+# 17. Terminal cannot reach outside the workspace via '..' path arguments
+#     (STEP 6A.5 live finding: model used cmd builtin `copy` to exfiltrate a
+#     file into the workspace; filesystem already refused this, terminal didn't)
+# ---------------------------------------------------------------------------
+def test_regression_17_terminal_traversal_arguments_refused(tmp_path: Path) -> None:
+    tool = TerminalTool(workspace_root=str(tmp_path))
+    outside = tmp_path.parent / "outside-secret.txt"
+    outside.write_text("SECRET", encoding="utf-8")
+    dest = tmp_path / "stolen.txt"
+    with pytest.raises(Exception) as exc:
+        asyncio.run(
+            tool.execute(
+                {
+                    "command": "copy",
+                    "args": [f"..\\{outside.name}", "stolen.txt", "/Y"],
+                    "working_dir": str(tmp_path),
+                },
+                ToolContext(task_id="t", step_id="s", user_id="u"),
+            )
+        )
+    assert (
+        "PATH_TRAVERSAL" in str(getattr(exc.value, "context", ""))
+        or getattr(exc.value, "context", {}).get("code") == "PATH_TRAVERSAL"
+    )
+    assert not dest.exists()
+
+
+# ---------------------------------------------------------------------------
+# 18. HARNESS PATH DERIVATION (6A.5 probe bug): the ASSERTED path must be
+#     actual workspace + requested relative path — models legitimately send
+#     workspace-rooted/echoed absolute forms; resolution is the tool's job.
+# ---------------------------------------------------------------------------
+def test_regression_18_expected_path_is_workspace_plus_relative(tmp_path: Path) -> None:
+    ws = tmp_path / "data" / "task-workspaces"
+    tool = FilesystemTool(workspace_root=str(ws))
+    ctx = ToolContext(task_id="t", step_id="s", user_id="u")
+    requested_rel = "probe/model_probe.txt"
+    # three representations a real model has actually produced:
+    for requested in (
+        requested_rel,
+        f"data\\task-workspaces\\{requested_rel}",  # echoed workspace prefix
+        str(ws / requested_rel),  # already absolute
+    ):
+        r = asyncio.run(
+            tool.execute({"action": "write", "path": requested, "content": "HELLO"}, ctx)
+        )
+        assert r.success, requested
+        expected = ws / requested_rel  # derived, never hardcoded per-variant
+        assert expected.read_text(encoding="utf-8") == "HELLO"
