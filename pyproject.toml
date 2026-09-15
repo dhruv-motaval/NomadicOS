@@ -1,7 +1,7 @@
 [project]
 name = "nomadicos"
-version = "0.1.0"
-description = "NomadicOS v0.1 — local-first autonomous AI operating environment (BP §368)"
+version = "0.2.0"
+description = "NomadicOS — local-first AI operating/orchestration environment (rebuild per master spec)"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }
@@ -9,15 +9,19 @@ dependencies = [
     "pydantic>=2.7",
     "PyYAML>=6.0",
     "httpx>=0.27",
-    "psycopg[binary]>=3.2",
+    "langgraph>=0.2",
+    "typer>=0.12",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
+    "psutil>=6.0",
 ]
 
 [project.scripts]
-nomadicos = "nomadicos.cli_interactive:main_entry"
+nomadicos = "nomadicos.cli.app:main_entry"
 
 [project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.2"]
+desktop = ["pyautogui>=0.9.54", "pillow>=10.3"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -25,6 +29,7 @@ dev = [
     "mypy>=1.10",
     "pre-commit>=3.7",
     "types-PyYAML",
+    "psycopg[binary]>=3.2",
 ]
 
 [build-system]
@@ -36,14 +41,14 @@ packages = ["src/nomadicos"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "tests"]
 asyncio_mode = "auto"
 addopts = "-q --basetemp=.tmp-pytest"
 markers = [
-    "hardware: requires real models/GPU/hardware — excluded from shared CI (ADR-0024)",
-    "security: security invariant tests — a regression must fail CI (BP §294)",
+    "hardware: requires real local models / GPU / desktop hardware (run from the owner's machine)",
+    "security: authority and completion-integrity invariant tests",
     "slow: long-running tests",
-    "integration: requires external services such as PostgreSQL (ADR-0009)",
+    "integration: requires external services such as PostgreSQL",
 ]
 
 [tool.ruff]
@@ -62,7 +67,5 @@ no_implicit_optional = true
 check_untyped_defs = true
 
 [[tool.mypy.overrides]]
-# Optional hardware / ML dependencies (ADR-0004 vision, ADR-0006 inference):
-# absent in the type-check environment, guarded by try/except at runtime.
-module = ["pyautogui", "PIL", "PIL.*", "transformers", "transformers.*"]
+module = ["pyautogui", "PIL", "PIL.*", "psutil"]
 ignore_missing_imports = true

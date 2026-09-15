@@ -8,8 +8,8 @@ repos:
   - repo: local
     hooks:
       - id: security-tests
-        name: security tests (BP §294)
-        entry: pytest tests/security -m "security or not security" -q
+        name: security invariants (SPEC §56)
+        entry: pytest tests/security -q
         language: system
         pass_filenames: false
         stages: [pre-push]

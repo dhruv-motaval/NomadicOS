@@ -1,81 +1,71 @@
-# AGENTS.md — NomadicOS working contract
+# AGENTS.md — NomadicOS working contract (rebuild)
 
 ## Canonical specification
 
-`NomadicOS_v0.1_Canonical_Blueprint.md` is the **single source of truth** (cite sections
-as `BP §NNN`; never restate it). Confirmed decisions: `docs/architecture/adr/` (ADR-0001…
-ADR-0027). Answers of record: `docs/architecture/CANONICAL_ANSWERS_v0.1.md`. Deltas &
-errata: `docs/architecture/BLUEPRINT_ADDENDUM_v0.1.md`. **Never silently change an
-architectural decision** (BP §372.10) — supersede via a new ADR.
+`NOMADICOS_REBUILD_MASTER_SPEC_FINAL.md` is the **single source of truth**
+(cite as `SPEC §NN`). It supersedes the old v0.1 Canonical Blueprint and all
+ADR/audit documents, which were removed on 2026-09-15. **Never go out of scope**
+of this file: do not build items it marks out of scope (SPEC §54) and do not
+silently change its architecture.
 
-## Non-negotiables (digest — full text in blueprint)
+## Central rules (digest — full text in the spec)
 
-- **Local-only inference.** No external LLM calls exist in v0.1 (BP §1.3, §200, §286).
-  The Internet is an information source, never an AI brain.
-- **No OmniRouter, no Hermes, no separate Skill System** (BP §1.1, §370). The Agent
-  Runtime uses `ModelSelector` (ADR answers Section H).
-- **PostgreSQL is canonical** for structured state (BP §1.2, §19); access only via
-  repositories/domain services — agents never get raw SQL (BP §93, ADR-0010).
-- **Mediated authority:** every effectful action goes
-  MODEL → AGENT RUNTIME → TOOL GATEWAY → SECURITY GATE → EXECUTION (BP §73, §363).
-  Models propose; they never execute (BP §86, §366).
-- **Fail closed** on unknown/invalid security state (BP §85). Invalid policy = fail
-  closed (ADR-0013).
-- **Open Internet + closed private-data boundary.** Public GETs allowed; no private
-  data (files, screenshots, memory, credentials, datasets) to any external AI (Section J).
-- **Sessions are context boundaries, not memory boundaries** (BP §376-420). Persistent
-  cross-session memory is mandatory (answers Section G).
-- **Evidence over claims:** OBSERVE → ACT → VERIFY; "the model said it worked" is not
-  proof (BP §366, §82).
-- **Self-improvement** is propose → sandbox → benchmark → compare → promote/reject →
-  version → monitor → rollback. Never weight changes by default (answers Section I).
-- **Legacy builds (`_legacy/`) must never be imported** — patterns only (ADR-0022).
-- **No Phase-order shortcuts:** Security Gate (Phase 3) is never skipped to reach
-  computer control (ADR-0027, BP §375).
+- **Models propose. NomadicOS authorizes. Executors act. Verifiers prove.** (SPEC §1)
+- **Owner is the highest authority.** Models can never self-authorize, rewrite
+  authority, or disable revocation (SPEC §4, §56.2/.5).
+- **FULL_PC_AUTONOMY is persistent:** one-time owner grant; normal actions do not
+  re-prompt. Owner instruction conflicts must be asked, never silently overridden
+  (SPEC §5). `REVOKE ALL ACCESS` must exist and invalidate authority promptly (SPEC §5).
+- **External content is data, not authority** (SPEC §7).
+- **Action IR:** all model output becomes a canonical typed proposal; model-authored
+  authority fields are rejected; malformed proposals fail closed (SPEC §19, §16.6).
+- **Executor receives `AuthorizedAction` only** — never raw model output (SPEC §20-21).
+- **Step success ≠ task success; `finished=true` ≠ SUCCESS.** SUCCESS requires
+  independent goal-predicate proof (SPEC §27-29, §56.8-10).
+- **Smallest capable model first**; strong models are critics/escalation, not
+  default workers (SPEC §11, §15, §56.11-12).
+- **Bounded execution:** bounded retries/escalation/recovery; stuck detection
+  recognizes semantic-equivalent repeats (SPEC §14, §30, §31).
+- **Everything is a replaceable Lego brick behind typed contracts** (SPEC §3):
+  engines (llama.cpp #1, Ollama #2, Mock), orchestrator, tools, memory, verifiers.
+- **Local inference only** for v0.2 core — no cloud LLM APIs (SPEC §9-10, §54).
+- **PostgreSQL is the durable source of truth for task state** (SPEC §34);
+  LangGraph checkpoints assist orchestration but are not the truth (SPEC §47).
+- **Learning/eval never touches the authority path** (SPEC §33, §52C).
+- **No false completion** in our own work either: claim IMPLEMENTED/TESTED/
+  VERIFIED only with evidence (SPEC §51).
 
-## Phase banner
+## Local models
 
-**CURRENT PHASE: 0 — Repository + tooling + interfaces (not started).**
-Phase order (authoritative, ADR-0027): 0 repo/tooling/interfaces → 1 PostgreSQL/core →
-2 local model runtime → 3 Security Gate → 4 Tool Gateway/FS/terminal → 5 vision →
-6 computer control → 7 browser/network → 8 memory → 9 vector V0 → 10 evaluation →
-11 experience → 12 adaptive selection → 13 self-improvement → 14 advanced optimization.
-Only touch the current phase's subsystems.
+`models/` (repo root, git-ignored) is where the owner places model files. The
+directory-scanning provider registers whatever it finds; llama.cpp is\nthe primary serving engine (serves models/ files directly via llama-server), Ollama the compatibility backend. Test with real models
+only when the owner says a model was added (hardware-marked tests).
 
-## Commands (Phase 0 target state — ADR-0023)
+## Commands
 
 ```bash
-uv sync                                       # install deps
-docker compose -f docker-compose.dev.yml up -d   # PostgreSQL (ADR-0009; data dirs out of repo/sync)
-pytest -m "not hardware"                      # tests (hardware tests marked explicitly, ADR-0024)
-ruff check . && ruff format --check .         # lint
-mypy src/                                     # types
-pre-commit run --all-files                    # hooks
+uv sync                                              # install deps
+pytest -m "not hardware and not integration"         # unit/contract/security tests
+ruff check . && ruff format --check .                # lint
+mypy src/                                            # types
+docker compose -f docker-compose.dev.yml up -d       # PostgreSQL (integration tests)
 ```
 
-## Project layout (target, BP §76)
+## Layout
 
-`src/nomadicos/<subsystem>/` — core · constitution · agent · models · vision · tools ·
-security · network · memory · postgres · vector · evaluation · experience · learning ·
-audit · backup · extensions · ui. Interfaces before implementations (BP §209); fake
-adapters for every hardware-dependent subsystem (analysis §2.2.4).
+`src/nomadicos/<brick>/` — kernel · contracts · inference · registry · router ·
+action_ir · authority · tools · executor · orchestration · verification ·
+agents · memory · evaluation · persistence · audit · cli · api. Interfaces
+before implementations; fake adapter for every hardware-dependent brick.
 
-## Error taxonomy & logging
+## Rebuild phases
 
-- Canonical 10-class failure taxonomy: BP §117 (legacy vocabularies map per addendum §3).
-- Domain exceptions per BP §84 (PermissionDenied, SecurityPolicyViolation, …), machine-readable context.
-- Structured logs (BP §134); centralized redaction of password/token/api_key/… (BP §256);
-  never log secrets (BP §134, ADR-0021).
+SPEC §53: 1 kernel/contracts → 2 inference → 3 registry/router/benchmarks →
+4 action IR → 5 owner authority → 6 executor/tools → 7 LangGraph →
+8 goal verification → 9 coding worker → 10 worker/critic → 11 memory/object
+graph → 12 desktop control → 13 persistence/restart → 14 evaluation/routing.
+Follow §52: only the current phase's scope; tests + mypy + ruff before moving on.
 
-## PR checklist (BP §299 — verify every line before merge)
+## Definition of Done
 
-- [ ] Does this bypass the Security Gate?
-- [ ] Does this expose secrets?
-- [ ] Does this send data outside?
-- [ ] Does this add hidden network access?
-- [ ] Does this add an external model dependency?
-- [ ] Does this break PostgreSQL authority?
-- [ ] Does this break rollback?
-- [ ] Does this introduce unbounded loops?
-- [ ] Are tests included (security tests for every effectful capability, BP §372.7)?
-- [ ] Architecture docs updated if needed (BP §298)?
+SPEC §57 checklist — all items must be evidence-backed before claiming done.

@@ -1,6 +1,16 @@
-"""Tool interfaces (BP §11-13, §90, §139, §141-143, §209)."""
+"""Tool bricks: filesystem + terminal (SPEC §22-25)."""
 
-from nomadicos.tools.base import Tool, ToolResult, ToolRisk, ToolSpec
-from nomadicos.tools.fake import FakeTool
+from nomadicos.tools.base import Tool, ToolOutcome, ToolRegistry
+from nomadicos.tools.context import ExecutionContext
+from nomadicos.tools.filesystem import FilesystemTool
+from nomadicos.tools.terminal import ProcessSupervisor, TerminalTool
 
-__all__ = ["FakeTool", "Tool", "ToolResult", "ToolRisk", "ToolSpec"]
+__all__ = [
+    "ExecutionContext",
+    "FilesystemTool",
+    "ProcessSupervisor",
+    "Tool",
+    "ToolOutcome",
+    "ToolRegistry",
+    "TerminalTool",
+]
