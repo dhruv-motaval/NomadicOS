@@ -1,6 +1,0 @@
-node_modules
-dist
-.vercel
-.DS_Store
-*.local
-npm-debug.log*
