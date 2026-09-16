@@ -47,3 +47,4 @@ Desktop.ini
 
 # pytest local basetemp (Windows ACL workaround)
 .tmp-pytest/
+portfolio/
