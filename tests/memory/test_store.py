@@ -130,6 +130,69 @@ def test_object_and_relation_caps(tmp_path: Path) -> None:
     assert [r.id for r in store.relations()] == ["rel_1", "rel_2"]
 
 
+def test_upsert_replaces_value_without_moving_insertion_order(tmp_path: Path) -> None:
+    """Upsert semantics: replace in place. FIFO 'oldest' stays INSERTION
+    order — an updated object/relation/record does NOT become recent."""
+    store = store_at(tmp_path)
+    store.upsert_object(ObjectRecord(id="model:a", type="model"))
+    store.upsert_object(ObjectRecord(id="model:b", type="model"))
+    replaced = store.upsert_object(
+        ObjectRecord(id="model:a", type="model", properties={"v": 2})
+    )
+    assert replaced.properties == {"v": 2}
+    assert [o.id for o in store.objects()] == ["model:a", "model:b"]  # position kept
+    store.upsert_relation(RelationRecord(id="rel_0", source="x", relation="runs", target="y"))
+    store.upsert_relation(
+        RelationRecord(id="rel_1", source="x", relation="runs", target="y", properties={"v": 2})
+    )
+    store.upsert_relation(
+        RelationRecord(id="rel_0", source="x", relation="runs", target="y", properties={"v": 9})
+    )
+    assert [r.id for r in store.relations()] == ["rel_0", "rel_1"]  # order unchanged
+    assert store.relations()[0].properties == {"v": 9}  # rel_0 replaced in place
+    assert store.relations()[1].properties == {"v": 2}
+    store.write(rec("mem_r1", MemoryKind.SEMANTIC, "first"))
+    store.write(rec("mem_r1", MemoryKind.SEMANTIC, "replaced content"))
+    records = store.records(MemoryKind.SEMANTIC)
+    assert [r.id for r in records] == ["mem_r1"]  # id-keyed replace, not duplicate
+    assert records[0].content == "replaced content"
+
+
+def test_fifo_eviction_uses_insertion_order_after_upsert(tmp_path: Path) -> None:
+    """An upserted (updated) entry does NOT become 'newest': eviction still
+    drops the original insertion-order head. This is intended FIFO."""
+    store = store_at(tmp_path, max_records_per_kind=2)
+    store.upsert_object(ObjectRecord(id="obj:a", type="model"))
+    store.upsert_object(ObjectRecord(id="obj:b", type="model"))
+    store.upsert_object(ObjectRecord(id="obj:a", type="model", properties={"v": 2}))
+    store.upsert_object(ObjectRecord(id="obj:c", type="model"))
+    assert [o.id for o in store.objects()] == ["obj:b", "obj:c"]  # refreshed "a" evicted
+    store.upsert_relation(
+        RelationRecord(id="rel_1", source="s", relation="uses", target="t")
+    )
+    store.upsert_relation(
+        RelationRecord(id="rel_2", source="s", relation="uses", target="t")
+    )
+    store.upsert_relation(
+        RelationRecord(id="rel_1", source="s", relation="runs", target="t")
+    )
+    store.upsert_relation(
+        RelationRecord(id="rel_3", source="s", relation="uses", target="t")
+    )
+    assert [r.id for r in store.relations()] == ["rel_2", "rel_3"]
+
+
+def test_fifo_after_upsert_deterministic_across_reload(tmp_path: Path) -> None:
+    store = store_at(tmp_path, max_records_per_kind=2)
+    store.upsert_relation(RelationRecord(id="rel_1", source="s", relation="uses", target="t"))
+    store.upsert_relation(RelationRecord(id="rel_2", source="s", relation="uses", target="t"))
+    store.upsert_relation(RelationRecord(id="rel_1", source="s", relation="uses", target="t2"))
+    store.upsert_relation(RelationRecord(id="rel_3", source="s", relation="runs", target="t"))
+    reloaded = store_at(tmp_path, max_records_per_kind=2)
+    assert [r.id for r in reloaded.relations()] == ["rel_2", "rel_3"]
+    assert [r.id for r in reloaded.neighbors("s", relation="runs")] == ["rel_3"]
+
+
 # ------------------------------------------------------- corruption -------
 
 
