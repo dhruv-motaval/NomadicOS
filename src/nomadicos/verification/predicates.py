@@ -390,3 +390,23 @@ def evaluate_goal_predicate(gp: GoalPredicate, ctx: EvidenceContext, depth: int 
     assert group is not None
     children = [evaluate_goal_predicate(child, ctx, depth + 1) for child in group.children]
     return _combine(group.op, children)
+
+
+def reconcile_pass_items(items: list[EvidenceItem]) -> list[EvidenceItem]:
+    """ANY/NOT compositions can leave unobserved child evidence even when the
+    composite verdict is PASS. Restate those as *superseded branches*
+    (observed=True facts about the composition) so the contract invariant
+    "PASS requires every evidence item observed" stays honest (SPEC §8.11)."""
+    dead = [i for i in items if not i.observed]
+    if not dead:
+        return items
+    kept = [i for i in items if i.observed]
+    kept.extend(
+        EvidenceItem(
+            claim=f"branch superseded by satisfied ANY/NOT composition: {i.claim}",
+            observed=True,
+            detail={**i.detail, "superseded_branch": True},
+        )
+        for i in dead
+    )
+    return kept

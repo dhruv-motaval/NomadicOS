@@ -34,11 +34,16 @@ from langgraph.types import interrupt
 
 from nomadicos.action_ir.parser import parse_model_output
 from nomadicos.action_ir.validation import ValidationContext
+from nomadicos.agents.critic import CriticRequest, critic_feedback_lines, implementation_revision
 from nomadicos.authority.conflicts import OwnerConflictRequest
 from nomadicos.contracts.action import ActionProposal, CapabilityRef
 from nomadicos.contracts.core import FailureRecord, Goal, Plan, TaskStatus
 from nomadicos.contracts.execution import Observation, ObservationKind
-from nomadicos.contracts.verification import VerificationOutcome
+from nomadicos.contracts.verification import (
+    CriticDecision,
+    VerificationLevel,
+    VerificationOutcome,
+)
 from nomadicos.inference.base import ChatMessage, GenerationRequest
 from nomadicos.kernel.errors import (
     ActionFailed,
@@ -112,6 +117,7 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
             "model_id": None,
             "tried_models": [],
             "last_failure": None,
+            "critic_feedback": None,
         }
 
     async def classify(state: TaskState) -> dict[str, Any]:
@@ -159,13 +165,19 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
                     result=chosen.model_id,
                 )
         except (BudgetExhausted, ResourceUnavailable) as exc:
+            # HOTFIX: routing exhaustion ≠ task failure. Record a typed
+            # failure, mark exhaustion, KEEP all accumulated evidence; if
+            # executions exist, route_select sends the graph to VERIFY_GOAL
+            # so the (unchanged) verifier decides the outcome (SPEC §8.11:
+            # SUCCESS remains verifier-only).
             f = make_failure(
-                state, Failure.RESOURCE_UNAVAILABLE, f"no routable model: {exc.message}"
+                state, Failure.RESOURCE_UNAVAILABLE, f"model routing exhausted: {exc.message}"
             )
             return {
                 "failures": [f],
                 "last_failure": f.model_dump(mode="json"),
-                "task_status": TaskStatus.FAILED,
+                "model_id": None,
+                "model_exhausted": True,
                 "outcome_note": f"no routable model: {exc.message}"[:200],
             }
         return {"model_id": chosen.model_id}
@@ -485,6 +497,12 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
         update.update({"failures": [f], "last_failure": f.model_dump(mode="json")})
         return update
 
+    def _last_goal_pass(state: TaskState) -> bool:
+        for v in reversed(state.get("verifications") or []):
+            if v.level is VerificationLevel.GOAL:
+                return v.verdict is VerificationOutcome.PASS
+        return False
+
     async def advance(state: TaskState) -> dict[str, Any]:
         steps = state.get("plan") or []
         idx = min(state.get("current_step", 0) + 1, max(len(steps) - 1, 0))
@@ -494,6 +512,8 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
             "completion_claim": False,
             "tried_models": [],
             "last_failure": None,
+            "model_exhausted": False,
+            "critic_feedback": None,
         }
 
     async def recovery(state: TaskState) -> dict[str, Any]:
@@ -551,10 +571,134 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
         )
         return {}
 
+    # ------------------------------------------------------- critique node
+
+    def _critic_no_progress(iterations: list[dict], revision: str) -> bool:
+        # the previous evaluation already covered THIS exact implementation
+        # revision and the worker changed nothing since -> re-evaluating is
+        # wasted inference (SPEC §10.20): terminate the loop.
+        return bool(iterations) and iterations[-1].get("implementation_revision") == revision
+
+    async def critique(state: TaskState) -> dict[str, Any]:
+        critic = runtime.critic
+        iterations = list(state.get("critic_iterations") or [])
+        executions = list(state.get("executions") or [])
+        revision = implementation_revision(executions)
+        budget = cfg.budget.max_critic_iterations
+        if critic is None:
+            return {}
+        if len(iterations) >= budget or _critic_no_progress(iterations, revision):
+            note = (
+                "critic iteration budget exhausted"
+                if len(iterations) >= budget
+                else "critic loop stuck: unchanged implementation, unchanged evaluation"
+            )
+            rec = {
+                "iteration": len(iterations) + 1,
+                "decision": CriticDecision.NOT_EVALUATED.value,
+                "note": note,
+                "implementation_revision": revision,
+                "at": datetime.now(UTC).isoformat(),
+            }
+            log.log(
+                EventType.CRITIC_REVIEWED,
+                task_id=state["task_id"],
+                result="BLOCKED",
+                payload={"why": note},
+            )
+            return {
+                "critic_iterations": [rec],
+                "task_status": TaskStatus.BLOCKED,
+                "outcome_note": note[:200],
+            }
+        test_execs = [e for e in executions[-8:] if e.tool == "terminal"]
+        request = CriticRequest(
+            task_id=state["task_id"],
+            goal=state["goal"],
+            iteration=len(iterations) + 1,
+            implementation_revision=revision,
+            changes=[
+                {
+                    "tool": e.tool,
+                    "op": e.operation,
+                    "path": e.evidence.get("path"),
+                    "sha256": str(e.evidence.get("sha256", ""))[:12],
+                    "status": e.status.value,
+                }
+                for e in executions[-12:]
+                if e.evidence.get("path") or e.tool == "filesystem"
+            ],
+            test_results=[
+                {
+                    "command": e.evidence.get("command"),
+                    "exit_code": e.exit_code,
+                    "stdout_tail": e.stdout[-300:],
+                    "stderr_tail": e.stderr[-200:],
+                }
+                for e in test_execs
+            ],
+            verifications=[
+                {"id": v.id, "level": v.level.value, "verdict": v.verdict.value, "why": v.why(2)}
+                for v in (state.get("verifications") or [])[-4:]
+            ],
+            failures=[f.model_dump(mode="json") for f in (state.get("failures") or [])][-4:],
+            previous_feedback=state.get("critic_feedback"),
+            tests_passed=(bool(test_execs[-1].succeeded) if test_execs else None),
+            goal_verified=_last_goal_pass(state),
+        )
+        result = await critic.evaluate(request)
+        record = dict(result.iteration_record())
+        record["iteration"] = request.iteration
+        record["implementation_revision"] = revision
+        record["at"] = datetime.now(UTC).isoformat()
+        log.log(
+            EventType.CRITIC_REVIEWED,
+            task_id=state["task_id"],
+            model_id=record.get("model_id"),
+            capability=f"critic.{record.get('decision')}",
+            result=record.get("decision"),
+            payload={
+                "iteration": request.iteration,
+                "score": record.get("score"),
+                "report_id": record.get("report_id"),
+                "revision": revision,
+                "suppressed": record.get("accept_suppressed"),
+            },
+        )
+
+        update: dict[str, Any] = {"critic_iterations": [record], "attempt": 1}
+        if result.decision is CriticDecision.IMPROVE and result.report is not None:
+            rep = result.report
+            update["critic_feedback"] = {
+                "decision": rep.decision.value,
+                "score": rep.score,
+                "critical_issues": rep.critical_issues,
+                "major_issues": rep.major_issues,
+                "minor_issues": rep.minor_issues,
+                "suggestions": rep.suggestions,
+                "required_tests": rep.required_tests,
+                "suppressed": rep.accept_suppressed,
+                "for_revision": revision,
+                "evaluation_id": rep.id,
+            }
+        if result.decision is CriticDecision.REJECT:
+            issues = result.report.critical_issues if result.report else []
+            update["task_status"] = TaskStatus.BLOCKED
+            update["outcome_note"] = ("critic REJECT: " + ("; ".join(issues) or "critical defect"))[
+                :200
+            ]
+        return update
+
     # ------------------------------------------------------------- routers
 
     def route_select(state: TaskState) -> str:
-        return "propose" if state.get("model_id") else "failed"
+        if state.get("model_id"):
+            return "propose"
+        # exhausted: give the collected evidence to the verifier when there
+        # is any; only the FAILING-WITHOUT-EVIDENCE case stays terminal
+        if state.get("executions"):
+            return "verify_goal"
+        return "failed"
 
     def route_propose(state: TaskState) -> str:
         if state.get("completion_claim"):
@@ -612,16 +756,44 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
             return "blocked"
         return "select_model"
 
+    def _continue_after_ok(state: TaskState) -> str:
+        steps_ok = state.get("plan") or []
+        if state.get("current_step", 0) + 1 < len(steps_ok):
+            return "advance"
+        return "verify_goal"
+
+    def route_critique(state: TaskState) -> str:
+        if state.get("task_status") == TaskStatus.BLOCKED:
+            return "blocked"
+        iters = state.get("critic_iterations") or []
+        decision = str(iters[-1].get("decision")) if iters else ""
+        if decision == CriticDecision.IMPROVE.value and state.get("critic_feedback"):
+            return "propose"
+        if decision == CriticDecision.ACCEPT.value:
+            return _continue_after_ok(state)
+        if decision == CriticDecision.REJECT.value:
+            return "blocked"
+        return "partial_end" if _last_goal_verdict_is(state, "NOT_VERIFIED") else "recovery"
+
+    def _last_goal_verdict_is(state: TaskState, verdict: str) -> bool:
+        for v in reversed(state.get("verifications") or []):
+            if v.level is VerificationLevel.GOAL:
+                return v.verdict.value == verdict
+        return False
+
     def route_verify_goal(state: TaskState) -> str:
         status = state.get("task_status")
         if status == TaskStatus.SUCCESS:
             return "success_end"
-        if status == TaskStatus.PARTIAL:
-            return "partial_end"
         if status == TaskStatus.BLOCKED:
             return "goal_blocked"
         lf = state.get("last_failure") or {}
-        if lf.get("category") == Failure.GOAL_NOT_SATISFIED.value:
+        goal_failed = lf.get("category") == Failure.GOAL_NOT_SATISFIED.value
+        if runtime.critic is not None and (status == TaskStatus.PARTIAL or goal_failed):
+            return "critique"
+        if status == TaskStatus.PARTIAL:
+            return "partial_end"
+        if goal_failed:
             return "recovery"
         return "partial_end"
 
@@ -641,6 +813,7 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
         "observe": observe,
         "verify_step": verify_step,
         "verify_goal": verify_goal,
+        "critique": critique,
         "advance": advance,
         "recovery": recovery,
         "blocked": blocked,
@@ -655,7 +828,9 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
     builder.add_edge("classify", "plan")
     builder.add_edge("plan", "select_model")
     builder.add_conditional_edges(
-        "select_model", route_select, {"propose": "propose", "failed": "failed"}
+        "select_model",
+        route_select,
+        {"propose": "propose", "verify_goal": "verify_goal", "failed": "failed"},
     )
     builder.add_conditional_edges(
         "propose",
@@ -713,6 +888,18 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
             "recovery": "recovery",
         },
     )
+    builder.add_conditional_edges(
+        "critique",
+        route_critique,
+        {
+            "propose": "propose",
+            "advance": "advance",
+            "verify_goal": "verify_goal",
+            "recovery": "recovery",
+            "blocked": "blocked",
+            "record_partial": "record_partial",
+        },
+    )
     builder.add_edge("advance", "select_model")
     builder.add_conditional_edges(
         "recovery",
@@ -730,6 +917,7 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
             "partial_end": "record_partial",
             "recovery": "recovery",
             "goal_blocked": "blocked",
+            "critique": "critique",
         },
     )
     builder.add_edge("record_partial", END)
@@ -782,6 +970,7 @@ def _build_request(
             if fail_lines
             else ""
         )
+        + critic_feedback_lines(state.get("critic_feedback"))
         + "Propose exactly one next action."
     )
     return GenerationRequest(

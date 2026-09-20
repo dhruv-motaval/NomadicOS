@@ -108,26 +108,40 @@ class VerificationResult(Contract):
 class CriticDecision(StrEnum):
     ACCEPT = "ACCEPT"
     IMPROVE = "IMPROVE"
-    REJECT = "REJECT"
+    REJECT = "REJECT"  # BLOCK semantics: critical defect prevents acceptance
+    #: critic model unavailable / output unparseable: NOT a positive result,
+    #: never an ACCEPT (SPEC §10.11, §10.26)
+    NOT_EVALUATED = "NOT_EVALUATED"
 
 
 class CriticReport(Contract):
-    """Structured critic output (SPEC §16). A bare score is not accepted."""
+    """Structured critic output (SPEC §16, §10.2). A bare score is not accepted.
+
+    ``tests_passed``/``goal_verified`` are SYSTEM-recorded evidence flags
+    injected by the evaluation harness from real executions/verifications -
+    the critic model cannot set them (they are forbidden in model output),
+    and ``ACCEPT`` is constructible only with both True (SPEC §16 acceptance
+    rule: score + tests + goal + no critical defects).
+    """
 
     id: str = Field(default_factory=lambda: new_id("critic"))
     model_id: str
     task_id: str
     iteration: int = 1
     decision: CriticDecision
-    score: float = Field(ge=0.0, le=10.0)
+    score: float | None = Field(default=None, ge=0.0, le=10.0)
     critical_issues: list[str] = Field(default_factory=list)
     major_issues: list[str] = Field(default_factory=list)
     minor_issues: list[str] = Field(default_factory=list)
     suggestions: list[str] = Field(default_factory=list)
     required_tests: list[str] = Field(default_factory=list)
+    #: references to actual evidence (execution/verification ids, paths)
+    evidence_refs: list[str] = Field(default_factory=list)
     #: Engineering evidence the critic actually observed: tests run/passed etc.
     tests_passed: bool | None = None
     goal_verified: bool | None = None
+    #: true when the model claimed ACCEPT but system evidence suppressed it
+    accept_suppressed: bool = False
 
     @model_validator(mode="after")
     def _accept_requires_evidence(self) -> CriticReport:
@@ -136,6 +150,8 @@ class CriticReport(Contract):
                 raise ValueError("ACCEPT with critical issues violates SPEC §16")
             if self.tests_passed is not True or self.goal_verified is not True:
                 raise ValueError("acceptance requires tests passing AND goal verified (SPEC §16)")
+        if self.decision is CriticDecision.NOT_EVALUATED and self.score is not None:
+            raise ValueError("NOT_EVALUATED must not carry a score (SPEC §10.11)")
         return self
 
     def summary(self) -> dict[str, Any]:

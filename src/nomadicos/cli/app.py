@@ -184,6 +184,14 @@ def _render_run(summary) -> None:
         typer.echo(f"GOAL:   {summary.goal_verdict} (verifier={summary.goal_verifier})")
         for line in summary.goal_why:
             typer.echo(f"        - {line}")
+    # Critic transcript: evaluative only. SUCCESS is never reported here -
+    # only the STATUS/GOAL lines above carry completion meaning (SPEC §10.34).
+    for it in summary.critic_iterations[-3:]:
+        mark = " (ACCEPT suppressed: evidence rule)" if it.get("accept_suppressed") else ""
+        typer.echo(
+            f"CRITIC: {it.get('decision')} score={it.get('score')} "
+            f"model={it.get('model_id')} iteration={it.get('iteration')}{mark}"
+        )
     typer.echo(
         f"TASK:   {summary.task_id} model={summary.model_id} "
         f"execs={summary.executions} recoveries={summary.recoveries}"
@@ -229,6 +237,9 @@ def code(
     require_contains: list[str] = typer.Option(  # noqa: B008
         None, "--require-contains", help="path:substring completion predicate"
     ),
+    critic: str = typer.Option(  # noqa: B008
+        "", "--critic", help="Ollama-registered model id used for the CRITIC role (evaluation only)"
+    ),
 ) -> None:
     """Run a CODING task through the CodingWorker on the standard graph."""
     from nomadicos.orchestration.app import NomadicApp
@@ -266,6 +277,7 @@ def code(
                 require_files=list(require_file or []),
                 require_content=content_needles,
                 ask_owner=ask,
+                critic_model=critic or None,
             )
             if summary.waiting_owner():
                 report = None

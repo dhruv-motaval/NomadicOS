@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from nomadicos.agents.base import Worker, WorkerReport
+from nomadicos.agents.critic import critic_feedback_lines
 from nomadicos.agents.inspect import RepoInspector
 from nomadicos.contracts.core import Goal
 from nomadicos.contracts.execution import ExecutionResult
@@ -124,6 +125,7 @@ def coding_context_builder(
             + ("\nRECENT FAILURES:\n" + fail_block if fail_block else "")
             + "\nREPAIR GUIDANCE (system-derived, not model prose):\n"
             + (_repair_guidance(state) or "- (none; proceed with the requested change)")
+            + critic_feedback_lines(state.get("critic_feedback"))
             + "\nPropose exactly one next action."
         )
         return GenerationRequest(

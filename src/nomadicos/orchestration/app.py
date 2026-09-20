@@ -53,6 +53,8 @@ class RunSummary:
     goal_verdict: str | None = None
     goal_why: list[str] = field(default_factory=list)
     goal_verifier: str | None = None
+    critic_iterations: list[dict[str, Any]] = field(default_factory=list)
+    critic_feedback_present: bool = False
     last_observations: list[str] = field(default_factory=list)
     failures: list[dict[str, Any]] = field(default_factory=list)
 
@@ -217,6 +219,7 @@ class NomadicApp:
         task_id: str | None = None,
         ask_owner: Any = None,
         predicates: list[dict[str, Any]] | None = None,
+        critic_model: str | None = None,
     ):
         """Coding task on the SAME task graph (SPEC §9.24).
 
@@ -263,6 +266,7 @@ class NomadicApp:
             r.workspace_per_task,
             r.step_verifier,
             r.goal_verifier,
+            r.critic,
         )
         instruction_ids: list[str] = []
         try:
@@ -272,6 +276,17 @@ class NomadicApp:
             r.workspace_per_task = False
             r.step_verifier = PredicateStepVerifier(repo_root, per_task=False)
             r.goal_verifier = PredicateGoalVerifier(repo_root, per_task=False)
+            if critic_model:
+                from nomadicos.agents.critic import ModelCritic
+
+                try:
+                    base = self.registry.get(critic_model)
+                    self.registry.register(
+                        base.model_copy(update={"roles": ["critic", "reasoning"]})
+                    )
+                except Exception:
+                    pass  # unknown id: ModelCritic reports "no critic model" honestly
+                r.critic = ModelCritic(self.registry, self.selector, r.engine_for)
             for test_file in survey.test_files[:24]:
                 ins = self.store.add_instruction(
                     f"test file - editing it requires owner approval: {test_file}", test_file
@@ -308,6 +323,7 @@ class NomadicApp:
                 r.workspace_per_task,
                 r.step_verifier,
                 r.goal_verifier,
+                r.critic,
             ) = saved
 
     # ---------------------------------------------------------- summary ---
@@ -334,6 +350,8 @@ class NomadicApp:
             goal_verdict=goal_verdict,
             goal_why=goal_why,
             goal_verifier=goal_verifier,
+            critic_iterations=[dict(i) for i in (state.get("critic_iterations") or [])][-6:],
+            critic_feedback_present=state.get("critic_feedback") is not None,
             last_observations=[o.summary for o in (state.get("observations") or [])[-3:]],
             failures=[f.model_dump(mode="json") for f in (state.get("failures") or [])][-3:],
         )

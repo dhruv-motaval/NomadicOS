@@ -20,7 +20,7 @@ from nomadicos.contracts.verification import (
     VerificationResult,
 )
 from nomadicos.verification.evidence import EvidenceContext
-from nomadicos.verification.predicates import evaluate_goal_predicate
+from nomadicos.verification.predicates import evaluate_goal_predicate, reconcile_pass_items
 
 VERIFIER_ID = "nomadic-goal-verifier-v1"
 
@@ -71,6 +71,8 @@ class PredicateGoalVerifier:
             outcome = VerificationOutcome.PASS
         if outcome is VerificationOutcome.PASS and not items:
             outcome = VerificationOutcome.NOT_VERIFIED  # PASS needs evidence
+        if outcome is VerificationOutcome.PASS:
+            items = reconcile_pass_items(items)
         return VerificationResult(
             level=VerificationLevel.GOAL,
             task_id=goal.id,

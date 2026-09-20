@@ -70,6 +70,14 @@ class TaskState(TypedDict, total=False):
     # — owner-conflict interrupt plumbing (AUTHORIZE/OWNER WAIT owns)
     pending_conflict: dict[str, Any] | None
 
+    # — routing metadata ONLY (SELECT_MODEL is the sole writer; it is not
+    #    authority, not completion — the verifier still decides everything)
+    model_exhausted: bool
+
+    # — worker/critic loop (CRITIQUE owns; evaluative data, never authority)
+    critic_iterations: Annotated[list[dict[str, Any]], operator.add]
+    critic_feedback: dict[str, Any] | None
+
     # — lifecycle
     task_status: TaskStatus
     outcome_note: str

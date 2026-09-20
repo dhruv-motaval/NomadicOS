@@ -53,6 +53,10 @@ MODEL_AUTHORITY_FIELDS = frozenset(
         "owner",
         "skip_verification",
         "security_override",
+        "verified",
+        "goal_verified",
+        "goal_complete",
+        "tests_passed",
     }
 )
 

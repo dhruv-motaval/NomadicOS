@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from nomadicos.action_ir.validation import ProposalValidator
 from nomadicos.authority.authorization import AuthorizationService
@@ -56,6 +57,8 @@ class TaskRuntime:
     workspace_per_task: bool = True
     #: optional prompt/context strategy (worker specialization), §9.24
     context_builder: ContextBuilder | None = None
+    #: optional Critic (SPEC §10): evaluator only - no authority, no execution
+    critic: Any = None
     _issued: dict[str, AuthorizedAction] = field(default_factory=dict, repr=False)
 
     # ------------------------------------------- issued-artifact table ---
