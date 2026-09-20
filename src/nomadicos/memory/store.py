@@ -81,6 +81,12 @@ class MemoryStore:
     ) -> list[RelationRecord]:
         raise NotImplementedError
 
+    def objects(self) -> list[ObjectRecord]:  # pragma: no cover - protocol
+        raise NotImplementedError
+
+    def relations(self) -> list[RelationRecord]:  # pragma: no cover - protocol
+        raise NotImplementedError
+
 
 class JsonlMemoryStore(MemoryStore):
     """Bounded JSONL memory store; one atomically-replaced file.
