@@ -194,6 +194,10 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
         request = (runtime.context_builder or _build_request)(
             state, step.description, state["goal"], model_id, cfg, runtime.tools.catalog_lines()
         )
+        if runtime.memory is not None:
+            # Phase 11G: bounded DATA-only memory block into the existing
+            # request seam; read-only, fail-safe, never an instruction
+            request = runtime.memory.augment_request(request, state)
         engine = runtime.engine_for(model_id)
         try:
             response = await engine.generate(request)

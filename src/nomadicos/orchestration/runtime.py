@@ -59,6 +59,9 @@ class TaskRuntime:
     context_builder: ContextBuilder | None = None
     #: optional Critic (SPEC §10): evaluator only - no authority, no execution
     critic: Any = None
+    #: optional memory service (Phase 11G): DATA-only context + read seams;
+    #: it can never authorize, execute, or route (memory is not authority)
+    memory: Any = None
     _issued: dict[str, AuthorizedAction] = field(default_factory=dict, repr=False)
 
     # ------------------------------------------- issued-artifact table ---

@@ -27,6 +27,8 @@ from nomadicos.inference.mock import MockEngine
 from nomadicos.inference.ollama import OllamaEngine
 from nomadicos.kernel.config import AppConfig
 from nomadicos.kernel.events import EventLogger
+from nomadicos.memory.runtime import build_runtime_memory
+from nomadicos.orchestration import memory_hooks
 from nomadicos.orchestration.checkpointing import make_saver as _make_saver
 from nomadicos.orchestration.graph import build_graph
 from nomadicos.orchestration.planner import Planner, StructuralPlanner
@@ -57,6 +59,9 @@ class RunSummary:
     critic_feedback_present: bool = False
     last_observations: list[str] = field(default_factory=list)
     failures: list[dict[str, Any]] = field(default_factory=list)
+    #: Phase 11G observability: episodic/working memory result metadata only;
+    #: it never changes task success semantics
+    memory_note: str = ""
 
     def waiting_owner(self) -> bool:
         return self.status is TaskStatus.WAITING_OWNER
@@ -130,9 +135,26 @@ class NomadicApp:
             goal_verifier=PredicateGoalVerifier(runtime_workspace),
             full_pc=self.store.has_full_autonomy,
         )
+        # Phase 11G: memory bricks wired as DATA-only runtime services, from
+        # the same state_dir conventions as the authority store. TaskState is
+        # untouched; working memory is ephemeral; retrieval is read-only.
+        self.memory_runtime = build_runtime_memory(
+            Path(state_dir or cfg.persistence.state_dir), cfg.memory, logger=self.log
+        )
+        self.runtime.memory = self.memory_runtime
         self.checkpointer = _make_saver()
         self.graph = build_graph(self.runtime, checkpointer=self.checkpointer)
         self._run_dir = Path(state_dir or cfg.persistence.state_dir) / "runs"
+
+    # ------------------------------------------------- memory accessors ---
+    @property
+    def memory_store(self) -> Any:
+        """The durable memory store (DATA boundary) for hosts/tests."""
+        return self.memory_runtime.store
+
+    @property
+    def working_memory(self) -> Any:
+        return self.memory_runtime.working
 
     # ------------------------------------------------------- discovery ----
     async def sync_models(self) -> None:
@@ -150,6 +172,7 @@ class NomadicApp:
         builder.build(self.registry, models_dir=self.config.inference.models_dir)
 
     # ------------------------------------------------------------ runs ----
+    # ------------------------------------------------------------ runs ----
     async def run_goal(
         self,
         goal_text: str,
@@ -160,15 +183,18 @@ class NomadicApp:
         thread_prefix: str = "nomadic",
     ) -> RunSummary:
         goal = Goal(objective=goal_text, constraints=constraints or [])
+        task = task_id or goal.id
         initial: dict[str, Any] = {
             "goal_text": goal_text,
             "goal_constraints": constraints or [],
             "goal_predicates": predicates or [],
-            "task_id": task_id or goal.id,
+            "task_id": task,
         }
-        graph_config = {"configurable": {"thread_id": f"{thread_prefix}:{task_id or goal.id}"}}
+        graph_config = {"configurable": {"thread_id": f"{thread_prefix}:{task}"}}
+        memory_hooks.seed_working(self.memory_runtime, task, goal_text)
         final = await self.graph.ainvoke(initial, graph_config)
         summary = self._summarize(final)
+        self._memory_after_task(summary, final)
         self._persist(summary)
         return summary
 
@@ -325,6 +351,23 @@ class NomadicApp:
                 r.goal_verifier,
                 r.critic,
             ) = saved
+
+    # ------------------------------------------------------ memory seam ---
+    def _memory_after_task(self, summary: RunSummary, final: dict[str, Any]) -> None:
+        """End-of-task memory boundary (Phase 11G, DATA only): episodic
+        write from REAL verification artifacts + working-memory refresh.
+        A memory problem is isolated HERE: it can never change status,
+        verification, routing, or authority — it is observable only via
+        summary.memory_note (and the MEMORY_UPDATED event on success)."""
+        memory = self.runtime.memory
+        if memory is None:
+            summary.memory_note = "memory: not wired"
+            return
+        try:
+            summary.memory_note = memory_hooks.episodic_hook(memory, summary.task_id, final)
+            memory_hooks.update_working_from_state(memory, summary.task_id, final)
+        except Exception:  # noqa: BLE001 - memory boundary isolation
+            summary.memory_note = "memory: hook failed"
 
     # ---------------------------------------------------------- summary ---
     def _summarize(self, state: dict[str, Any]) -> RunSummary:
