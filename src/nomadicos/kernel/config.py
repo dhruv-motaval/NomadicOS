@@ -165,7 +165,6 @@ class AppConfig(_Contract):
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
     routing: RouterConfig = Field(default_factory=RouterConfig)
     persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
-    persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
 

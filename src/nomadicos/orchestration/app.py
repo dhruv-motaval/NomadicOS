@@ -38,6 +38,7 @@ from nomadicos.registry.scanner import RegistryBuilder
 from nomadicos.router.escalation import EscalationPolicy
 from nomadicos.router.selection import ModelSelector
 from nomadicos.tools.base import ToolRegistry
+from nomadicos.tools.desktop import DesktopTool
 from nomadicos.tools.filesystem import FilesystemTool
 from nomadicos.tools.terminal import ProcessSupervisor, TerminalTool
 
@@ -101,6 +102,11 @@ class NomadicApp:
         self.supervisor = ProcessSupervisor()
         self.tools.register(FilesystemTool())
         self.tools.register(TerminalTool(self.supervisor))
+        # Phase 12A: desktop capability behind the same executor boundary;
+        # platform adapter selected by backend.default_backend() (win32 here,
+        # honest-unavailable elsewhere). Registration only — the tool gains
+        # no authority and runs only on AuthorizedAction artifacts.
+        self.tools.register(DesktopTool())
         self.validator = ProposalValidator(self.tools, self.log)
         self.policy = CapabilityPolicy(
             self.store,

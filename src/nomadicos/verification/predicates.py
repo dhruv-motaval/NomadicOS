@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from nomadicos.contracts.core import GoalPredicate, LogicalOp, Predicate
+from nomadicos.contracts.execution import ExecutionResult, ExecutionStatus
 from nomadicos.contracts.verification import EvidenceItem, VerificationOutcome
 from nomadicos.verification.evidence import EvidenceContext
 
@@ -313,6 +314,92 @@ def _tests_pass(p: Predicate, ctx: EvidenceContext) -> LeafResult:
     )
 
 
+def _collect_window_titles(execs: list[ExecutionResult]) -> list[str]:
+    """Bounded window titles observed by THIS task's desktop executions.
+
+    Titles are untrusted DATA read straight from executor evidence; nothing
+    here interprets them."""
+    observed: list[str] = []
+    for e in execs:
+        listed = e.evidence.get("titles")
+        if isinstance(listed, list):
+            observed.extend(str(t) for t in listed)
+        single = e.evidence.get("title")
+        if isinstance(single, str) and single:
+            observed.append(single)
+    return observed
+
+
+def _window_present(p: Predicate, ctx: EvidenceContext) -> LeafResult:
+    """Goal evidence: a desktop window whose title matches was OBSERVED by a
+    task-correlated desktop execution. A successful click/keystroke is not
+    proof — only a real window observation satisfies this predicate."""
+    needle = _req(p, "title", "window")
+    if not needle:
+        return _unverifiable("window_present: missing 'title'")
+    _command, step = _exec_filter(p)
+    execs = [
+        e
+        for e in ctx.find_execution(tool="desktop", step_id=step)
+        if e.succeeded and (e.evidence.get("titles") or e.evidence.get("title"))
+    ]
+    if not execs:
+        return _unverifiable("window_present: no task-correlated desktop window evidence")
+    observed = _collect_window_titles(execs)
+    exact = bool(p.field("exact"))
+    text = str(needle).lower()
+    matched = next(
+        (
+            t
+            for t in observed
+            if (t.lower() == text if exact else text in t.lower())
+        ),
+        None,
+    )
+    return LeafResult(
+        VerificationOutcome.PASS if matched is not None else VerificationOutcome.NOT_PASS,
+        [
+            EvidenceItem(
+                claim=f"window present: {str(needle)[:60]!r}",
+                observed=matched is not None,
+                detail={
+                    "observed_count": len(observed),
+                    "matched": (matched or "")[:80],
+                    "task": ctx.task_id,
+                },
+            )
+        ],
+    )
+
+
+def _process_started(p: Predicate, ctx: EvidenceContext) -> LeafResult:
+    """A task-correlated execution actually started an OS process.
+
+    Evidence-based (same pattern as tests_pass): the executor observed a
+    real pid. ERRORED executions (process creation failed) never count;
+    a finished process that ran still proves it started."""
+    command, step = _exec_filter(p)
+    execs = ctx.find_execution(command=command, step_id=step)
+    if not execs:
+        return _unverifiable("process_started: no task-correlated process evidence")
+    pids = [
+        e.process_id
+        for e in execs
+        if e.process_id is not None and e.status is not ExecutionStatus.ERRORED
+    ]
+    ok = bool(pids)
+    return LeafResult(
+        VerificationOutcome.PASS if ok else VerificationOutcome.NOT_PASS,
+        [
+            EvidenceItem(
+                claim="process started by THIS task",
+                observed=ok,
+                detail={"pids": pids[:8], "task": ctx.task_id},
+            )
+        ],
+    )
+
+
 LEAVES: dict[str, Callable[[Predicate, EvidenceContext], LeafResult]] = {
     "file_exists": _file_exists,
     "directory_exists": _dir_exists,
@@ -325,14 +412,10 @@ LEAVES: dict[str, Callable[[Predicate, EvidenceContext], LeafResult]] = {
     "stderr_contains": _stderr_contains,
     "artifact_exists": _artifact_exists,
     "tests_pass": _tests_pass,
-    "process_started": lambda p, ctx: _unverifiable(
-        "process_started: process introspection belongs to Phase 12"
-    ),
+    "process_started": _process_started,
+    "window_present": _window_present,
     "api_response_valid": lambda p, ctx: _unverifiable(
         "api_response_valid: unsupported predicate (no evidence contract)"
-    ),
-    "window_present": lambda p, ctx: _unverifiable(
-        "window_present: desktop verification belongs to Phase 12"
     ),
 }
 
