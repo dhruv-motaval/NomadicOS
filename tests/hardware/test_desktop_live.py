@@ -80,3 +80,17 @@ def test_list_windows_returns_real_titles() -> None:
 def test_foreground_window_reports_data() -> None:
     window = _real_backend().foreground_window()
     assert "handle" in window and "title" in window
+
+
+def test_focus_current_foreground_window_is_safe_noop() -> None:
+    """Safe focus validation: re-focus the CURRENT foreground window by its
+    own title — a no-op for the user, exercising the real focus path."""
+    backend = _real_backend()
+    current = backend.foreground_window()
+    title = str(current.get("title", "")).strip()
+    if not title:
+        pytest.skip("no foreground window title available")
+    result = backend.focus_window(title)
+    assert "focused" in result
+    # either the OS granted focus (no-op change) or honestly refused
+    assert isinstance(result["focused"], bool)

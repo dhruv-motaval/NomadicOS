@@ -100,7 +100,7 @@ class ProposalValidator:
 
 
 def _resource_hint(args: dict) -> str:
-    for key in ("path", "source", "directory", "command", "target", "url"):
+    for key in ("path", "source", "directory", "command", "target", "url", "title"):
         value = args.get(key)
         if isinstance(value, str) and value:
             return value

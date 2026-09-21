@@ -255,3 +255,37 @@ async def test_outcomes_are_deterministic(tmp_path) -> None:
     assert first.status is second.status
     assert first.evidence == second.evidence
     assert first.duration_s >= 0.0 and second.duration_s >= 0.0
+
+
+# --------------------------------------------- Phase 12B failure semantics -
+
+
+# --------------------------------------------- Phase 12B failure semantics -
+
+
+async def test_failures_leave_authority_state_unchanged(tmp_path) -> None:
+    """Structured failures only: no fake evidence, no authority mutation,
+    no automatic retry inside the tool."""
+    from nomadicos.authority.store import AuthorityStore
+
+    store = AuthorityStore(tmp_path / "state" / "authority.json")
+    store.grant_full_pc_autonomy()
+    before = store.state()
+    backend = FakeDesktopBackend(width=100, height=80)
+    tool = DesktopTool(backend)
+    ctx_ = ExecutionContext.for_task("task_fail", tmp_path / "ws")
+    outcomes = [
+        await tool.run("mouse_move", {"x": 5000, "y": 1}, ctx_),  # out of bounds
+        await tool.run("focus_window", {"title": "ghost-window-xyz"}, ctx_),  # missing window
+        await tool.run("press_key", {"key": "not-a-key+++"}, ctx_),  # malformed key
+        await tool.run("nope", {}, ctx_),  # unsupported operation
+    ]
+    for outcome in outcomes:
+        assert outcome.status in (ExecutionStatus.FAILED, ExecutionStatus.ERRORED)
+        assert outcome.status is not ExecutionStatus.SUCCEEDED
+    assert backend.cursor == (0, 0) and backend.clicks == [] and backend.keys == []
+    # structured, honest: each failure carries a message, none fabricate success
+    assert all(o.message for o in outcomes)
+    after = store.state()
+    assert after.epoch == before.epoch
+    assert after.grant == before.grant

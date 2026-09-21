@@ -199,3 +199,28 @@ def test_desktop_success_is_not_process_proof(tmp_path) -> None:
     )
     r = verdict_of({"type": "process_started", "command": "notepad"}, ctx(tmp_path, [click]))
     assert r.verdict is VerificationOutcome.NOT_VERIFIED
+
+
+# ------------------------------------------------- stale / scoped evidence -
+
+
+def test_window_present_stale_step_evidence_is_rejected(tmp_path) -> None:
+    """Evidence from an EARLIER step does not satisfy a step-scoped
+    predicate (stale evidence rejection)."""
+    execs = [desktop_exec(evidence={"titles": ["Untitled - Notepad"]})]
+    r = verdict_of(
+        {"type": "window_present", "title": "notepad", "step_id": "step_9"},
+        ctx(tmp_path, execs),
+    )
+    assert r.verdict is VerificationOutcome.NOT_VERIFIED
+
+
+def test_window_present_scope_is_bounded_to_observed_titles(tmp_path) -> None:
+    execs = [desktop_exec(evidence={"count": 2, "titles": ["Alpha", "Beta"]})]
+    c = ctx(tmp_path, execs)
+    assert (
+        verdict_of({"type": "window_present", "title": "alpha"}, c).verdict
+        is VerificationOutcome.PASS
+    )
+    r = verdict_of({"type": "window_present", "title": ""}, c)
+    assert r.verdict is VerificationOutcome.NOT_VERIFIED
