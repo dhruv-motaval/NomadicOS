@@ -52,3 +52,14 @@ def make_saver() -> Any:
         return InMemorySaver(serde=serde)
     except TypeError:  # older/newer langgraph signature: fall back, warnings only
         return InMemorySaver()
+
+
+def make_durable_saver(persistence) -> Any:
+    """Durable checkpoint saver selected by PersistenceConfig (Phase 13B,
+    SPEC §34/§47): PostgreSQL when dsn is configured, otherwise the
+    deterministic file adapter under state_dir. Both reuse the InMemorySaver
+    serialization semantics via the existing allow-list; orchestration
+    checkpoints remain orchestration state - NOT the authority path."""
+    from nomadicos.persistence.checkpoints import make_durable_saver as _make_durable
+
+    return _make_durable(persistence)

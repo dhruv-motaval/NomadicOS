@@ -29,7 +29,7 @@ from nomadicos.kernel.config import AppConfig
 from nomadicos.kernel.events import EventLogger
 from nomadicos.memory.runtime import build_runtime_memory
 from nomadicos.orchestration import memory_hooks
-from nomadicos.orchestration.checkpointing import make_saver as _make_saver
+from nomadicos.orchestration.checkpointing import make_durable_saver
 from nomadicos.orchestration.graph import build_graph
 from nomadicos.orchestration.planner import Planner, StructuralPlanner
 from nomadicos.orchestration.runtime import TaskRuntime
@@ -148,7 +148,11 @@ class NomadicApp:
             Path(state_dir or cfg.persistence.state_dir), cfg.memory, logger=self.log
         )
         self.runtime.memory = self.memory_runtime
-        self.checkpointer = _make_saver()
+        # Phase 13B: durable graph checkpoints behind the existing seam.
+        # Orchestration state is DATA: restore re-enters the normal
+        # validate -> authorize -> execute -> verify pipeline; nothing here
+        # creates SUCCESS or authority (SPEC §34, §47).
+        self.checkpointer = make_durable_saver(cfg.persistence)
         self.graph = build_graph(self.runtime, checkpointer=self.checkpointer)
         self._run_dir = Path(state_dir or cfg.persistence.state_dir) / "runs"
 
