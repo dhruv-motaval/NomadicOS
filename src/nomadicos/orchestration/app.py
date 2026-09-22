@@ -36,6 +36,7 @@ from nomadicos.orchestration.runtime import TaskRuntime
 from nomadicos.persistence import TaskRecord, make_task_store
 from nomadicos.persistence.contracts import new_record, now_iso
 from nomadicos.persistence.errors import PersistenceCorrupt, PersistenceError
+from nomadicos.persistence.ledger import make_execution_ledger
 from nomadicos.registry.model_registry import ModelRegistry
 from nomadicos.registry.scanner import RegistryBuilder
 from nomadicos.router.escalation import EscalationPolicy
@@ -117,7 +118,11 @@ class NomadicApp:
             hard_denied_resources=list(cfg.autonomy.denied_resources),
         )
         self.authz = AuthorizationService(self.store, self.policy, self.log)
-        self.executor = Executor(self.tools, self.store, self.log)
+        # Phase 13D: durable single-use execution ledger (replay protection
+        # across restarts); DATA only - it never authorizes or decides.
+        self.executor = Executor(
+            self.tools, self.store, self.log, ledger=make_execution_ledger(cfg.persistence)
+        )
         self.selector = ModelSelector(cfg.routing)
         runtime_workspace = Path(workspace_root or cfg.persistence.task_workspace)
         # Phase 8: production verifiers are the DEFAULT, injected through the

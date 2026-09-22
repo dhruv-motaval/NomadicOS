@@ -59,6 +59,7 @@ from nomadicos.kernel.events import EventType
 from nomadicos.orchestration.boundaries import NoGoalVerifier, NoStepVerifier
 from nomadicos.orchestration.runtime import TaskRuntime
 from nomadicos.orchestration.state import TaskState
+from nomadicos.persistence.errors import PersistenceError
 from nomadicos.router.analyzer import analyze_goal
 from nomadicos.tools.context import ExecutionContext
 
@@ -354,7 +355,7 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
                 "task_status": TaskStatus.BLOCKED,
                 "outcome_note": "authority revoked mid-task",
             }
-        except (ActionFailed, AuthorizationDenied, InvalidProposal) as exc:
+        except (ActionFailed, AuthorizationDenied, InvalidProposal, PersistenceError) as exc:
             f = make_failure(state, exc.failure, str(exc.message))
             return {
                 "failures": [f],

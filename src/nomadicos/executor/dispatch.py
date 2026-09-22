@@ -31,6 +31,7 @@ from nomadicos.kernel.errors import (
     RevokedAuthority,
 )
 from nomadicos.kernel.events import EventLogger, EventType
+from nomadicos.persistence.errors import PersistenceError
 from nomadicos.tools.base import ToolOutcome, ToolRegistry
 from nomadicos.tools.context import ExecutionContext
 from nomadicos.tools.paths import PathDenied
@@ -59,8 +60,11 @@ class InMemoryLedger:
 
 
 def action_key(authorized: AuthorizedAction) -> str:
-    raw = f"{authorized.id}:{authorized.proposal.fingerprint()}"
-    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+    """Ledger identity: the STABLE semantic fingerprint only (task/step/
+    tool/op/args). The per-mint action id is deliberately excluded so the
+    same logical authorized action carries the same ledger identity across
+    restarts; a genuinely fresh proposal (different intent) stays distinct."""
+    return hashlib.sha256(authorized.proposal.fingerprint().encode()).hexdigest()[:32]
 
 
 class Executor:
@@ -153,7 +157,24 @@ class Executor:
             message=outcome.message,
             started_at=datetime.now(UTC),
         )
-        self._ledger.put(key, result)
+        # 5. durable single-use record (post-commit: the side effect already
+        #    happened). A persistence failure here is the unavoidable crash
+        #    window: the result is returned HONESTLY flagged as not durably
+        #    recorded - replay protection is NOT guaranteed for this action,
+        #    and nothing retries automatically (SPEC §56.14).
+        try:
+            self._ledger.put(key, result)
+        except PersistenceError as exc:
+            self._log.log(EventType.RECOVERY_STARTED, result="LEDGER_UNRECORDED", **base)
+            result = result.model_copy(
+                update={
+                    "evidence": {
+                        **result.evidence,
+                        "durable_ledger": "unrecorded",
+                        "ledger_error": str(exc.message)[:200],
+                    }
+                }
+            )
         self._log.log(EventType.TOOL_EXECUTED, result=outcome.status.value, **base)
         return result
 
