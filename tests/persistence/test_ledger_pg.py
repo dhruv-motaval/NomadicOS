@@ -7,20 +7,21 @@ Skips cleanly when unavailable; never faked with the file adapter.
 from __future__ import annotations
 
 import os
+from uuid import uuid4
 
 import pytest
 
-from nomadicos.contracts.execution import ExecutionResult
+from nomadicos.contracts.execution import ExecutionResult, ExecutionStatus
 from nomadicos.persistence.errors import PersistenceUnavailable
 from nomadicos.persistence.ledger import PostgresExecutionLedger
 
 TEST_DSN = os.environ.get(
-    "NOMADICOS_TEST_DSN", "postgresql://nomadicos:nomadicos@localhost:5432/nomadicos"
+    "NOMADICOS_TEST_DSN", "postgresql://nomadicos:nomadicos@localhost:5433/nomadicos"
 )
 
 pytestmark = pytest.mark.integration
 
-KEY = "b" * 32
+KEY = uuid4().hex  # 32-hex, unique per run: the ledger is durable
 
 
 def _store() -> PostgresExecutionLedger:
@@ -61,7 +62,7 @@ def test_postgres_ledger_first_writer_wins() -> None:
     store = _store()
     try:
         store.put(KEY, _result())
-        store.put(KEY, _result().model_copy(update={"status": "FAILED"}))
+        store.put(KEY, _result().model_copy(update={"status": ExecutionStatus.FAILED}))
         loaded = store.get(KEY)
         assert loaded.status.value == "SUCCEEDED"
     finally:

@@ -1,4 +1,4 @@
-﻿"""Phase 13A PostgreSQL integration tests (SPEC Â§34).
+"""Phase 13A PostgreSQL integration tests (SPEC Â§34).
 
 Integration-marked: requires a reachable PostgreSQL. Skips cleanly when the
 database is unavailable â€” never faked with the file adapter. Dev database
@@ -16,7 +16,7 @@ from nomadicos.persistence.errors import PersistenceCorrupt, PersistenceUnavaila
 from nomadicos.persistence.postgres import PostgresTaskStateStore
 
 TEST_DSN = os.environ.get(
-    "NOMADICOS_TEST_DSN", "postgresql://nomadicos:nomadicos@localhost:5432/nomadicos"
+    "NOMADICOS_TEST_DSN", "postgresql://nomadicos:nomadicos@localhost:5433/nomadicos"
 )
 
 pytestmark = pytest.mark.integration
@@ -83,8 +83,10 @@ def test_postgres_schema_version_mismatch_fails_closed() -> None:
     store = _store()
     record = new_record("task_" + "c" * 20, "objective")
     store.save_task(record)
+    # corrupt the versioned ENVELOPE (what the loader actually reads)
     store._conn.execute(
-        "UPDATE nomadic_task_state SET schema_version = 99 WHERE task_id = %s",
+        "UPDATE nomadic_task_state SET record = jsonb_set(record, '{schema_version}', '99') "
+        "WHERE task_id = %s",
         (record.task_id,),
     )
     with pytest.raises(Exception, match="version"):

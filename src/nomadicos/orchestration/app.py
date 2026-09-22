@@ -34,7 +34,7 @@ from nomadicos.orchestration.graph import build_graph
 from nomadicos.orchestration.planner import Planner, StructuralPlanner
 from nomadicos.orchestration.runtime import TaskRuntime
 from nomadicos.persistence import TaskRecord, make_task_store
-from nomadicos.persistence.contracts import new_record, now_iso
+from nomadicos.persistence.contracts import AuthorizedActionRef, new_record, now_iso
 from nomadicos.persistence.errors import PersistenceCorrupt, PersistenceError
 from nomadicos.persistence.ledger import make_execution_ledger
 from nomadicos.registry.model_registry import ModelRegistry
@@ -166,11 +166,14 @@ class NomadicApp:
 
     # ------------------------------------------------------- restart ------
     def _record_durable_task(self, summary: RunSummary, final: dict[str, Any]) -> None:
-        """Upsert durable task truth (SPEC §34, Phase 13C).
+        """Upsert durable task truth (SPEC §34, §35 auditability, Phase 13C/G).
 
         TaskRecord.status is DATA copied from the task state the graph
         produced - persistence never generates SUCCESS. Best-effort: a
-        durable-store failure never changes the task outcome."""
+        durable-store failure never changes the task outcome. The record
+        carries the §35 audit evidence: proposals (references), issued
+        authorized actions (non-executable refs), executions,
+        verifications, and the correlated event log."""
         try:
             existing = self.task_store.load_task(summary.task_id)
             if existing is None:
@@ -179,12 +182,45 @@ class NomadicApp:
                 )
             else:
                 record = existing
+            task_id = summary.task_id
+            proposals = list(final.get("proposals") or [])[-100:]
+            executed_fps = {
+                str(e.action_fingerprint) for e in (final.get("executions") or [])
+            }
+            action_refs = []
+            for proposal in proposals:
+                action_refs.append(
+                    AuthorizedActionRef(
+                        action_id="",
+                        proposal_id=str(proposal.id),
+                        fingerprint=str(proposal.fingerprint())[:64],
+                        capability=f"{proposal.tool}.{proposal.operation}",
+                        authority_epoch=0,
+                        # lifecycle label from the state alone (not an
+                        # authority statement): the proposal was executed
+                        # under a real grant, or is still only proposed
+                        granted_by=(
+                            "authorized"
+                            if str(proposal.fingerprint()) in executed_fps
+                            else "proposed"
+                        ),
+                    )
+                )
+            audit_events = []
+            for event in self.log.events(task_id)[-500:]:
+                raw = getattr(event, "to_dict", None)
+                payload = dict(raw()) if callable(raw) else {"raw": str(event)[:200]}
+                if not payload.get("timestamp"):
+                    payload["timestamp"] = now_iso()
+                audit_events.append(payload)
             update = record.model_copy(
                 update={
                     "status": summary.status,
                     "outcome_note": (summary.outcome_note or "")[:400],
                     "executions": list(final.get("executions") or [])[-200:],
                     "verifications": list(final.get("verifications") or [])[-100:],
+                    "authorized_actions": action_refs[-100:],
+                    "audit_events": audit_events,
                     "created_at": existing.created_at if existing else record.created_at,
                     "updated_at": now_iso(),
                 }

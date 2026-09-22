@@ -16,7 +16,7 @@ from nomadicos.persistence.checkpoints import PostgresCheckpointSaver
 from nomadicos.persistence.errors import PersistenceUnavailable
 
 TEST_DSN = os.environ.get(
-    "NOMADICOS_TEST_DSN", "postgresql://nomadicos:nomadicos@localhost:5432/nomadicos"
+    "NOMADICOS_TEST_DSN", "postgresql://nomadicos:nomadicos@localhost:5433/nomadicos"
 )
 
 pytestmark = pytest.mark.integration
