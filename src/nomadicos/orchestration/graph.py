@@ -49,6 +49,7 @@ from nomadicos.kernel.errors import (
     ActionFailed,
     AuthorizationDenied,
     BudgetExhausted,
+    ConfigInvalid,
     Failure,
     InvalidProposal,
     NomadicOSBaseError,
@@ -309,7 +310,23 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
         answer = str(decision or "").upper()
         if answer not in {"ALLOW", "DENY"}:
             return await owner_wait(state)  # demand again; never self-resolve
-        runtime.authz.answer_conflict(str(conflict.get("id")), answer, resolver="owner")
+        try:
+            runtime.authz.answer_conflict(str(conflict.get("id")), answer, resolver="owner")
+        except ConfigInvalid as exc:
+            # the pending conflict was voided while stopped (e.g. master
+            # revoke): fail the task safely - no approval, no execution
+            f = make_failure(
+                state,
+                Failure.CONFIG_INVALID,
+                f"pending conflict no longer answerable: {exc.message}",
+            )
+            return {
+                "failures": [f],
+                "last_failure": f.model_dump(mode="json"),
+                "task_status": TaskStatus.FAILED,
+                "outcome_note": "conflict voided (authority changed while stopped)",
+                "pending_conflict": None,
+            }
         log.log(EventType.OWNER_DECISION, task_id=state["task_id"], result=answer)
         updates: dict[str, Any] = {"pending_conflict": None}
         if answer == "ALLOW":

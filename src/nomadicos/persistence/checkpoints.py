@@ -31,6 +31,47 @@ from nomadicos.persistence.errors import PersistenceCorrupt, PersistenceUnavaila
 CHECKPOINT_SCHEMA_VERSION = 1
 MAX_CHECKPOINTS_PER_THREAD = 20
 
+#: explicit serde allow-list of NomadicOS classes (SPEC §47/§7.22): the
+#: serializer accepts OUR typed contracts instead of pickle or unrestricted
+#: types - checkpoints stay introspectable and supply-chain-safe. Both the
+#: durable savers and the in-memory saver share this list.
+NOMADICOS_SERDE_CLASSES = (
+    ("nomadicos.contracts.core", "Goal"),
+    ("nomadicos.contracts.core", "PlanStep"),
+    ("nomadicos.contracts.core", "FailureRecord"),
+    ("nomadicos.contracts.core", "TaskStatus"),
+    ("nomadicos.contracts.core", "Predicate"),
+    ("nomadicos.contracts.core", "PredicateGroup"),
+    ("nomadicos.contracts.core", "GoalPredicate"),
+    ("nomadicos.contracts.core", "LogicalOp"),
+    ("nomadicos.contracts.action", "ActionProposal"),
+    ("nomadicos.contracts.action", "ProposalKind"),
+    ("nomadicos.contracts.action", "CapabilityRef"),
+    ("nomadicos.contracts.action", "CompletionClaim"),
+    ("nomadicos.contracts.execution", "ExecutionResult"),
+    ("nomadicos.contracts.execution", "ExecutionStatus"),
+    ("nomadicos.contracts.execution", "Observation"),
+    ("nomadicos.contracts.execution", "ObservationKind"),
+    ("nomadicos.contracts.model", "TaskRequirements"),
+    ("nomadicos.contracts.model", "TaskType"),
+    ("nomadicos.contracts.model", "CapabilityTag"),
+    ("nomadicos.contracts.verification", "VerificationResult"),
+    ("nomadicos.contracts.verification", "VerificationLevel"),
+    ("nomadicos.contracts.verification", "VerificationOutcome"),
+    ("nomadicos.contracts.verification", "EvidenceItem"),
+    ("nomadicos.kernel.errors", "Failure"),
+)
+
+
+def default_serde() -> Any:
+    """The shared allow-listed serializer used by every NomadicOS saver."""
+    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+    try:
+        return JsonPlusSerializer(allowed_msgpack_modules=list(NOMADICOS_SERDE_CLASSES))
+    except TypeError:  # pragma: no cover - version drift: fall back
+        return JsonPlusSerializer()
+
 
 def _b64(data: bytes) -> str:
     return base64.b64encode(data).decode("ascii")
@@ -78,7 +119,7 @@ class DurableCheckpointSaver(InMemorySaver):
     after every mutation. Subclasses implement the snapshot transport."""
 
     def __init__(self, *, serde: Any = None) -> None:
-        super().__init__(serde=serde)
+        super().__init__(serde=serde or default_serde())
 
     def _read_snapshot(self) -> dict | None:  # pragma: no cover - interface
         raise NotImplementedError

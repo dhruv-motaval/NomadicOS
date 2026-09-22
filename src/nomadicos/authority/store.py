@@ -145,6 +145,8 @@ class AuthorityStore:
             raise ConfigInvalid("decision must be ALLOW or DENY")
         state = self.state()
         conflict = state.conflicts.pop(request_id, None)
+        if conflict is None:
+            raise ConfigInvalid(f"unknown conflict request {request_id!r}")
         answer = OwnerAnswer(decision=decision.upper())
         if conflict is not None and decision.upper() == "ALLOW":
             fingerprint = str(conflict.get("fingerprint", ""))
