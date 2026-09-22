@@ -310,6 +310,37 @@ def task_status(task_id: str = typer.Argument(help="task id printed by a previou
         typer.echo(f"{key:>12}: {value}")
 
 
+@app.command("tasks")
+def tasks() -> None:
+    """List durable tasks (Phase 13C discovery)."""
+    from nomadicos.orchestration.app import NomadicApp
+
+    entries = NomadicApp(_config()).list_durable_tasks()
+    if not entries:
+        typer.echo("no durable tasks")
+        return
+    for entry in entries:
+        typer.echo(f"  {entry['task_id']}  status={entry['status']}  ({entry['source']})")
+
+
+@app.command()
+def resume(task_id: str = typer.Argument(help="durable task id to resume")) -> None:
+    """Safely resume a durable task through the normal pipeline (Phase 13C)."""
+    from nomadicos.orchestration.app import NomadicApp
+
+    cfg = _config()
+
+    async def drive() -> None:
+        app = NomadicApp(cfg)
+        try:
+            summary = await app.resume_task(task_id)
+            _render_run(summary)
+        finally:
+            await app.aclose()
+
+    asyncio.run(drive())
+
+
 def main_entry() -> None:
     app()
 

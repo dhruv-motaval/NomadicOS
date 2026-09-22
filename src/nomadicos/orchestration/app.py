@@ -26,13 +26,16 @@ from nomadicos.inference.llama_cpp import LlamaCppEngine
 from nomadicos.inference.mock import MockEngine
 from nomadicos.inference.ollama import OllamaEngine
 from nomadicos.kernel.config import AppConfig
-from nomadicos.kernel.events import EventLogger
+from nomadicos.kernel.events import EventLogger, EventType
 from nomadicos.memory.runtime import build_runtime_memory
 from nomadicos.orchestration import memory_hooks
 from nomadicos.orchestration.checkpointing import make_durable_saver
 from nomadicos.orchestration.graph import build_graph
 from nomadicos.orchestration.planner import Planner, StructuralPlanner
 from nomadicos.orchestration.runtime import TaskRuntime
+from nomadicos.persistence import TaskRecord, make_task_store
+from nomadicos.persistence.contracts import new_record, now_iso
+from nomadicos.persistence.errors import PersistenceCorrupt, PersistenceError
 from nomadicos.registry.model_registry import ModelRegistry
 from nomadicos.registry.scanner import RegistryBuilder
 from nomadicos.router.escalation import EscalationPolicy
@@ -141,9 +144,6 @@ class NomadicApp:
             goal_verifier=PredicateGoalVerifier(runtime_workspace),
             full_pc=self.store.has_full_autonomy,
         )
-        # Phase 11G: memory bricks wired as DATA-only runtime services, from
-        # the same state_dir conventions as the authority store. TaskState is
-        # untouched; working memory is ephemeral; retrieval is read-only.
         self.memory_runtime = build_runtime_memory(
             Path(state_dir or cfg.persistence.state_dir), cfg.memory, logger=self.log
         )
@@ -154,7 +154,120 @@ class NomadicApp:
         # creates SUCCESS or authority (SPEC §34, §47).
         self.checkpointer = make_durable_saver(cfg.persistence)
         self.graph = build_graph(self.runtime, checkpointer=self.checkpointer)
+        # Phase 13C: durable task truth (SPEC §34) separate from the
+        # orchestration checkpoint; status stored as DATA only.
+        self.task_store = make_task_store(cfg.persistence)
         self._run_dir = Path(state_dir or cfg.persistence.state_dir) / "runs"
+
+    # ------------------------------------------------------- restart ------
+    def _record_durable_task(self, summary: RunSummary, final: dict[str, Any]) -> None:
+        """Upsert durable task truth (SPEC §34, Phase 13C).
+
+        TaskRecord.status is DATA copied from the task state the graph
+        produced - persistence never generates SUCCESS. Best-effort: a
+        durable-store failure never changes the task outcome."""
+        try:
+            existing = self.task_store.load_task(summary.task_id)
+            if existing is None:
+                record = new_record(
+                    summary.task_id, str(final.get("goal_text", summary.task_id))[:2000]
+                )
+            else:
+                record = existing
+            update = record.model_copy(
+                update={
+                    "status": summary.status,
+                    "outcome_note": (summary.outcome_note or "")[:400],
+                    "executions": list(final.get("executions") or [])[-200:],
+                    "verifications": list(final.get("verifications") or [])[-100:],
+                    "created_at": existing.created_at if existing else record.created_at,
+                    "updated_at": now_iso(),
+                }
+            )
+            self.task_store.save_task(update)
+        except PersistenceError:
+            pass  # durable task truth is best-effort; the checkpoint remains
+
+    def list_durable_tasks(self) -> list[dict[str, Any]]:
+        """Durable task discovery: task-state records + persisted checkpoint
+        threads. No second task registry - these ARE the durable stores."""
+        tasks: dict[str, dict[str, Any]] = {}
+        for record_id in self.task_store.task_ids(limit=200):
+            try:
+                record = self.task_store.load_task(record_id)
+            except PersistenceError:
+                record = None
+            if record is not None:
+                tasks[record.task_id] = {
+                    "task_id": record.task_id,
+                    "status": record.status.value,
+                    "source": "task-state",
+                }
+        for thread in self.checkpointer.thread_ids():
+            if not thread.startswith("nomadic:"):
+                continue
+            task_id = thread.split(":", 1)[-1]
+            if task_id in tasks:
+                continue
+            values = self.graph.get_state(
+                {"configurable": {"thread_id": thread}}
+            ).values or {}
+            status = values.get("task_status")
+            if status is not None:
+                tasks[task_id] = {
+                    "task_id": task_id,
+                    "status": str(status),
+                    "source": "checkpoint",
+                }
+        return [tasks[key] for key in sorted(tasks)]
+
+    async def resume_task(
+        self, task_id: str, *, thread_prefix: str = "nomadic"
+    ) -> RunSummary:
+        """Safe restart lifecycle (SPEC §47): restore DATA, then continue
+        through the normal validate -> authorize -> execute -> verify
+        pipeline. Never replays a serialized action; terminal tasks are
+        returned as completed DATA without re-invoking the graph."""
+        config = {"configurable": {"thread_id": f"{thread_prefix}:{task_id}"}}
+        values = dict(self.graph.get_state(config).values or {})
+        record = None
+        try:
+            record = self.task_store.load_task(task_id)
+        except PersistenceError:
+            record = None
+        terminal = {"SUCCESS", "FAILED", "BLOCKED", "PARTIAL"}
+        if record is not None and record.status.value in terminal:
+            return self._restored_summary(record)
+        if values.get("task_status") is not None:
+            summary = self._summarize(values)
+            if summary.status.value in ("SUCCESS", "FAILED", "BLOCKED", "PARTIAL"):
+                self._persist(summary)
+                return summary
+            if summary.status is TaskStatus.WAITING_OWNER:
+                return summary  # owner decision pending; never auto-answered
+        if not values and record is None:
+            raise PersistenceCorrupt(f"no durable task {task_id!r} to resume")
+        if not values:
+            if record is None:
+                raise PersistenceCorrupt(f"no durable task {task_id!r} to resume")
+            return self._restored_summary(record)
+        self.log.log(EventType.RECOVERY_STARTED, task_id=task_id, result="RESUME")
+        final = await self.graph.ainvoke(None, config)
+        summary = self._summarize(final)
+        self._memory_after_task(summary, final)
+        self._record_durable_task(summary, final)
+        self._persist(summary)
+        return summary
+
+    def _restored_summary(self, record: TaskRecord) -> RunSummary:
+        """Completed task restored as DATA: historical outcome only, no
+        re-execution, no new SUCCESS event."""
+        return RunSummary(
+            task_id=record.task_id,
+            status=record.status,
+            outcome_note=record.outcome_note or "restored completed task",
+        )
+
 
     # ------------------------------------------------- memory accessors ---
     @property
@@ -205,6 +318,7 @@ class NomadicApp:
         final = await self.graph.ainvoke(initial, graph_config)
         summary = self._summarize(final)
         self._memory_after_task(summary, final)
+        self._record_durable_task(summary, final)
         self._persist(summary)
         return summary
 
@@ -216,6 +330,7 @@ class NomadicApp:
         graph_config = {"configurable": {"thread_id": f"{thread_prefix}:{task_id}"}}
         final = await self.graph.ainvoke(Command(resume=decision), graph_config)
         summary = self._summarize(final)
+        self._record_durable_task(summary, final)
         self._persist(summary)
         return summary
 

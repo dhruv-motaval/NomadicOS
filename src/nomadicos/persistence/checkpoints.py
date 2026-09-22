@@ -137,6 +137,10 @@ class DurableCheckpointSaver(InMemorySaver):
         if isinstance(writes, dict):
             self.writes.update(writes)
 
+    def thread_ids(self) -> list[str]:
+        """Durable thread identities discovered from persisted checkpoints."""
+        return sorted(str(key) for key in self.storage.keys())
+
     def put(self, config, checkpoint, metadata, new_versions: ChannelVersions):
         result = super().put(config, checkpoint, metadata, new_versions)
         self._write_snapshot(self._snapshot())
