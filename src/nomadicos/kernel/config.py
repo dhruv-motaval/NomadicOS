@@ -127,6 +127,11 @@ class RouterConfig(_Contract):
         default_factory=lambda: {"FAST": 0.55, "BALANCED": 0.7, "QUALITY": 0.85}
     )
     historical_weight: float = Field(default=0.3, ge=0.0, le=1.0)
+    #: minimum measured samples before the quality gate may reject a
+    #: candidate (Phase 14C-B): fewer samples are insufficient evidence for
+    #: the gate - a single failed sample can no longer exclude a model;
+    #: N=1 reproduces the previous always-gate behavior
+    minimum_sample_count: int = Field(default=3, ge=1)
 
 
 class OrchestrationConfig(_Contract):
