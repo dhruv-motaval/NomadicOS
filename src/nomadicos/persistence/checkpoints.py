@@ -86,7 +86,8 @@ def _to_jsonable(value: Any) -> Any:
     tuples -> {"__tuple__": [...]}, bytes -> {"__b64__": ...}, dicts ->
     {"__map__": [[key, value], ...]} so tuple keys survive round-trips."""
     if isinstance(value, dict):
-        return {"__map__": [[_to_jsonable(k), _to_jsonable(v)] for k, v in value.items()]}
+        items = list(value.items())
+        return {"__map__": [[_to_jsonable(k), _to_jsonable(v)] for k, v in items]}
     if isinstance(value, tuple):
         return {"__tuple__": [_to_jsonable(item) for item in value]}
     if isinstance(value, bytes):
@@ -132,7 +133,7 @@ class DurableCheckpointSaver(InMemorySaver):
         per (thread, namespace); prune writes and blobs no longer
         referenced by the surviving checkpoints."""
         referenced: set[tuple[str, str, Any, Any]] = set()
-        for thread_id, namespaces in self.storage.items():
+        for thread_id, namespaces in list(self.storage.items()):
             for ns, cps in namespaces.items():
                 latest = list(cps.keys())[-MAX_CHECKPOINTS_PER_THREAD:]
                 for cp_id in list(cps.keys()):
@@ -236,7 +237,6 @@ def _replace_with_retry(tmp: Path, target: Path, attempts: int = 4) -> None:
         except PermissionError:
             time.sleep(0.05 * (2**attempt))
     os.replace(tmp, target)
-
 
 
 class PostgresCheckpointSaver(DurableCheckpointSaver):

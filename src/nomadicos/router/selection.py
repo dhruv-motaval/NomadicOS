@@ -81,7 +81,7 @@ class ModelSelector:
                 continue  # capability filter removes non-tool models (§13)
             if requirements.needs_large_context and record.context_window < 16384:
                 continue
-            bundle = registry.bundle_for(record.model_id, task_class)
+            bundle = registry.bundle_for(record.model_id, record.engine, task_class)
             measured = bundle.samples > 0 and bundle.success_rate is not None
             success = bundle.success_rate if measured else None
             role_fit = max(

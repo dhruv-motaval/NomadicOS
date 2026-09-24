@@ -49,6 +49,20 @@ _RELATION = "relation"
 _TOKEN_RE = re.compile(r"\w+")
 
 
+def _replace_with_retry(tmp: Path, target: Path, attempts: int = 4) -> None:
+    """os.replace can transiently fail on Windows (AV/OneDrive locks);
+    bounded retry keeps atomicity without masking real failures."""
+    import time
+
+    for attempt in range(3):
+        try:
+            os.replace(tmp, target)
+            return
+        except PermissionError:
+            time.sleep(0.05 * (2**attempt))
+    os.replace(tmp, target)
+
+
 def _tokens(text: str) -> list[str]:
     return [t for t in _TOKEN_RE.findall(text.lower()) if len(t) >= 2]
 
@@ -192,7 +206,7 @@ class JsonlMemoryStore(MemoryStore):
                     for item in items:
                         line = {"storage_type": tag, "data": item.model_dump(mode="json")}
                         fh.write(json.dumps(line, ensure_ascii=False) + "\n")
-            os.replace(tmp, self.path)
+            _replace_with_retry(Path(tmp), self.path)
         finally:
             if os.path.exists(tmp):  # pragma: no cover - only on failure
                 os.unlink(tmp)

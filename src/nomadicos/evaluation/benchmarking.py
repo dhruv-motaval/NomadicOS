@@ -144,9 +144,10 @@ class BenchmarkRunner:
         self._registry.record_benchmark(record)
         return record
 
-    def comparison(self, model_ids: list[str]) -> dict[str, Any]:
-        """Per-model class breakdown for a fair same-benchmark comparison."""
-        return {mid: self._registry.metrics(mid).benchmark for mid in model_ids}
+    def comparison(self, model_ids: list[str], engine: str) -> dict[str, Any]:
+        """Per-model class breakdown for a fair same-benchmark comparison
+        (engine-scoped, Phase 14A.1)."""
+        return {mid: self._registry.metrics(mid, engine).benchmark for mid in model_ids}
 
     # ------------------------------------------------------------- helper --
     def _store(

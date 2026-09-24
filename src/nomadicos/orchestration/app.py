@@ -37,6 +37,7 @@ from nomadicos.persistence import TaskRecord, make_task_store
 from nomadicos.persistence.contracts import AuthorizedActionRef, new_record, now_iso
 from nomadicos.persistence.errors import PersistenceCorrupt, PersistenceError
 from nomadicos.persistence.ledger import make_execution_ledger
+from nomadicos.persistence.metrics import ModelMetricStore, PostgresModelMetricStore
 from nomadicos.registry.model_registry import ModelRegistry
 from nomadicos.registry.scanner import RegistryBuilder
 from nomadicos.router.escalation import EscalationPolicy
@@ -101,7 +102,16 @@ class NomadicApp:
         if extra_engines:
             engines.update(extra_engines)
         self.engines = engines
-        self.registry = registry or ModelRegistry(self.log)
+        self._metric_store: ModelMetricStore | None = None
+        if registry is not None:
+            self.registry = registry
+        else:
+            if cfg.persistence.dsn:
+                # Phase 14A: durable model metrics when PostgreSQL is the
+                # configured durable store (same availability semantics as
+                # the task-state store: dsn set ⇒ database required)
+                self._metric_store = PostgresModelMetricStore(cfg.persistence.dsn)
+            self.registry = ModelRegistry(self.log, metric_store=self._metric_store)
         self.tools = ToolRegistry()
         self.supervisor = ProcessSupervisor()
         self.tools.register(FilesystemTool())
@@ -184,9 +194,7 @@ class NomadicApp:
                 record = existing
             task_id = summary.task_id
             proposals = list(final.get("proposals") or [])[-100:]
-            executed_fps = {
-                str(e.action_fingerprint) for e in (final.get("executions") or [])
-            }
+            executed_fps = {str(e.action_fingerprint) for e in (final.get("executions") or [])}
             action_refs = []
             for proposal in proposals:
                 action_refs.append(
@@ -250,9 +258,7 @@ class NomadicApp:
             task_id = thread.split(":", 1)[-1]
             if task_id in tasks:
                 continue
-            values = self.graph.get_state(
-                {"configurable": {"thread_id": thread}}
-            ).values or {}
+            values = self.graph.get_state({"configurable": {"thread_id": thread}}).values or {}
             status = values.get("task_status")
             if status is not None:
                 tasks[task_id] = {
@@ -262,9 +268,7 @@ class NomadicApp:
                 }
         return [tasks[key] for key in sorted(tasks)]
 
-    async def resume_task(
-        self, task_id: str, *, thread_prefix: str = "nomadic"
-    ) -> RunSummary:
+    async def resume_task(self, task_id: str, *, thread_prefix: str = "nomadic") -> RunSummary:
         """Safe restart lifecycle (SPEC §47): restore DATA, then continue
         through the normal validate -> authorize -> execute -> verify
         pipeline. Never replays a serialized action; terminal tasks are
@@ -308,7 +312,6 @@ class NomadicApp:
             status=record.status,
             outcome_note=record.outcome_note or "restored completed task",
         )
-
 
     # ------------------------------------------------- memory accessors ---
     @property
@@ -395,6 +398,8 @@ class NomadicApp:
 
     async def aclose(self) -> None:
         self.supervisor.kill_all()
+        if self._metric_store is not None:
+            self._metric_store.close()
         for engine in self.engines.values():
             await engine.aclose()
 
