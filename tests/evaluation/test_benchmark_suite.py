@@ -8,7 +8,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from bench_helpers import write_json
+from bench_helpers import make_app, write_json
 
 from nomadicos.evaluation.benchmarking import TaskRunOutcome
 from nomadicos.evaluation.suite import (
@@ -203,6 +203,43 @@ async def test_unauthorized_benchmark_is_blocked(tmp_path: Path) -> None:
     assert record.goal_verified is False
     assert record.failure_type in ("OWNER_CONFLICT", "NO_ACTION_AUTHORIZED")
     assert record.tool_success in (None, False)
+
+
+async def test_unavailable_capability_is_recorded_honestly(tmp_path: Path) -> None:
+    from nomadicos.contracts.model import CapabilityTag, ModelHealth, ModelRecord
+
+    app = make_app(tmp_path)
+    # only the INCAPABLE model is registered: the benchmark task requires
+    # TOOL_USE (+ REASONING via the task analyzer) which it does NOT have,
+    # so routing must refuse it - the capability requirement is not bypassed
+    app.registry.remove("models/small.gguf")
+    app.registry.register(
+        ModelRecord(
+            model_id="models/nocap.gguf",
+            engine="mock",
+            roles=["worker"],
+            capabilities=[CapabilityTag.TEXT],
+            health=ModelHealth.HEALTHY,
+            source="manual",
+            context_window=65536,
+        )
+    )
+    app.mock.script("benchmark_output", write_json("benchmark_output.txt", "NOMADICOS_14B_PASS"))
+    before = app.store.state()
+    task = get_task("bench_fs_create_001")
+    record = await app.run_benchmark("models/nocap.gguf", task)
+    # no routable model: recorded honestly, no fabricated SUCCESS
+    assert record.success is False
+    assert record.goal_verified is False
+    assert record.failure_type == "NO_ACTION_AUTHORIZED"
+    # routing/execution never bypassed the capability requirement
+    assert record.steps == 0
+    assert record.tool_success is None
+    assert record.model_id == "models/nocap.gguf"
+    # authority state untouched
+    after = app.store.state()
+    assert after.epoch == before.epoch
+    assert after.grant == before.grant
 
 
 # ------------------------------------------------- MetricStore / router --
