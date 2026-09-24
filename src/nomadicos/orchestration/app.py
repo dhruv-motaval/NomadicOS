@@ -18,8 +18,12 @@ from nomadicos.action_ir.validation import ProposalValidator
 from nomadicos.authority.authorization import AuthorizationService
 from nomadicos.authority.policy import CapabilityPolicy
 from nomadicos.authority.store import AuthorityStore
+from nomadicos.contracts.benchmark import BenchmarkRecord, BenchmarkTask
 from nomadicos.contracts.core import Goal, TaskStatus
+from nomadicos.contracts.execution import ExecutionStatus
 from nomadicos.contracts.verification import VerificationLevel
+from nomadicos.evaluation.benchmarking import BenchmarkRunner, TaskRunOutcome
+from nomadicos.evaluation.suite import BENCHMARK_VERSION
 from nomadicos.executor.dispatch import Executor
 from nomadicos.inference.base import InferenceEngine
 from nomadicos.inference.llama_cpp import LlamaCppEngine
@@ -105,6 +109,12 @@ class NomadicApp:
         self._metric_store: ModelMetricStore | None = None
         if registry is not None:
             self.registry = registry
+            # Phase 14B: benchmark records must persist through the same
+            # engine-scoped MetricStore regardless of how the registry was
+            # built; dsn set ⇒ database required (14A availability semantics)
+            if cfg.persistence.dsn and registry.metric_store is None:
+                self._metric_store = PostgresModelMetricStore(cfg.persistence.dsn)
+                registry.wire_metric_store(self._metric_store)
         else:
             if cfg.persistence.dsn:
                 # Phase 14A: durable model metrics when PostgreSQL is the
@@ -173,6 +183,7 @@ class NomadicApp:
         # orchestration checkpoint; status stored as DATA only.
         self.task_store = make_task_store(cfg.persistence)
         self._run_dir = Path(state_dir or cfg.persistence.state_dir) / "runs"
+        self._bench_counter = 0
 
     # ------------------------------------------------------- restart ------
     def _record_durable_task(self, summary: RunSummary, final: dict[str, Any]) -> None:
@@ -522,6 +533,119 @@ class NomadicApp:
                 r.goal_verifier,
                 r.critic,
             ) = saved
+
+    # --------------------------------------------------------- benchmark ---
+    async def run_benchmark(self, model_id: str, task: BenchmarkTask) -> BenchmarkRecord:
+        """One deterministic benchmark through the SAME production lifecycle
+        as a normal task (Phase 14B): analyze -> route -> model -> Action IR
+        -> validate -> authorize -> execute -> observe -> StepVerifier ->
+        GoalVerifier. The benchmark never bypasses authorization or
+        verification, never invokes tools directly, and never declares
+        success itself: success is the GoalVerifier verdict ONLY.
+
+        Isolation: a dedicated temporary benchmark workspace with
+        benchmark-owned memory and benchmark-owned task truth; the user's
+        real workspace, repository source files, normal persistent memory,
+        authority state, and unrelated user task state are never touched.
+        Cleanup is deterministic (temp workspace removed in finally).
+
+        The outcome is recorded through the existing BenchmarkRunner seam
+        into the engine-scoped MetricStore (Phase 14A): never merged across
+        engines, never invented."""
+        import shutil
+        import tempfile
+        import time
+
+        from nomadicos.verification.goal import PredicateGoalVerifier
+        from nomadicos.verification.step import PredicateStepVerifier
+
+        model = self.registry.get(model_id)
+        runner = BenchmarkRunner(
+            self.registry, self.runtime.engine_for(model_id), BENCHMARK_VERSION
+        )
+        bench_root = Path(tempfile.mkdtemp(prefix="nomadic-bench-"))
+        for rel_path, content in task.workspace_files.items():
+            target = bench_root / rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+        bench_memory = build_runtime_memory(
+            bench_root / "memory", self.config.memory, logger=self.log
+        )
+        bench_persistence = self.config.persistence.model_copy(
+            update={"state_dir": str(bench_root / "state")}
+        )
+        self._bench_counter += 1
+        task_id = f"{task.id}-{self._bench_counter:04d}"
+        r = self.runtime
+        saved = (
+            r.workspace_root,
+            r.workspace_per_task,
+            r.step_verifier,
+            r.goal_verifier,
+            r.memory,
+            self.memory_runtime,
+            self._run_dir,
+            self.task_store,
+        )
+        try:
+            r.workspace_root = bench_root
+            r.workspace_per_task = False
+            r.step_verifier = PredicateStepVerifier(bench_root, per_task=False)
+            r.goal_verifier = PredicateGoalVerifier(bench_root, per_task=False)
+            r.memory = bench_memory
+            self.memory_runtime = bench_memory
+            self._run_dir = Path(str(bench_root / "state")) / "runs"
+            self.task_store = make_task_store(bench_persistence)
+            started = time.monotonic()
+            summary = await self.run_goal(
+                task.objective,
+                task_id=task_id,
+                constraints=[],
+                predicates=task.goal_predicates
+                or [{"type": "tests_pass", "command": task.test_command}],
+                thread_prefix="bench",
+            )
+            elapsed = time.monotonic() - started
+            final = self.graph.get_state({"configurable": {"thread_id": f"bench:{task_id}"}}).values
+            executions = list(final.get("executions") or [])
+            # action success != step success != goal success != benchmark
+            # success: the benchmark succeeds ONLY on GoalVerifier PASS
+            goal_verified = summary.goal_verdict == "PASS"
+            tool_success = (
+                all(e.status is ExecutionStatus.SUCCEEDED for e in executions)
+                if executions
+                else None
+            )
+            failure_type = None
+            if not goal_verified:
+                if summary.waiting_owner():
+                    failure_type = "OWNER_CONFLICT"
+                elif executions:
+                    failure_type = "GOAL_NOT_VERIFIED"
+                else:
+                    failure_type = "NO_ACTION_AUTHORIZED"
+            outcome = TaskRunOutcome(
+                success=goal_verified,
+                goal_verified=goal_verified,
+                tool_success=tool_success,
+                steps=summary.steps_used,
+                retries=summary.recoveries,
+                failure_type=failure_type,
+                total_latency_s=elapsed,
+            )
+            return runner.run_workspace_task(model, task, outcome)
+        finally:
+            (
+                r.workspace_root,
+                r.workspace_per_task,
+                r.step_verifier,
+                r.goal_verifier,
+                r.memory,
+                self.memory_runtime,
+                self._run_dir,
+                self.task_store,
+            ) = saved
+            shutil.rmtree(bench_root, ignore_errors=True)
 
     # ------------------------------------------------------ memory seam ---
     def _memory_after_task(self, summary: RunSummary, final: dict[str, Any]) -> None:

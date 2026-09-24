@@ -25,6 +25,20 @@ from nomadicos.kernel.errors import ConfigInvalid
 from nomadicos.kernel.ids import new_id
 
 
+def _replace_with_retry(tmp: Path, target: Path, attempts: int = 4) -> None:
+    """os.replace can transiently fail on Windows (AV/OneDrive locks);
+    bounded retry keeps atomicity without masking real failures."""
+    import time
+
+    for attempt in range(3):
+        try:
+            os.replace(tmp, target)
+            return
+        except PermissionError:
+            time.sleep(0.05 * (2**attempt))
+    os.replace(tmp, target)
+
+
 class AuthorityGrant(Contract):
     profile: str
     granted_at: datetime
@@ -90,7 +104,7 @@ class AuthorityStore:
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(state.model_dump(mode="json"), fh, ensure_ascii=False)
-            os.replace(tmp, self.path)
+            _replace_with_retry(Path(tmp), self.path)
         finally:
             if os.path.exists(tmp):  # pragma: no cover - only on failure
                 os.unlink(tmp)

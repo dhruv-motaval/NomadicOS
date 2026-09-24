@@ -111,6 +111,13 @@ class ModelRegistry:
         """The durable metric store, when wired (Phase 14A)."""
         return self._metric_store
 
+    def wire_metric_store(self, store: ModelMetricStore) -> None:
+        """Attach the durable metric store at runtime (Phase 14B benchmark
+        seam): benchmark records persist through the same engine-scoped
+        store; existing metrics are rehydrated immediately."""
+        self._metric_store = store
+        self.reload_metrics()
+
     # ---------------------------------------------------------------- base --
     def register(self, record: ModelRecord) -> ModelRecord:
         self._records[record.model_id] = record
