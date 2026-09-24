@@ -108,10 +108,18 @@ class SpyRegistry(ModelRegistry):
         self.bundle_calls: list[tuple[str, str, str]] = []
 
     def bundle_for(
-        self, model_id: str, engine: str, task_class: str, *, prefer: str = "production"
+        self,
+        model_id: str,
+        engine: str,
+        task_class: str,
+        *,
+        benchmark_version: str | None = None,
+        prefer: str = "production",
     ):
         self.bundle_calls.append((model_id, engine, task_class))
-        return self._inner.bundle_for(model_id, engine, task_class, prefer=prefer)
+        return self._inner.bundle_for(
+            model_id, engine, task_class, benchmark_version=benchmark_version, prefer=prefer
+        )
 
     def enabled(self):
         return self._inner.enabled()

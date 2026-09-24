@@ -81,7 +81,16 @@ class ModelSelector:
                 continue  # capability filter removes non-tool models (§13)
             if requirements.needs_large_context and record.context_window < 16384:
                 continue
-            bundle = registry.bundle_for(record.model_id, record.engine, task_class)
+            # Phase 14C-A: routing consumes the NEWEST recorded benchmark
+            # version for this identity explicitly — a bench-v1 record never
+            # influences a bench-v2 routing bundle (no version blending)
+            versions = registry.metrics_versions(record.model_id, record.engine, task_class)
+            bundle = registry.bundle_for(
+                record.model_id,
+                record.engine,
+                task_class,
+                benchmark_version=versions[-1] if versions else None,
+            )
             measured = bundle.samples > 0 and bundle.success_rate is not None
             success = bundle.success_rate if measured else None
             role_fit = max(
@@ -96,8 +105,17 @@ class ModelSelector:
                     + self._router.historical_weight * success
                 )
             )
-            if success is not None and success < min_quality:
-                continue  # quality gate on measurements
+            # Phase 14C-B: the quality gate may reject a measured candidate
+            # only when the evidence is SUFFICIENT (samples >=
+            # minimum_sample_count); fewer samples stay in the ranking -
+            # a single failed sample can no longer exclude a model, and no
+            # success rate is ever invented or smoothed
+            if (
+                bundle.samples >= self._router.minimum_sample_count
+                and success is not None
+                and success < min_quality
+            ):
+                continue  # quality gate on sufficient measurements
             if success is None and min_quality > 1.0:
                 continue
             ranked.append(
