@@ -649,30 +649,42 @@ Larger coding/reasoning models can require substantially more RAM and VRAM. Mode
 
 The following setup matches the local-model roles currently exercised by the v0.2.0 hardware tests.
 
-| Role | Recommended model | Notes |
+| Role | Recommended model | NomadicOS use |
 |---|---|---|
-| Worker / Coding | `qwen3:14b` | Current validated local worker/coding model in the live coding path |
-| Critic / Reasoning | `gemma3:4b` | Used as the separate critic model in the live Worker/Critic path |
-| Lightweight general worker | `gemma3:4b` | Useful where a smaller model is sufficient |
+| All-rounder / Primary worker | `Ornith 1.5 9B` | Default model for general reasoning, planning, coding, tool use, and normal tasks |
+| Deep reasoning / Critical evaluation | `gpt-oss:20b` | Escalation for harder reasoning, complex debugging, architecture analysis, and stronger evaluation |
+| Vision specialist | `gemma3:4b` / Gemma 3 | Reserved for image/screenshot understanding once the multimodal input path is enabled |
 | Coding escalation | `qwen3-coder:30b-a3b-q4_K_M` | Optional larger coding specialist; requires more compute/memory |
 
-A practical v0.2.0 setup is therefore:
+### Compatibility with the current v0.2 graph
+
+The LangGraph orchestration and model router are model-agnostic and already support separate **worker**, **reasoning**, and **critic** roles. Assigning Ornith to worker/coding and gpt-oss to reasoning is compatible with the current `TaskRequirements → ModelSelector → worker → Action IR → authority → executor → verification` path.
+
+Gemma 3 is suitable as a future vision brick, but the current v0.2 inference contract is text-only: `ChatMessage.content` is a string and the existing worker graph does not carry image payloads. Therefore **Gemma vision is an architectural target, not a currently verified v0.2 runtime capability**. The multimodal boundary should be added as a separate input capability rather than weakening the existing text/tool path.
+
+A practical target setup is therefore:
 
 ```text
-Primary worker/coder
+Default / all-rounder
     ↓
 Ornith 1.5 9B
 
-Independent critic
+Hard reasoning / deep evaluation
     ↓
-gemma3:4b
+gpt-oss:20b
+
+Vision / screenshots
+    ↓
+Gemma 3
+    ↓
+(multimodal input path — future v0.2.x+ brick)
 
 Optional coding escalation
     ↓
 qwen3-coder:30b-a3b-q4_K_M
 ```
 
-These model choices are recommendations for the current repository configuration and live-test coverage, not hard-coded dependencies. NomadicOS is designed to route different roles to different local models.
+The repository's live hardware tests still use `qwen3:14b` for existing validation evidence. That is historical test coverage, not the final recommended model assignment. These model choices remain configuration-driven rather than hard-coded dependencies.
 
 ## Installation
 
