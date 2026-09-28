@@ -647,7 +647,7 @@ Larger coding/reasoning models can require substantially more RAM and VRAM. Mode
 
 ## Recommended models
 
-The following setup matches the local-model roles currently exercised by the v0.2.0 hardware tests.
+The following setup is the recommended target model-role configuration for NomadicOS.
 
 | Role | Recommended model | NomadicOS use |
 |---|---|---|
