@@ -94,10 +94,10 @@ NomadicOS v0.2.0 is the current development release and establishes the first co
 | Bounded recovery / repair flow | ✅ |
 | Evidence-backed completion semantics | ✅ |
 | PostgreSQL integration hooks | ✅ |
-| Desktop control | Planned |
-| Semantic memory / object graph | Planned |
-| Long-lived persistence / restart semantics | Planned |
-| Evaluation-driven routing improvement | Planned |
+| Desktop control | 🟡 Foundation |
+| Semantic memory / object graph | 🟡 Contracts / foundation |
+| Long-lived persistence / restart semantics | 🟡 Checkpoint foundation |
+| Evaluation-driven routing improvement | 🟡 Benchmarking + routing; learning loop planned |
 
 The latest repository history also contains the completed Worker/Critic phase.
 
