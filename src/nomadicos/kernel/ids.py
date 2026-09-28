@@ -22,6 +22,12 @@ _PREFIXES = (
     "evt",
     "run",
     "session",
+    "mission",
+    "subgoal",
+    "hyp",
+    "cand",
+    "dec",
+    "rec",
 )
 
 
