@@ -1718,9 +1718,9 @@ inference:
 
 models:
   worker: ollama/ornith
-  reasoning: ollama/qwen3:14b
+  reasoning: ollama/gpt-oss:20b
   coding_escalation: ollama/qwen3-coder:30b-a3b-q4_K_M
-  critic: ollama/qwen3:14b
+  critic: ollama/gpt-oss:20b
 
 autonomy:
   profile: FULL_PC_AUTONOMY
