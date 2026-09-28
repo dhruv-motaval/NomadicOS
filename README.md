@@ -661,7 +661,7 @@ A practical v0.2.0 setup is therefore:
 ```text
 Primary worker/coder
     ↓
-qwen3:14b
+Ornith 1.5 9B
 
 Independent critic
     ↓
