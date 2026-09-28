@@ -613,6 +613,67 @@ NomadicOS/
 
 ---
 
+## Recommended system requirements
+
+NomadicOS is local-first, so hardware requirements depend mainly on the size and quantization of the local model you choose.
+
+### Recommended for v0.2.0
+
+| Component | Recommended |
+|---|---|
+| OS | Windows 11 or modern Linux |
+| CPU | 6+ modern cores |
+| RAM | 16 GB+ |
+| GPU | NVIDIA GPU with 8 GB+ VRAM |
+| Storage | 50 GB+ free SSD space |
+| Python | 3.12+ |
+| Inference | llama.cpp (primary) or Ollama (compatibility) |
+
+### Minimum practical starting point
+
+For lightweight local models:
+
+```text
+CPU       4+ modern cores
+RAM       8 GB+
+GPU       Optional, but recommended
+VRAM      4–6 GB+ when using GPU acceleration
+Storage   20 GB+ free
+```
+
+Larger coding/reasoning models can require substantially more RAM and VRAM. Model quantization, context length, GPU offloading, and concurrent services all affect actual requirements.
+
+---
+
+## Recommended models
+
+The following setup matches the local-model roles currently exercised by the v0.2.0 hardware tests.
+
+| Role | Recommended model | Notes |
+|---|---|---|
+| Worker / Coding | `qwen3:14b` | Current validated local worker/coding model in the live coding path |
+| Critic / Reasoning | `gemma3:4b` | Used as the separate critic model in the live Worker/Critic path |
+| Lightweight general worker | `gemma3:4b` | Useful where a smaller model is sufficient |
+| Coding escalation | `qwen3-coder:30b-a3b-q4_K_M` | Optional larger coding specialist; requires more compute/memory |
+
+A practical v0.2.0 setup is therefore:
+
+```text
+Primary worker/coder
+    ↓
+qwen3:14b
+
+Independent critic
+    ↓
+gemma3:4b
+
+Optional coding escalation
+    ↓
+qwen3-coder:30b-a3b-q4_K_M
+```
+
+These model choices are recommendations for the current repository configuration and live-test coverage, not hard-coded dependencies. NomadicOS is designed to route different roles to different local models.
+
 ## Installation
 
 NomadicOS requires Python 3.12+.
