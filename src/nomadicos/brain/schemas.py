@@ -1,4 +1,5 @@
-"""Canonical brain domain objects (NomadicBrain spec §5-8, Sprint 1).
+"""Canonical brain domain objects (NomadicBrain spec §5-8, Sprint 1;
+Sprint 3 deliberation data contracts).
 
 Typed, frozen DATA contracts for the cognitive substrate — structure
 only: no cognitive logic, no model calls, no tool execution, no
@@ -21,6 +22,7 @@ state transitions produce new instances.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from enum import StrEnum
 from typing import Any
@@ -44,6 +46,14 @@ MAX_PROVENANCE_REFS = 8
 MAX_ARGUMENTS_JSON_CHARS = 4096
 MAX_PLAN_CANDIDATES = 128
 MAX_MONITOR_RESULTS = 256
+# Sprint 3 — deliberation bounds (hard limits; model output cannot change them)
+MAX_PREDICTED_FACTS = 16
+MAX_PREDICTIONS = 64
+MAX_EVALUATIONS = 64
+SEARCH_BRANCHING = 2  #: maximum child branches expanded from any search node (B)
+SEARCH_MAX_DEPTH = 2  #: maximum search depth (L)
+#: root + B children + B**L grandchildren for the Sprint 3 fixed limits
+MAX_SEARCH_NODES = 1 + SEARCH_BRANCHING + SEARCH_BRANCHING**SEARCH_MAX_DEPTH
 
 
 def canonical_json(model: BaseModel) -> str:
@@ -367,6 +377,208 @@ class MonitorStage(StrEnum):
 
     STRUCTURAL = "STRUCTURAL"
     SEMANTIC = "SEMANTIC"
+
+
+def _derived_id(prefix: str, *parts: Any) -> str:
+    """Deterministic, collision-safe id derived from canonical inputs.
+
+    SHA-256 over the canonical JSON of the parts (no UUID randomness, no
+    wall clock) so identical deliberation inputs always produce identical
+    ids and trajectories replay deterministically.
+    """
+    canonical = json.dumps(parts, sort_keys=True, separators=(",", ":"), default=str).encode()
+    digest = hashlib.sha256(canonical).hexdigest()
+    return f"{prefix}_{digest[:16]}"
+
+
+class EvaluationFactors(Contract):
+    """Explicit component factors of one evaluation (spec Sprint 3).
+
+    Semantics: higher ``goal_progress``/``feasibility``/``reversibility``
+    is better; higher ``risk``/``uncertainty``/``resource_cost`` is
+    worse. All factors are bounded to [0.0, 1.0].
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    goal_progress: float = Field(ge=0.0, le=1.0)
+    feasibility: float = Field(ge=0.0, le=1.0)
+    risk: float = Field(ge=0.0, le=1.0)
+    uncertainty: float = Field(ge=0.0, le=1.0)
+    resource_cost: float = Field(ge=0.0, le=1.0)
+    reversibility: float = Field(ge=0.0, le=1.0)
+
+
+class Prediction(Contract):
+    """A HYPOTHETICAL future world if one candidate is performed
+    (Sprint 3). DATA only: predictions are never observations, never
+    evidence, never verified facts, and never authorize anything.
+
+    Every fact in ``predicted_world`` MUST carry
+    ``WorldFactKind.PREDICTION`` — hypothetical facts can never silently
+    become normal FACT values (NomadicBrain Sprint 3 §19).
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str
+    candidate_id: str
+    predicted_world: WorldState
+    confidence: float = Field(ge=0.0, le=1.0)
+    assumptions: list[str] = Field(default_factory=list)
+    uncertainties: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _coherent(self) -> Prediction:
+        if not self.candidate_id.strip():
+            raise ValueError("prediction candidate_id must not be empty")
+        if not self.id.strip():
+            raise ValueError("prediction id must not be empty")
+        if len(self.predicted_world.facts) > MAX_PREDICTED_FACTS:
+            raise ValueError(f"predicted world exceeds {MAX_PREDICTED_FACTS} facts")
+        for key, fact in self.predicted_world.facts.items():
+            if fact.kind is not WorldFactKind.PREDICTION:
+                raise ValueError(
+                    f"predicted fact {key!r} must be {WorldFactKind.PREDICTION.value}, "
+                    f"got {fact.kind.value} (hypothetical facts never become FACT)"
+                )
+        for label in ("assumptions", "uncertainties"):
+            items = getattr(self, label)
+            if len(items) > MAX_CONSTRAINTS:
+                raise ValueError(f"prediction {label} exceed {MAX_CONSTRAINTS} items")
+            for item in items:
+                if not item.strip():
+                    raise ValueError(f"prediction {label} items must not be empty")
+                if len(item) > MAX_ITEM_CHARS:
+                    raise ValueError(f"prediction {label} item exceeds {MAX_ITEM_CHARS} chars")
+        return self
+
+
+class Evaluation(Contract):
+    """Estimated utility of one predicted future relative to the goal
+    (Sprint 3). NOT verification, NOT ground truth, NOT authorization —
+    a planning-time estimate with explicit component factors."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str
+    candidate_id: str
+    prediction_id: str
+    score: float = Field(ge=0.0, le=1.0)
+    factors: EvaluationFactors
+    rationale: str = ""
+
+    @model_validator(mode="after")
+    def _coherent(self) -> Evaluation:
+        if not self.candidate_id.strip():
+            raise ValueError("evaluation candidate_id must not be empty")
+        if not self.prediction_id.strip():
+            raise ValueError("evaluation prediction_id must not be empty")
+        if not self.id.strip():
+            raise ValueError("evaluation id must not be empty")
+        if len(self.rationale) > MAX_DESCRIPTION:
+            raise ValueError(f"evaluation rationale exceeds {MAX_DESCRIPTION} chars")
+        return self
+
+
+class SearchNodeStatus(StrEnum):
+    """Status of one deliberative search node (Sprint 3)."""
+
+    EXPANDED = "EXPANDED"
+    TERMINAL = "TERMINAL"
+    FAILED = "FAILED"
+
+
+class SearchStatus(StrEnum):
+    """Outcome of one bounded deliberative search. No implicit success."""
+
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class SearchNode(Contract):
+    """One node of the bounded deliberative search tree (Sprint 3).
+
+    ``node_id`` encodes the search path deterministically (``root``,
+    ``root.0``, ``root.0.0``, ...). ``evaluation_score``/``confidence``/
+    ``risk`` are denormalized from the referenced Prediction/Evaluation
+    so the result is self-contained for replay, selection, and
+    persistence. A FAILED node has no evaluation and is unselectable.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    node_id: str = Field(max_length=MAX_NODE_ID)
+    parent_node_id: str | None = None
+    depth: int = Field(ge=0, le=SEARCH_MAX_DEPTH)
+    candidate_id: str | None = None
+    prediction_id: str | None = None
+    evaluation_id: str | None = None
+    child_node_ids: list[str] = Field(default_factory=list)
+    terminal: bool = False
+    status: SearchNodeStatus
+    propagated_value: float | None = None
+    evaluation_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    risk: float | None = Field(default=None, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _coherent(self) -> SearchNode:
+        if not self.node_id.strip():
+            raise ValueError("search node_id must not be empty")
+        if len(self.child_node_ids) > SEARCH_BRANCHING:
+            raise ValueError(f"search node exceeds {SEARCH_BRANCHING} child branches")
+        for child in self.child_node_ids:
+            if not child.strip():
+                raise ValueError("search node child references must not be empty")
+        if self.status is SearchNodeStatus.FAILED and not self.terminal:
+            raise ValueError("a FAILED search node is terminal (never expanded)")
+        return self
+
+
+class SearchResult(Contract):
+    """Typed result of one bounded deliberative search (Sprint 3).
+
+    Retains the full tree for replay, deterministic selection,
+    debugging, state persistence, and event tracing. Bounded by the
+    Sprint 3 hard limits (B=2, L=2 -> at most
+    ``MAX_SEARCH_NODES`` nodes). Data only: never an execution, never
+    authority, and COMPLETED is a search outcome — never mission
+    success.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    root_node_id: str
+    root_candidate_ids: list[str] = Field(default_factory=list)
+    nodes: list[SearchNode] = Field(default_factory=list)
+    status: SearchStatus = SearchStatus.COMPLETED
+    failure_reason: str = ""
+
+    @model_validator(mode="after")
+    def _coherent(self) -> SearchResult:
+        if not self.root_node_id.strip():
+            raise ValueError("search result root_node_id must not be empty")
+        if len(self.root_candidate_ids) > SEARCH_BRANCHING:
+            raise ValueError(
+                f"search result exceeds {SEARCH_BRANCHING} root branches (B limit)"
+            )
+        if len(self.nodes) > MAX_SEARCH_NODES:
+            raise ValueError(f"search result exceeds {MAX_SEARCH_NODES} nodes")
+        if len(self.failure_reason) > MAX_DESCRIPTION:
+            raise ValueError(f"search failure reason exceeds {MAX_DESCRIPTION} chars")
+        if self.status is SearchStatus.FAILED and not self.failure_reason.strip():
+            raise ValueError("a FAILED search result requires an explicit reason")
+        node_ids = {n.node_id for n in self.nodes}
+        if len(node_ids) != len(self.nodes):
+            raise ValueError("duplicate search node id in result")
+        for node in self.nodes:
+            for child in node.child_node_ids:
+                if child not in node_ids:
+                    raise ValueError(
+                        f"search node {node.node_id!r} references unknown child {child!r}"
+                    )
+        return self
 
 
 class MonitorResult(Contract):

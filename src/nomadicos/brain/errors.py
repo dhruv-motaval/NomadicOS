@@ -40,3 +40,9 @@ class InvalidBrainState(BrainError):
 
 class InvalidTransition(BrainError):
     """A deterministic state transition was rejected (fail closed)."""
+
+
+class DeliberationError(BrainError):
+    """Deliberation failed explicitly (no valid root candidate, no
+    selectable candidate, bounded search exhausted) — never coerced into
+    a fabricated value or a false completion."""

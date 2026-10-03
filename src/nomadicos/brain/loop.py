@@ -73,6 +73,11 @@ class LoopConfig(Contract):
     max_iterations: int = Field(default=3, ge=1, le=MAX_ITERATIONS_BOUND)
     #: deterministic per-proposal candidate ceiling
     max_candidates: int = Field(default=8, ge=1, le=64)
+    #: Sprint 3: when False, monitor acceptance is proposal-gate
+    #: information only — no monitor-acceptance Decisions are recorded
+    #: (the final action-selection Decision comes from the deliberation
+    #: selector). Default True preserves Sprint 2 behavior.
+    record_acceptance_decisions: bool = True
 
 
 class PlanningStage(StrEnum):
@@ -276,16 +281,20 @@ class ActorMonitorLoop:
                 last_event_id = candidate_event.event_id
 
             if accepted:
-                decisions = [
-                    Decision(
-                        id=f"dec_{result.candidate_id}",
-                        candidate_id=result.candidate_id,
-                        selected=True,
-                        rationale="accepted by monitor",
-                        factors={"iteration": result.iteration, "stage": result.stage.value},
-                    )
-                    for result in accepted
-                ]
+                decisions = (
+                    [
+                        Decision(
+                            id=f"dec_{result.candidate_id}",
+                            candidate_id=result.candidate_id,
+                            selected=True,
+                            rationale="accepted by monitor",
+                            factors={"iteration": result.iteration, "stage": result.stage.value},
+                        )
+                        for result in accepted
+                    ]
+                    if self._config.record_acceptance_decisions
+                    else []
+                )
                 state = self._with_planning(
                     state,
                     candidates=all_candidates,

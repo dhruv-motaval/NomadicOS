@@ -25,17 +25,22 @@ from nomadicos.brain.events import BrainEvent, EventRef
 from nomadicos.brain.planner.task_graph import TaskGraph
 from nomadicos.brain.schemas import (
     BRAIN_SCHEMA_VERSION,
+    MAX_EVALUATIONS,
     MAX_MONITOR_RESULTS,
     MAX_PLAN_CANDIDATES,
+    MAX_PREDICTIONS,
     MAX_PROVENANCE_REFS,
     ActionCandidate,
     BudgetState,
     Capability,
     Constraints,
     Decision,
+    Evaluation,
     Hypothesis,
     MemoryRef,
     MonitorResult,
+    Prediction,
+    SearchResult,
     Subgoal,
     WorkingMemoryView,
     WorldState,
@@ -83,6 +88,11 @@ class BrainState(Contract):
     planning_decisions: list[Decision] = Field(default_factory=list)
     #: bounded refinement iterations consumed so far (0 = none yet)
     planning_iterations: int = Field(default=0, ge=0)
+    # Sprint 3 — deliberation state (data only; see brain.deliberation)
+    predictions: list[Prediction] = Field(default_factory=list)
+    evaluations: list[Evaluation] = Field(default_factory=list)
+    #: trace of the last bounded deliberative search (replayable)
+    search_trace: SearchResult | None = None
 
     @model_validator(mode="after")
     def _coherent(self) -> BrainState:
@@ -112,6 +122,10 @@ class BrainState(Contract):
         for candidate in self.action_candidates:
             if len(candidate.derived_from) > MAX_PROVENANCE_REFS:
                 raise ValueError("stored candidate provenance exceeds the reference bound")
+        if len(self.predictions) > MAX_PREDICTIONS:
+            raise ValueError(f"predictions exceed {MAX_PREDICTIONS}")
+        if len(self.evaluations) > MAX_EVALUATIONS:
+            raise ValueError(f"evaluations exceed {MAX_EVALUATIONS}")
         return self
 
     @classmethod

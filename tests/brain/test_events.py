@@ -50,6 +50,13 @@ def test_event_type_vocabulary_is_closed() -> None:
         "BRAIN_CANDIDATE_REJECTED",
         "BRAIN_ACTOR_REFINEMENT",
         "BRAIN_PLANNING_FAILED",
+        # Sprint 3 — deliberation trajectory
+        "BRAIN_PREDICTION_PRODUCED",
+        "BRAIN_EVALUATION_PRODUCED",
+        "BRAIN_SEARCH_STARTED",
+        "BRAIN_SEARCH_EXPANDED",
+        "BRAIN_SEARCH_COMPLETED",
+        "BRAIN_ACTION_SELECTED",
     }
 
 

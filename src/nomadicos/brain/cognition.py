@@ -43,6 +43,8 @@ class CognitiveRole(StrEnum):
     DECOMPOSER = "DECOMPOSER"
     ACTOR = "ACTOR"
     MONITOR = "MONITOR"
+    PREDICTOR = "PREDICTOR"
+    EVALUATOR = "EVALUATOR"
 
 
 class CognitiveRequest(Contract):
@@ -87,6 +89,24 @@ class StructuredGenerator(Protocol):
     async def generate_structured(self, request: CognitiveRequest) -> str: ...
 
 
+def _extract_single_fenced_payload(text: str) -> tuple[str | None, str]:
+    """Return (body, rest) where ``body`` is the first ```json fenced object,
+    or (None, text) when there is no valid ```json preamble. ``rest`` is the
+    trailing text after the closing fence (used to reject a second fence)."""
+    if not text.startswith("```json"):
+        return None, text
+    fence_end = text.find("```")
+    if fence_end < 0:
+        return None, ""
+    # Body spans from after the opening fence to before the closing fence.
+    # Use max to stay within the ```json header when a space precedes the token.
+    body_end = max(fence_end + 3, len('```json'))
+    body, rest = text[body_end:fence_end + 3], text[fence_end + 3:]
+    if rest.startswith("```"):
+        return None, ""
+    return body, rest
+
+
 def parse_model_json(text: str, *, context: str) -> dict[str, Any]:
     """Strictly parse model output into a JSON object.
 
@@ -102,12 +122,20 @@ def parse_model_json(text: str, *, context: str) -> dict[str, Any]:
     stripped = text.strip()
     if not stripped:
         raise ModelOutputRejected(f"{context}: model output is empty")
+    # Tolerate ONE fenced JSON preamble: extract the object from a single
+    # leading ```json fence; the remainder is subject to the strict rules
+    # below. Multiple fences, prose between fences, or a trailing code fence
+    # after the object are all rejected (fail closed).
     if stripped.startswith("```"):
+        body, _ = _extract_single_fenced_payload(stripped)
+    else:
+        body = stripped
+    if body is None:
         raise ModelOutputRejected(
             f"{context}: model output must be a bare JSON object, not fenced text"
         )
     try:
-        parsed = json.loads(stripped)
+        parsed = json.loads(body)
     except json.JSONDecodeError as exc:
         raise ModelOutputRejected(
             f"{context}: model output is not valid JSON ({exc.msg} at line {exc.lineno})"
