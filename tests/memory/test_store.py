@@ -319,10 +319,12 @@ DATA_METHODS = {
     "query",
     "upsert_object",
     "upsert_relation",
+    "upsert_trajectory",
     "neighbors",
     "records",
     "objects",
     "relations",
+    "trajectories",
 }
 
 

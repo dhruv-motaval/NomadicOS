@@ -39,12 +39,15 @@ from nomadicos.contracts.memory import (
     ObjectRecord,
     RelationRecord,
     RetrievedMemory,
+    TrajectoryRecord,
 )
 from nomadicos.kernel.config import MemoryConfig
+from nomadicos.memory.scrub import scrub, scrub_all
 
 _RECORD = "record"
 _OBJECT = "object"
 _RELATION = "relation"
+_TRAJECTORY = "trajectory"
 
 _TOKEN_RE = re.compile(r"\w+")
 
@@ -106,6 +109,14 @@ class MemoryStore:
     ) -> list[MemoryRecord]:
         raise NotImplementedError
 
+    def upsert_trajectory(  # pragma: no cover - protocol
+        self, trajectory: TrajectoryRecord
+    ) -> TrajectoryRecord:
+        raise NotImplementedError
+
+    def trajectories(self) -> list[TrajectoryRecord]:  # pragma: no cover - protocol
+        raise NotImplementedError
+
 
 class JsonlMemoryStore(MemoryStore):
     """Bounded JSONL memory store; one atomically-replaced file.
@@ -121,6 +132,7 @@ class JsonlMemoryStore(MemoryStore):
         self._records: dict[str, MemoryRecord] = {}
         self._objects: dict[str, ObjectRecord] = {}
         self._relations: dict[str, RelationRecord] = {}
+        self._trajectories: dict[str, TrajectoryRecord] = {}
         self.dropped_invalid_lines = 0
         self._load()
 
@@ -133,6 +145,9 @@ class JsonlMemoryStore(MemoryStore):
 
     def relations(self) -> list[RelationRecord]:
         return list(self._relations.values())
+
+    def trajectories(self) -> list[TrajectoryRecord]:
+        return list(self._trajectories.values())
 
     def query(self, query: MemoryQuery) -> list[RetrievedMemory]:
         """Deterministic bounded filter over stored records.
@@ -160,25 +175,57 @@ class JsonlMemoryStore(MemoryStore):
 
     # -------------------------------------------------------------- write ---
     def write(self, record: MemoryRecord) -> MemoryRecord:
-        self._records[record.id] = record
+        stored = record.model_copy(
+            update={
+                "content": scrub(record.content),
+                "tags": scrub_all(record.tags),
+            }
+        )
+        self._records[stored.id] = stored
         self._evict_records()
         self._persist()
-        return record
+        return stored
 
     def upsert_object(self, obj: ObjectRecord) -> ObjectRecord:
-        self._objects[obj.id] = obj
+        stored = obj.model_copy(
+            update={"properties": {k: scrub(v) for k, v in obj.properties.items()}}
+        )
+        self._objects[stored.id] = stored
         while len(self._objects) > self._max:
             del self._objects[next(iter(self._objects))]
         self._persist()
-        return obj
+        return stored
 
     def upsert_relation(self, relation: RelationRecord) -> RelationRecord:
-        self._relations[relation.id] = relation
+        stored = relation.model_copy(
+            update={"properties": {k: scrub(v) for k, v in relation.properties.items()}}
+        )
+        self._relations[stored.id] = stored
         while len(self._relations) > self._max:
             oldest = next(iter(self._relations))
             del self._relations[oldest]
         self._persist()
-        return relation
+        return stored
+
+    def upsert_trajectory(self, trajectory: TrajectoryRecord) -> TrajectoryRecord:
+        stored = trajectory.model_copy(
+            update={
+                "goal_text": scrub(trajectory.goal_text),
+                "outcome": scrub(trajectory.outcome),
+                "steps": [
+                    step.model_copy(
+                        update={"summary": scrub(step.summary), "ref": scrub(step.ref)}
+                    )
+                    for step in trajectory.steps
+                ],
+            }
+        )
+        self._trajectories[stored.id] = stored
+        while len(self._trajectories) > self._max:
+            oldest = next(iter(self._trajectories))
+            del self._trajectories[oldest]
+        self._persist()
+        return stored
 
     # ----------------------------------------------------------- internal ---
     def _evict_records(self) -> None:
@@ -202,6 +249,7 @@ class JsonlMemoryStore(MemoryStore):
                     (_RECORD, self._records.values()),
                     (_OBJECT, self._objects.values()),
                     (_RELATION, self._relations.values()),
+                    (_TRAJECTORY, self._trajectories.values()),
                 ):
                     for item in items:
                         line = {"storage_type": tag, "data": item.model_dump(mode="json")}
@@ -223,6 +271,7 @@ class JsonlMemoryStore(MemoryStore):
         self._records = {}
         self._objects = {}
         self._relations = {}
+        self._trajectories = {}
         for line in text.splitlines():
             line = line.strip()
             if not line:
@@ -244,6 +293,9 @@ class JsonlMemoryStore(MemoryStore):
                 elif tag == _RELATION:
                     rel = RelationRecord.model_validate(data)
                     self._relations[rel.id] = rel
+                elif tag == _TRAJECTORY:
+                    traj = TrajectoryRecord.model_validate(data)
+                    self._trajectories[traj.id] = traj
                 else:
                     self.dropped_invalid_lines += 1
             except (ValidationError, ValueError):

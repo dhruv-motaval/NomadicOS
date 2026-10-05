@@ -35,6 +35,9 @@ from __future__ import annotations
 import re
 
 from nomadicos.contracts.memory import (
+    MAX_MATCHED_TOKENS as MAX_MATCHED,
+)
+from nomadicos.contracts.memory import (
     MemoryKind,
     MemoryQuery,
     MemoryRecord,
@@ -56,6 +59,10 @@ KIND_BOOST: dict[MemoryKind, float] = {
 
 #: fixed additive bonus for records reached through 1-hop graph expansion
 GRAPH_BONUS = 0.05
+
+#: multiplicative penalty applied to superseded records — they stay
+#: retrievable data but rank below current knowledge (Sprint 5 §52G)
+SUPERSEDED_PENALTY = 0.5
 
 
 def tokenize(text: str) -> frozenset[str]:
@@ -94,7 +101,12 @@ class Retriever:
         self._budget = max(int(context_char_budget), 1)
 
     def retrieve(self, query: MemoryQuery) -> list[RetrievedMemory]:
-        """Deterministic lexical ranking + bounded 1-hop graph expansion."""
+        """Deterministic lexical ranking + bounded 1-hop graph expansion.
+
+        Score pipeline: lexical coverage → kind boost → supersession
+        penalty → relevance threshold (``query.min_score``) → bounded
+        top-K. Order is deterministic: (-score, kind, id).
+        """
         query_tokens = frozenset(
             t for t in _TOKEN_RE.findall(query.text.lower()) if len(t) >= 2
         )
@@ -106,16 +118,30 @@ class Retriever:
             if query_tokens and base == 0.0:
                 continue  # lexical mode: no match, no entry
             score = min(1.0, base + _kind_boost(record.kind))
+            if record.superseded:
+                score *= SUPERSEDED_PENALTY
             previous = best.get(record.id)
             if previous is None or score > previous[0]:
                 best[record.id] = (score, record)
         self._expand(query, best, query_tokens)
         ordered = sorted(
             best.values(), key=lambda pair: (-pair[0], pair[1].kind.value, pair[1].id)
-        )[: query.limit]
-        return [
-            RetrievedMemory(record=r, score=round(s, _SCORE_DECIMALS)) for s, r in ordered
-        ]
+        )
+        out: list[RetrievedMemory] = []
+        for score, record in ordered:
+            if score < query.min_score:
+                continue  # relevance filter: below-threshold hits are dropped
+            matched = sorted(query_tokens & record_tokens(record))[:MAX_MATCHED]
+            out.append(
+                RetrievedMemory(
+                    record=record,
+                    score=round(score, _SCORE_DECIMALS),
+                    matched=matched,
+                )
+            )
+            if len(out) >= query.limit:
+                break
+        return out
 
     def _expand(
         self,

@@ -16,20 +16,36 @@ from nomadicos.contracts.memory import (
     MemoryProvenance,
     MemoryQuery,
     MemoryRecord,
+    MemorySource,
     ObjectRecord,
     RelationRecord,
     RetrievedMemory,
+    SupersessionRecord,
+    TrajectoryRecord,
+    TrajectoryStep,
+    TrajectoryStepKind,
 )
 from nomadicos.memory.store import JsonlMemoryStore, MemoryStore
+from nomadicos.memory.supersession import SUPERSEDES, supersede
+from nomadicos.memory.trajectory import record_trajectory, trajectory_id
 
 __all__ = [
+    "SUPERSEDES",
     "JsonlMemoryStore",
     "MemoryKind",
     "MemoryProvenance",
     "MemoryQuery",
     "MemoryRecord",
+    "MemorySource",
     "MemoryStore",
     "ObjectRecord",
     "RelationRecord",
     "RetrievedMemory",
+    "SupersessionRecord",
+    "TrajectoryRecord",
+    "TrajectoryStep",
+    "TrajectoryStepKind",
+    "record_trajectory",
+    "supersede",
+    "trajectory_id",
 ]

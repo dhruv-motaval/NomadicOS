@@ -27,7 +27,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-_ID_PREFIX = {"observation": "obs", "failure": "fail"}
+_ID_PREFIX = {
+    "observation": "obs",
+    "failure": "fail",
+    "hypothesis": "hyp",
+    "decision": "dec",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +40,9 @@ class WorkingItem:
     """One snapshot entry; slots use their section name as item_id."""
 
     item_id: str
-    section: str  # goal | plan | observation | failure | critic_feedback
+    #: goal | subgoal | plan | observation | failure | hypothesis |
+    #: decision | retrieved | critic_feedback | execution_context
+    section: str
     text: str
     pinned: bool = False
 
@@ -43,8 +50,12 @@ class WorkingItem:
 @dataclass(slots=True)
 class _TaskWorking:
     goal: str = ""
+    subgoal: str = ""
     plan_digest: str = ""
     critic_feedback: str = ""
+    execution_context: str = ""
+    #: latest goal-aware retrieval view (replaced each cycle, never grown)
+    retrieved: str = ""
     #: insertion order == eviction order (oldest first)
     items: list[WorkingItem] = field(default_factory=list)
     next_seq: int = 1
@@ -66,17 +77,33 @@ class WorkingMemory:
     def set_goal(self, task_id: str, text: str) -> bool:
         return self._set_slot(task_id, "goal", text)
 
+    def set_subgoal(self, task_id: str, text: str) -> bool:
+        return self._set_slot(task_id, "subgoal", text)
+
     def set_plan_digest(self, task_id: str, text: str) -> bool:
         return self._set_slot(task_id, "plan_digest", text)
 
     def set_critic_feedback(self, task_id: str, text: str) -> bool:
         return self._set_slot(task_id, "critic_feedback", text)
 
+    def set_execution_context(self, task_id: str, text: str) -> bool:
+        return self._set_slot(task_id, "execution_context", text)
+
+    def set_retrieved(self, task_id: str, text: str) -> bool:
+        """Replace the goal-aware retrieved-memories view (one slot)."""
+        return self._set_slot(task_id, "retrieved", text)
+
     def push_observation(self, task_id: str, text: str, *, pinned: bool = False) -> str | None:
         return self._push(task_id, "observation", text, pinned)
 
     def push_failure(self, task_id: str, text: str, *, pinned: bool = False) -> str | None:
         return self._push(task_id, "failure", text, pinned)
+
+    def push_hypothesis(self, task_id: str, text: str, *, pinned: bool = False) -> str | None:
+        return self._push(task_id, "hypothesis", text, pinned)
+
+    def push_decision(self, task_id: str, text: str, *, pinned: bool = False) -> str | None:
+        return self._push(task_id, "decision", text, pinned)
 
     def pin(self, task_id: str, item_id: str) -> bool:
         task = self._tasks.get(task_id)
@@ -114,12 +141,22 @@ class WorkingMemory:
         out: list[WorkingItem] = []
         if task.goal:
             out.append(WorkingItem("goal", "goal", task.goal, True))
+        if task.subgoal:
+            out.append(WorkingItem("subgoal", "subgoal", task.subgoal, True))
         if task.plan_digest:
             out.append(WorkingItem("plan", "plan", task.plan_digest, True))
         out += [i for i in task.items if i.section == "observation"]
         out += [i for i in task.items if i.section == "failure"]
+        out += [i for i in task.items if i.section == "hypothesis"]
+        out += [i for i in task.items if i.section == "decision"]
+        if task.retrieved:
+            out.append(WorkingItem("retrieved", "retrieved", task.retrieved, True))
         if task.critic_feedback:
             out.append(WorkingItem("critic", "critic_feedback", task.critic_feedback, True))
+        if task.execution_context:
+            out.append(
+                WorkingItem("exec_ctx", "execution_context", task.execution_context, True)
+            )
         return out
 
     def context(self, task_id: str) -> str:
@@ -130,14 +167,23 @@ class WorkingMemory:
             return ""
         observations = [i for i in task.items if i.section == "observation"]
         failures = [i for i in task.items if i.section == "failure"]
+        hypotheses = [i for i in task.items if i.section == "hypothesis"]
+        decisions = [i for i in task.items if i.section == "decision"]
         obs_block = "\n".join(f"- [{i.item_id}] {i.text}" for i in observations) or "(none)"
         fail_block = "\n".join(f"- [{i.item_id}] {i.text}" for i in failures) or "(none)"
+        hyp_block = "\n".join(f"- [{i.item_id}] {i.text}" for i in hypotheses) or "(none)"
+        dec_block = "\n".join(f"- [{i.item_id}] {i.text}" for i in decisions) or "(none)"
         return (
             f"GOAL: {task.goal or '(none)'}\n"
+            f"SUBGOAL: {task.subgoal or '(none)'}\n"
             f"PLAN: {task.plan_digest or '(none)'}\n"
             f"OBSERVATIONS:\n{obs_block}\n"
             f"FAILURES:\n{fail_block}\n"
-            f"CRITIC FEEDBACK: {task.critic_feedback or '(none)'}"
+            f"HYPOTHESES:\n{hyp_block}\n"
+            f"DECISIONS:\n{dec_block}\n"
+            f"RETRIEVED: {task.retrieved or '(none)'}\n"
+            f"CRITIC FEEDBACK: {task.critic_feedback or '(none)'}\n"
+            f"EXECUTION CONTEXT: {task.execution_context or '(none)'}"
         )
 
     def known_tasks(self) -> tuple[str, ...]:
@@ -146,7 +192,14 @@ class WorkingMemory:
 
     # ------------------------------------------------------------ internal ---
     def _chars(self, task: _TaskWorking) -> int:
-        stored = len(task.goal) + len(task.plan_digest) + len(task.critic_feedback)
+        stored = (
+            len(task.goal)
+            + len(task.subgoal)
+            + len(task.plan_digest)
+            + len(task.critic_feedback)
+            + len(task.execution_context)
+            + len(task.retrieved)
+        )
         return stored + sum(len(i.text) for i in task.items)
 
     def _evict_plan(
