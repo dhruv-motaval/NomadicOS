@@ -102,6 +102,24 @@ class EvaluationPayload(Contract):
     rationale: str = ""
 
 
+class AdaptiveSearchPolicy(Contract):
+    """Sprint 6 adaptive-search parameters. All values are HARD-BOUNDED:
+    depth can never exceed the Sprint 3 constant ``SEARCH_MAX_DEPTH`` and
+    branching is untouched (B=2). A low-uncertainty/high-confidence case
+    terminates earlier; a high-uncertainty case may use the full (still
+    strictly bounded) depth."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    #: evaluation score at/above which a node is good enough — its branch
+    #: terminates there (early termination, deterministic)
+    stop_score: float = Field(default=0.9, ge=0.0, le=1.0)
+    #: prediction confidence required together with stop_score
+    stop_confidence: float = Field(default=0.9, ge=0.0, le=1.0)
+    #: effective maximum depth for this run (capped by SEARCH_MAX_DEPTH)
+    max_depth: int = Field(default=SEARCH_MAX_DEPTH, ge=0, le=SEARCH_MAX_DEPTH)
+
+
 class DeliberationOutcome(Contract):
     """Explicit result of one deliberation run (data only).
 
@@ -530,9 +548,14 @@ class DeliberationSearch:
         root_candidates: Sequence[ActionCandidate],
         *,
         parent_event_id: str | None = None,
+        policy: AdaptiveSearchPolicy | None = None,
     ) -> tuple[BrainState, SearchResult]:
         if subgoal.goal_id != state.goal.id:
             raise BrainError("subgoal does not belong to the state's goal")
+        # Sprint 6: optional adaptive policy. Without one, behavior is
+        # byte-identical to Sprint 3 (full depth, no early termination).
+        # With one, depth is still hard-capped by SEARCH_MAX_DEPTH.
+        effective_max_depth = policy.max_depth if policy is not None else SEARCH_MAX_DEPTH
         # stable deterministic ordering: existing proposal order, at most B kept
         kept = list(root_candidates)[:SEARCH_BRANCHING]
         nodes: list[SearchNode] = [
@@ -544,7 +567,8 @@ class DeliberationSearch:
             {
                 "root_node_id": "root",
                 "branching": SEARCH_BRANCHING,
-                "max_depth": SEARCH_MAX_DEPTH,
+                "max_depth": effective_max_depth,
+                "adaptive": policy is not None,
                 "root_candidate_ids": [c.id for c in kept],
             },
             actor="deliberation",
@@ -567,6 +591,8 @@ class DeliberationSearch:
                 depth=1,
                 parent_event_id=last_event_id,
                 nodes=nodes,
+                max_depth=effective_max_depth,
+                policy=policy,
             )
             child_node_ids.append(child_node_id)
             if value is not None:
@@ -626,6 +652,8 @@ class DeliberationSearch:
         depth: int,
         parent_event_id: str | None,
         nodes: list[SearchNode],
+        max_depth: int = SEARCH_MAX_DEPTH,
+        policy: AdaptiveSearchPolicy | None = None,
     ) -> tuple[BrainState, SearchNode, float | None]:
         """Visit one branch: predict -> evaluate -> bounded child
         expansion (DFS).
@@ -635,7 +663,12 @@ class DeliberationSearch:
         ``branch_state`` is the (hypothetical) world context the model
         calls see. Returns (real_state, node, propagated_value); the
         value is None when the node failed — never fabricated.
-        """
+
+        Sprint 6: when a policy is provided, a node whose evaluation
+        score AND prediction confidence both reach the policy thresholds
+        is good enough — the branch terminates there (early
+        termination). Expansion depth stays hard-capped (``max_depth``
+        <= ``SEARCH_MAX_DEPTH``)."""
         try:
             prediction = await self._predictor.predict(branch_state, candidate, subgoal)
         except Exception as exc:  # fail closed: predictor failure -> failed node
@@ -711,7 +744,12 @@ class DeliberationSearch:
 
         child_node_ids: list[str] = []
         child_values: list[float] = []
-        if depth < SEARCH_MAX_DEPTH:
+        good_enough = (
+            policy is not None
+            and evaluation.score >= policy.stop_score
+            and prediction.confidence >= policy.stop_confidence
+        )
+        if depth < max_depth and not good_enough:
             branch = branch_state_from_prediction(branch_state, prediction)
             children = await self._accepted_children(
                 branch, subgoal, depth, evaluation_event.event_id
@@ -728,6 +766,8 @@ class DeliberationSearch:
                     depth=depth + 1,
                     parent_event_id=evaluation_event.event_id,
                     nodes=nodes,
+                    max_depth=max_depth,
+                    policy=policy,
                 )
                 child_node_ids.append(child_node_id)
                 if child_value is not None:
@@ -930,6 +970,7 @@ class DeliberationCoordinator:
         outcome: PlanningOutcome,
         *,
         parent_event_id: str | None = None,
+        policy: AdaptiveSearchPolicy | None = None,
     ) -> tuple[BrainState, DeliberationOutcome]:
         if subgoal.goal_id != state.goal.id:
             raise BrainError("subgoal does not belong to the state's goal")
@@ -939,7 +980,7 @@ class DeliberationCoordinator:
                 state, "no accepted root candidate to deliberate on", parent_event_id
             )
         state, result = await self._search.run(
-            state, subgoal, accepted, parent_event_id=parent_event_id
+            state, subgoal, accepted, parent_event_id=parent_event_id, policy=policy
         )
         if result.status is not SearchStatus.COMPLETED:
             return state, self._failed_outcome(result)

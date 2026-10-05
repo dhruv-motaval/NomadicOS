@@ -42,6 +42,7 @@ from nomadicos.brain.events import BrainEvent, BrainEventType
 from nomadicos.brain.monitor import Monitor, MonitorDecision
 from nomadicos.brain.schemas import (
     MAX_DESCRIPTION,
+    MAX_ITERATIONS_BOUND,
     MAX_PROVENANCE_REFS,
     ActionCandidate,
     Decision,
@@ -51,8 +52,6 @@ from nomadicos.brain.schemas import (
 from nomadicos.brain.state import BrainState
 from nomadicos.contracts.core import Contract
 from nomadicos.kernel.ids import new_id
-
-MAX_ITERATIONS_BOUND = 16
 
 EventClock = Callable[[], datetime]
 

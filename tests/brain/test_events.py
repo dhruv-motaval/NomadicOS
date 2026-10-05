@@ -56,7 +56,14 @@ def test_event_type_vocabulary_is_closed() -> None:
         "BRAIN_SEARCH_STARTED",
         "BRAIN_SEARCH_EXPANDED",
         "BRAIN_SEARCH_COMPLETED",
+        # Sprint 3 — deliberation trajectory
         "BRAIN_ACTION_SELECTED",
+        # Sprint 6 — adaptive intelligence trajectory
+        "BRAIN_ATTENTION_FOCUSED",
+        "BRAIN_BELIEFS_ASSESSED",
+        "BRAIN_METACOGNITION_PRODUCED",
+        "BRAIN_INFO_GATHERING_REQUESTED",
+        "BRAIN_EFFORT_DECIDED",
     }
 
 

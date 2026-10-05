@@ -54,6 +54,15 @@ SEARCH_BRANCHING = 2  #: maximum child branches expanded from any search node (B
 SEARCH_MAX_DEPTH = 2  #: maximum search depth (L)
 #: root + B children + B**L grandchildren for the Sprint 3 fixed limits
 MAX_SEARCH_NODES = 1 + SEARCH_BRANCHING + SEARCH_BRANCHING**SEARCH_MAX_DEPTH
+# Sprint 6 — adaptive intelligence bounds (hard limits; model output cannot
+# change them)
+MAX_ITERATIONS_BOUND = 16  #: canonical loop/effort iteration ceiling (loop.py imports)
+MAX_ATTENTION_ITEMS = 8
+MAX_ATTENTION_REASONS = 4
+MAX_ATTENTION_TEXT_CHARS = 200
+MAX_BELIEF_FACTS = 32
+MAX_INFO_REQUESTS = 4
+MAX_METACOGNITION_ITEMS = 8
 
 
 def canonical_json(model: BaseModel) -> str:
@@ -611,4 +620,229 @@ class MonitorResult(Contract):
                 raise ValueError("monitor result reasons must not be empty")
             if len(reason) > MAX_ITEM_CHARS:
                 raise ValueError(f"monitor reason exceeds {MAX_ITEM_CHARS} chars")
+        return self
+
+
+# ══════════════════════════ Sprint 6 — Adaptive Intelligence ══════════════════════════
+
+
+class AttentionSource(StrEnum):
+    """What kind of cognitive item attention selected (Sprint 6)."""
+
+    SUBGOAL = "SUBGOAL"
+    OBSERVATION = "OBSERVATION"
+    HYPOTHESIS = "HYPOTHESIS"
+    WORLD_FACT = "WORLD_FACT"
+    MEMORY = "MEMORY"
+    ACTION_CANDIDATE = "ACTION_CANDIDATE"
+
+
+class AttentionItem(Contract):
+    """One selected cognitive item with its deterministic salience score
+    and bounded reasons (Sprint 6, spec §9). DATA only."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    ref: str = Field(max_length=MAX_NODE_ID)
+    source: AttentionSource
+    summary: str = ""
+    score: float = Field(ge=0.0, le=1.0)
+    reasons: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _coherent(self) -> AttentionItem:
+        if not self.ref.strip():
+            raise ValueError("attention item ref must not be empty")
+        if len(self.summary) > MAX_ATTENTION_TEXT_CHARS:
+            raise ValueError(
+                f"attention summary exceeds {MAX_ATTENTION_TEXT_CHARS} chars"
+            )
+        if len(self.reasons) > MAX_ATTENTION_REASONS:
+            raise ValueError(f"attention reasons exceed {MAX_ATTENTION_REASONS}")
+        for reason in self.reasons:
+            if not reason.strip():
+                raise ValueError("attention reasons must not be empty")
+        return self
+
+
+class AttentionView(Contract):
+    """Focused cognitive context: the bounded, deterministically ordered
+    top items attention selected (Sprint 6). Ordering (-score, ref) is
+    enforced at construction — the view is always canonical."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    items: list[AttentionItem] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _ordered_and_bounded(self) -> AttentionView:
+        if len(self.items) > MAX_ATTENTION_ITEMS:
+            raise ValueError(f"attention view exceeds {MAX_ATTENTION_ITEMS} items")
+        ordered = sorted(self.items, key=lambda i: (-i.score, i.ref))[
+            :MAX_ATTENTION_ITEMS
+        ]
+        if ordered != self.items:
+            raise ValueError("attention items must be in deterministic (-score, ref) order")
+        return self
+
+
+class UncertaintyLevel(StrEnum):
+    """Epistemic uncertainty level of one belief (Sprint 6, spec §8).
+
+    Distinguishes verified, confident, uncertain, conflicting, unknown,
+    and stale — never reduced to a single asserted state."""
+
+    VERIFIED = "VERIFIED"
+    CONFIDENT = "CONFIDENT"
+    UNCERTAIN = "UNCERTAIN"
+    CONFLICTING = "CONFLICTING"
+    UNKNOWN = "UNKNOWN"
+    STALE = "STALE"
+
+
+class FactUncertainty(Contract):
+    """Uncertainty of one world fact key (Sprint 6)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    key: str
+    level: UncertaintyLevel
+    #: belief confidence in [0, 1] (1.0 = certain, 0.0 = unknown)
+    confidence: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _coherent(self) -> FactUncertainty:
+        if not self.key.strip():
+            raise ValueError("fact uncertainty key must not be empty")
+        return self
+
+
+class BeliefAssessment(Contract):
+    """Deterministic uncertainty assessment of the current world model
+    (Sprint 6, spec §8). Derived DATA — never mutates the world it
+    assesses and never asserts uncertain reality as fact."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    facts: list[FactUncertainty] = Field(default_factory=list)
+    #: overall uncertainty in [0, 1]: 0 = fully verified, 1 = fully unknown
+    overall_uncertainty: float = Field(ge=0.0, le=1.0)
+    unverified_hypotheses: int = Field(ge=0)
+    conflicting_hypotheses: int = Field(ge=0)
+    verified_facts: int = Field(ge=0)
+    #: fact keys whose value is UNKNOWN — what is missing
+    unknown_keys: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _bounded(self) -> BeliefAssessment:
+        if len(self.facts) > MAX_BELIEF_FACTS:
+            raise ValueError(f"belief assessment exceeds {MAX_BELIEF_FACTS} facts")
+        if len(self.unknown_keys) > MAX_BELIEF_FACTS:
+            raise ValueError(f"belief assessment unknown keys exceed {MAX_BELIEF_FACTS}")
+        for key in self.unknown_keys:
+            if not key.strip():
+                raise ValueError("unknown keys must not be empty")
+        return self
+
+
+class MetacognitiveRecommendation(StrEnum):
+    """Advisory next-step recommendation (Sprint 6). NEVER a decision,
+    never authorization, never execution."""
+
+    CONTINUE = "CONTINUE"
+    GATHER_INFO = "GATHER_INFO"
+    SEARCH_DEEPER = "SEARCH_DEEPER"
+    STOP = "STOP"
+
+
+class MetacognitiveAssessment(Contract):
+    """Bounded metacognitive self-assessment (Sprint 6): what we believe,
+    what supports it, what is uncertain, what is missing, whether to
+    continue. Advisory DATA only — it cannot authorize, execute, or
+    verify anything."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    believed: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    uncertainties: list[str] = Field(default_factory=list)
+    missing: list[str] = Field(default_factory=list)
+    continue_reasoning: bool
+    recommendation: MetacognitiveRecommendation
+    reasons: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _bounded(self) -> MetacognitiveAssessment:
+        for field_name in ("believed", "uncertainties", "missing", "reasons"):
+            items = getattr(self, field_name)
+            if len(items) > MAX_METACOGNITION_ITEMS:
+                raise ValueError(f"metacognition {field_name} exceed {MAX_METACOGNITION_ITEMS}")
+            for item in items:
+                if not item.strip():
+                    raise ValueError(f"metacognition {field_name} must not be empty")
+                if len(item) > MAX_ITEM_CHARS:
+                    raise ValueError(f"metacognition {field_name} item exceeds {MAX_ITEM_CHARS}")
+        if len(self.evidence_refs) > MAX_PROVENANCE_REFS:
+            raise ValueError(f"metacognition evidence exceeds {MAX_PROVENANCE_REFS} refs")
+        return self
+
+
+class InformationRequest(Contract):
+    """One bounded information-gathering opportunity (Sprint 6). DATA
+    only: a request never executes anything — it becomes a normal
+    OBSERVE candidate that travels the standard monitor/authority/
+    executor pipeline."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str
+    target: str
+    rationale: str = ""
+    priority: float = Field(ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def _coherent(self) -> InformationRequest:
+        if not self.id.strip():
+            raise ValueError("information request id must not be empty")
+        if not self.target.strip():
+            raise ValueError("information request target must not be empty")
+        if len(self.target) > MAX_NODE_ID:
+            raise ValueError(f"information request target exceeds {MAX_NODE_ID} chars")
+        if len(self.rationale) > MAX_ITEM_CHARS:
+            raise ValueError(f"information rationale exceeds {MAX_ITEM_CHARS} chars")
+        return self
+
+
+class EffortDecision(StrEnum):
+    """Adaptive effort verdict for the next planning step (Sprint 6)."""
+
+    FULL_EFFORT = "FULL_EFFORT"
+    REDUCED_EFFORT = "REDUCED_EFFORT"
+    GATHER_INFO = "GATHER_INFO"
+    STOP = "STOP"
+
+
+class EffortPlan(Contract):
+    """Explicit bounded effort/budget plan (Sprint 6). All outputs are
+    hard-bounded by existing Sprint constants — adaptive effort can
+    never become an unbounded loop. DATA only: advisory input to the
+    existing deterministic loops, never an override of budget or
+    authority."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    decision: EffortDecision
+    max_iterations: int = Field(ge=1, le=MAX_ITERATIONS_BOUND)
+    search_depth: int = Field(ge=0, le=SEARCH_MAX_DEPTH)
+    reasons: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _coherent(self) -> EffortPlan:
+        if len(self.reasons) > MAX_METACOGNITION_ITEMS:
+            raise ValueError(f"effort reasons exceed {MAX_METACOGNITION_ITEMS}")
+        for reason in self.reasons:
+            if not reason.strip():
+                raise ValueError("effort reasons must not be empty")
+            if len(reason) > MAX_ITEM_CHARS:
+                raise ValueError(f"effort reason exceeds {MAX_ITEM_CHARS} chars")
         return self

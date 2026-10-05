@@ -26,18 +26,24 @@ from nomadicos.brain.planner.task_graph import TaskGraph
 from nomadicos.brain.schemas import (
     BRAIN_SCHEMA_VERSION,
     MAX_EVALUATIONS,
+    MAX_INFO_REQUESTS,
     MAX_MONITOR_RESULTS,
     MAX_PLAN_CANDIDATES,
     MAX_PREDICTIONS,
     MAX_PROVENANCE_REFS,
     ActionCandidate,
+    AttentionView,
+    BeliefAssessment,
     BudgetState,
     Capability,
     Constraints,
     Decision,
+    EffortPlan,
     Evaluation,
     Hypothesis,
+    InformationRequest,
     MemoryRef,
+    MetacognitiveAssessment,
     MonitorResult,
     Prediction,
     SearchResult,
@@ -93,6 +99,13 @@ class BrainState(Contract):
     evaluations: list[Evaluation] = Field(default_factory=list)
     #: trace of the last bounded deliberative search (replayable)
     search_trace: SearchResult | None = None
+    # Sprint 6 — adaptive intelligence state (data only; see brain.attention,
+    # brain.uncertainty, brain.metacognition, brain.information, brain.effort)
+    attention: AttentionView | None = None
+    belief_assessment: BeliefAssessment | None = None
+    metacognition: MetacognitiveAssessment | None = None
+    effort_plan: EffortPlan | None = None
+    information_requests: list[InformationRequest] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _coherent(self) -> BrainState:
@@ -126,6 +139,8 @@ class BrainState(Contract):
             raise ValueError(f"predictions exceed {MAX_PREDICTIONS}")
         if len(self.evaluations) > MAX_EVALUATIONS:
             raise ValueError(f"evaluations exceed {MAX_EVALUATIONS}")
+        if len(self.information_requests) > MAX_INFO_REQUESTS:
+            raise ValueError(f"information requests exceed {MAX_INFO_REQUESTS}")
         return self
 
     @classmethod

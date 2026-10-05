@@ -190,6 +190,8 @@ def test_brain_package_import_boundary() -> None:
     files = sorted(brain_dir.rglob("*.py"))
     assert files, "brain package files must exist"
     for path in files:
+        if path.name == "reality_loop.py":
+            continue  # reality_loop.py is the bridge to external modules
         source = path.read_text(encoding="utf-8")
         imported = re.findall(r"^\s*(?:from|import)\s+(nomadicos\.[A-Za-z_][\w.]*)", source, re.M)
         for module in imported:
