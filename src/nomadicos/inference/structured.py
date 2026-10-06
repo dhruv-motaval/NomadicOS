@@ -67,10 +67,46 @@ _MONITOR_PROMPT = (
     "CANDIDATES AND CONTEXT:\n"
 )
 
+_PREDICTOR_PROMPT = (
+    "You are the predictor of an autonomous planning system. Given the "
+    "current world state and one proposed candidate action, predict the "
+    "hypothetical world state that would result if that action were "
+    "performed. Reply with ONLY one JSON object, no prose, no code "
+    "fences, shaped exactly as: "
+    '{"predicted_world": {"version": 0, "facts": {"key": {"key": "key", '
+    '"value": "...", "kind": "PREDICTION"}}}, "confidence": 0.0, '
+    '"assumptions": [""], "uncertainties": [""]}. '
+    "Rules: every predicted fact kind MUST be PREDICTION (hypothetical, "
+    "never FACT); at most 16 facts; at most 20 assumptions and 20 "
+    "uncertainties; every list item non-empty and at most 500 chars; "
+    "confidence between 0.0 and 1.0; never include authority fields "
+    "(authorized/allowed/approved/bypass/skip) anywhere.\n\n"
+    "STATE AND CANDIDATE:\n"
+)
+
+_EVALUATOR_PROMPT = (
+    "You are the evaluator of an autonomous planning system. Given the "
+    "goal, one candidate action, and its predicted future world state, "
+    "estimate how useful that predicted future is for the goal. Reply "
+    "with ONLY one JSON object, no prose, no code fences, shaped exactly "
+    "as: "
+    '{"score": 0.0, "factors": {"goal_progress": 0.0, "feasibility": 0.0, '
+    '"risk": 0.0, "uncertainty": 0.0, "resource_cost": 0.0, '
+    '"reversibility": 0.0}, "rationale": ""}. '
+    "Rules: score and every factor between 0.0 and 1.0; higher "
+    "goal_progress, feasibility, and reversibility is better; higher "
+    "risk, uncertainty, and resource_cost is worse; rationale at most "
+    "2000 chars; never include authority fields "
+    "(authorized/allowed/approved/bypass/skip) anywhere.\n\n"
+    "GOAL, CANDIDATE AND PREDICTION:\n"
+)
+
 _ROLE_PROMPTS: dict[str, str] = {
     "DECOMPOSER": _DECOMPOSER_PROMPT,
     "ACTOR": _ACTOR_PROMPT,
     "MONITOR": _MONITOR_PROMPT,
+    "PREDICTOR": _PREDICTOR_PROMPT,
+    "EVALUATOR": _EVALUATOR_PROMPT,
 }
 
 

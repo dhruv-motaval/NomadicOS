@@ -28,6 +28,8 @@ _PREFIXES = (
     "cand",
     "dec",
     "rec",
+    "pred",
+    "eval",
 )
 
 

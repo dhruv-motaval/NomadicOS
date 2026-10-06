@@ -168,6 +168,7 @@ def run(
 
     async def drive() -> None:
         try:
+            await app.sync_models()  # live engine models + models/ files (SPEC §12)
             await _drive_goal(app, goal, list(constraint or []))
         finally:
             await app.aclose()

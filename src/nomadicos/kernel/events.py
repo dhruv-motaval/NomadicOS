@@ -151,6 +151,9 @@ class EventLogger:
         self.bus = bus or EventBus()
         self.sink = sink
         self._events: list[Event] = []
+        #: Sprint 10 hardening: durable-sink failures are never silent —
+        #: they are counted and inspectable (no data-loss illusion)
+        self.dropped_events: int = 0
 
     def publish(self, event: Event) -> Event:
         self._events.append(event)
@@ -158,7 +161,9 @@ class EventLogger:
             try:
                 self.sink(event)
             except Exception:
-                pass  # durable audit failure must not crash execution path
+                # durable audit failure must not crash the execution path,
+                # but it is COUNTED (never silently lost)
+                self.dropped_events += 1
         self.bus.publish(event, self)
         return event
 
