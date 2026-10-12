@@ -7,7 +7,9 @@ configuration, exposes run/resume, and never touches authority directly
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -19,6 +21,7 @@ from nomadicos.authority.authorization import AuthorizationService
 from nomadicos.authority.policy import CapabilityPolicy
 from nomadicos.authority.store import AuthorityStore
 from nomadicos.contracts.benchmark import BenchmarkRecord, BenchmarkTask
+from nomadicos.contracts.model import ModelHealth
 from nomadicos.contracts.core import Goal, TaskStatus
 from nomadicos.contracts.execution import ExecutionStatus
 from nomadicos.contracts.verification import VerificationLevel
@@ -26,7 +29,7 @@ from nomadicos.evaluation.benchmarking import BenchmarkRunner, TaskRunOutcome
 from nomadicos.evaluation.suite import BENCHMARK_VERSION
 from nomadicos.executor.dispatch import Executor
 from nomadicos.inference.base import InferenceEngine
-from nomadicos.inference.llama_cpp import LlamaCppEngine
+from nomadicos.inference.llama_cpp import LlamaCppEngine, LlamaServerLauncher
 from nomadicos.inference.mock import MockEngine
 from nomadicos.inference.ollama import OllamaEngine
 from nomadicos.kernel.config import AppConfig
@@ -42,12 +45,13 @@ from nomadicos.persistence.contracts import AuthorizedActionRef, new_record, now
 from nomadicos.persistence.errors import PersistenceCorrupt, PersistenceError
 from nomadicos.persistence.ledger import make_execution_ledger
 from nomadicos.persistence.metrics import ModelMetricStore, PostgresModelMetricStore
-from nomadicos.registry.model_registry import ModelRegistry
+from nomadicos.registry.model_registry import ModelRegistry, ProductionSample
 from nomadicos.registry.scanner import RegistryBuilder
 from nomadicos.router.escalation import EscalationPolicy
 from nomadicos.router.selection import ModelSelector
 from nomadicos.tools.base import ToolRegistry
 from nomadicos.tools.desktop import DesktopTool
+from nomadicos.tools.docker import docker_tool
 from nomadicos.tools.filesystem import FilesystemTool
 from nomadicos.tools.terminal import ProcessSupervisor, TerminalTool
 
@@ -96,6 +100,11 @@ class NomadicApp:
             "llamacpp": LlamaCppEngine(
                 base_url=cfg.inference.llama_server_url,
                 default_timeout_s=cfg.inference.request_timeout_s,
+                launcher=LlamaServerLauncher(
+                    binary=cfg.inference.llama_server_bin,
+                    host="127.0.0.1",
+                    port=cfg.inference.llama_port,
+                ),
             ),
             "ollama": OllamaEngine(
                 base_url=cfg.inference.ollama_base_url,
@@ -121,7 +130,11 @@ class NomadicApp:
                 # configured durable store (same availability semantics as
                 # the task-state store: dsn set ⇒ database required)
                 self._metric_store = PostgresModelMetricStore(cfg.persistence.dsn)
-            self.registry = ModelRegistry(self.log, metric_store=self._metric_store)
+            self.registry = ModelRegistry(
+                self.log,
+                metric_store=self._metric_store,
+                metric_ttl_s=cfg.routing.metric_ttl_s,
+            )
         self.tools = ToolRegistry()
         self.supervisor = ProcessSupervisor()
         self.tools.register(FilesystemTool())
@@ -131,6 +144,10 @@ class NomadicApp:
         # honest-unavailable elsewhere). Registration only — the tool gains
         # no authority and runs only on AuthorizedAction artifacts.
         self.tools.register(DesktopTool())
+        # Docker tool (SPEC §22-23): container operations via Docker Engine API.
+        # Platform adapter selected by docker_tool() (real client or honest
+        # unavailability). Runs only on AuthorizedAction artifacts.
+        self.tools.register(docker_tool())
         self.validator = ProposalValidator(self.tools, self.log)
         self.policy = CapabilityPolicy(
             self.store,
@@ -348,6 +365,82 @@ class NomadicApp:
             except Exception:
                 continue  # engine down: honest absence, not an error
         builder.build(self.registry, models_dir=self.config.inference.models_dir)
+        # Best-effort auto-start of the DEFAULT engine: if the owner has the
+        # binary and a model file, NomadicOS starts the server itself so the
+        # first task does not wait on a hand-started process. A launcher that
+        # fails (binary missing, port taken, model incompatible) is an honest
+        # absence — the router falls back by configuration.
+        await self._ensure_default_engine()
+
+    async def _ensure_default_engine(self) -> None:
+        default = self.config.inference.default_engine
+        engine = self.engines.get(default)
+        if engine is None:
+            return
+        launcher = getattr(engine, "_launcher", None)
+        try:
+            health = await engine.health()
+        except Exception:
+            health = None
+        if health is not None and health.status is ModelHealth.HEALTHY:
+            # server already up: record its configured context size (§14D-1)
+            if launcher is not None:
+                self._record_context(default, launcher.context_size)
+            return
+        if launcher is None:
+            return
+        model_path = self._default_model_path()
+        if model_path is None:
+            return
+        # pass a forward-slash relative path so the server reports the model under
+        # the owner-configured id (models/<file>.gguf) rather than a
+        # backslash path; the launcher resolves it against the CWD at start
+        # time and the registry normalises ids to forward slashes
+        try:
+            rel = model_path.relative_to(Path.cwd()).as_posix()
+            model_arg = str(rel)
+        except ValueError:
+            model_arg = str(model_path).replace("\\", "/")
+        try:
+            launcher.start(model_arg, context_size=8192)
+            # give the server a moment to bind before reporting health
+            await asyncio.sleep(1.0)
+        except Exception:
+            return
+        # the launcher's configured context size is the runtime's actual
+        # context setting (§14D-1): it is authoritative for the registry
+        # record, unlike the name-derived size proxy used before the engine
+        # was known to serve the model
+        self._record_context(default, launcher.context_size)
+
+    def _record_context(self, engine: str, context_size: int) -> None:
+        """Record the runtime's configured context size for an engine.
+
+        The launcher's ``--ctx-size`` is the runtime's ACTUAL context setting
+        (§14D-1). It is authoritative for the registry record, unlike the
+        name-derived size proxy used before the engine was known to serve the
+        model — advertised context length is not the same as configured.
+        """
+        for record in self.registry.enabled():
+            if record.engine == engine and record.context_window != context_size:
+                self.registry.register(
+                    record.model_copy(update={"context_window": context_size})
+                )
+
+    def _default_model_path(self) -> Path | None:
+        root = Path(self.config.inference.models_dir)
+        if not root.exists():
+            return None
+        # the owner-configured role is already a path relative to the repo root
+        # (e.g. "models/Spark-X2.5-4B-uncensored-Q4_K_M.gguf"), so resolve it
+        # directly rather than appending ".gguf" to models/
+        role = self.config.models.reasoning or self.config.models.coding_worker
+        if role:
+            candidate = Path(role)
+            if candidate.exists():
+                return candidate
+        ggufs = sorted(root.glob("*.gguf"))
+        return ggufs[0] if ggufs else None
 
     # ------------------------------------------------------------ runs ----
     # ------------------------------------------------------------ runs ----
@@ -359,6 +452,7 @@ class NomadicApp:
         constraints: list[str] | None = None,
         predicates: list[dict[str, Any]] | None = None,
         thread_prefix: str = "nomadic",
+        record_production: bool = True,
     ) -> RunSummary:
         goal = Goal(objective=goal_text, constraints=constraints or [])
         task = task_id or goal.id
@@ -368,10 +462,13 @@ class NomadicApp:
             "goal_predicates": predicates or [],
             "task_id": task,
         }
+        started = time.monotonic()
         graph_config = {"configurable": {"thread_id": f"{thread_prefix}:{task}"}}
         memory_hooks.seed_working(self.memory_runtime, task, goal_text)
         final = await self.graph.ainvoke(initial, graph_config)
         summary = self._summarize(final)
+        if record_production:
+            self._record_production(final, summary, started)
         self._memory_after_task(summary, final)
         self._record_durable_task(summary, final)
         self._persist(summary)
@@ -604,6 +701,9 @@ class NomadicApp:
                 predicates=task.goal_predicates
                 or [{"type": "tests_pass", "command": task.test_command}],
                 thread_prefix="bench",
+                # benchmarks feed BENCHMARK history, never production routing
+                # history (SPEC §33, §52C): the two evidence streams stay apart
+                record_production=False,
             )
             elapsed = time.monotonic() - started
             final = self.graph.get_state({"configurable": {"thread_id": f"bench:{task_id}"}}).values
@@ -693,6 +793,56 @@ class NomadicApp:
             last_observations=[o.summary for o in (state.get("observations") or [])[-3:]],
             failures=[f.model_dump(mode="json") for f in (state.get("failures") or [])][-3:],
         )
+
+    # ------------------------------------------------- production evidence --
+    def _record_production(
+        self, final: dict[str, Any], summary: RunSummary, started: float
+    ) -> None:
+        """Feed a finished task's REAL outcome back to the registry as a
+        production sample (Phase 14D-5).
+
+        This is DATA only (SPEC §33, §52C): it never authorizes, executes,
+        routes, or decides verification. The sample carries the model that
+        actually ran, the task bucket, whether the GOAL verifier passed, and
+        the end-to-end latency — including queueing, generation and
+        verification — so the router's reliability estimate is measured on
+        real task performance, not on generation-only timing.
+        """
+        model_id = summary.model_id
+        if not model_id:
+            return
+        try:
+            from nomadicos.router.analyzer import analyze_goal
+            from nomadicos.router.selection import task_bucket
+
+            goal = Goal(
+                objective=str(final.get("goal_text", summary.task_id)),
+                constraints=list(final.get("goal_constraints") or []),
+            )
+            reqs = analyze_goal(goal, base_latency=self.config.routing.mode)
+            bucket = task_bucket(reqs)
+            goal_verified = summary.goal_verdict == "PASS"
+            tool_success = (
+                all(e.status is ExecutionStatus.SUCCEEDED for e in (final.get("executions") or []))
+                if final.get("executions")
+                else None
+            )
+            self.registry.record_production(
+                ProductionSample(
+                    model_id=model_id,
+                    engine=self.registry.get(model_id).engine,
+                    task_class=bucket,
+                    success=goal_verified,
+                    goal_verified=goal_verified,
+                    tool_success=tool_success,
+                    steps=summary.steps_used,
+                    retries=summary.recoveries,
+                    latency_s=round(time.monotonic() - started, 3),
+                )
+            )
+        except Exception:
+            # a telemetry write must never change a task outcome
+            return
 
     def _persist(self, summary: RunSummary) -> None:
         try:
