@@ -35,7 +35,7 @@ User → LLM → Tool
 NomadicOS makes one critical distinction simple: **a model can suggest work, but it cannot approve itself or declare victory.**
 
 ```mermaid
-flowchart TD
+flowchart LR
     think["🧠 1. THINK<br/>Model suggests the next step"]
     guard["🛡️ 2. GUARD<br/>NomadicOS checks policy<br/>and owner authority"]
     act["⚡ 3. ACT<br/>Run the approved filesystem<br/>or terminal action"]
