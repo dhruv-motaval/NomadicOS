@@ -35,7 +35,7 @@ User → LLM → Tool
 NomadicOS makes one critical distinction simple: **a model can suggest work, but it cannot approve itself or declare victory.**
 
 ```mermaid
-flowchart LR
+flowchart TD
     think["🧠 1. THINK<br/>Model suggests the next step"]
     guard["🛡️ 2. GUARD<br/>NomadicOS checks policy<br/>and owner authority"]
     act["⚡ 3. ACT<br/>Run the approved filesystem<br/>or terminal action"]
@@ -97,7 +97,7 @@ Rather than a monolith, the codebase is organized around a few clear responsibil
 The high-level lifecycle is:
 
 ```mermaid
-flowchart LR
+flowchart TD
     goal(["🎯 Goal"]) --> plan["1. Plan"]
     plan --> guard["2. Check<br/>authority"]
     guard --> act["3. Act"]
