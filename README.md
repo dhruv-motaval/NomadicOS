@@ -6,11 +6,11 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-0.2.0-111111?style=flat-square" alt="Version 0.2.0">
-  <img src="https://img.shields.io/badge/python-3.12%2B-111111?style=flat-square" alt="Python 3.12 or later">
-  <img src="https://img.shields.io/badge/orchestration-LangGraph-111111?style=flat-square" alt="LangGraph">
-  <img src="https://img.shields.io/badge/inference-local--first-111111?style=flat-square" alt="Local-first inference">
-  <img src="https://img.shields.io/badge/license-Proprietary-111111?style=flat-square" alt="Proprietary license">
+  <img src="https://img.shields.io/badge/version-0.2.0-2563eb?style=flat-square" alt="Version 0.2.0">
+  <img src="https://img.shields.io/badge/python-3.12%2B-7c3aed?style=flat-square" alt="Python 3.12 or later">
+  <img src="https://img.shields.io/badge/orchestration-LangGraph-0891b2?style=flat-square" alt="LangGraph">
+  <img src="https://img.shields.io/badge/inference-local--first-059669?style=flat-square" alt="Local-first inference">
+  <img src="https://img.shields.io/badge/license-Proprietary-d97706?style=flat-square" alt="Proprietary license">
 </p>
 
 ---
@@ -32,33 +32,28 @@ A conventional agent often connects a model straight to tools:
 User → LLM → Tool
 ```
 
-NomadicOS inserts distinct boundaries:
+NomadicOS makes one critical distinction simple: **a model can suggest work, but it cannot approve itself or declare victory.**
 
 ```mermaid
 flowchart LR
-    owner([Owner goal]) --> plan[Plan & select model]
-    plan --> model[Model / worker]
-    model -->|untrusted proposal| ir[Validate Action IR]
-    ir --> policy[Policy & owner authority]
-    policy --> action[[AuthorizedAction]]
-    action --> execute[Filesystem / terminal]
-    execute --> evidence[(Execution evidence)]
-    evidence --> verify{Goal verified?}
-    verify -->|yes| success([SUCCESS])
-    verify -->|not yet| recover[Recover or replan]
-    recover --> plan
+    think["🧠 1. THINK<br/>Model suggests the next step"]
+    guard["🛡️ 2. GUARD<br/>NomadicOS checks policy<br/>and owner authority"]
+    act["⚡ 3. ACT<br/>Run the approved filesystem<br/>or terminal action"]
+    prove["✓ 4. PROVE<br/>Check the real result"]
 
-    classDef owner fill:#1f2937,color:#fff,stroke:#1f2937
-    classDef guard fill:#eef2ff,color:#312e81,stroke:#818cf8
-    classDef action fill:#ecfdf5,color:#065f46,stroke:#34d399
-    classDef proof fill:#fff7ed,color:#9a3412,stroke:#fb923c
-    class owner owner
-    class ir,policy guard
-    class action,execute action
-    class evidence,verify,success proof
+    think --> guard --> act --> prove
+
+    classDef think fill:#e0f2fe,color:#0c4a6e,stroke:#0ea5e9,stroke-width:2px
+    classDef guard fill:#ede9fe,color:#4c1d95,stroke:#8b5cf6,stroke-width:2px
+    classDef act fill:#d1fae5,color:#065f46,stroke:#10b981,stroke-width:2px
+    classDef prove fill:#fef3c7,color:#92400e,stroke:#f59e0b,stroke-width:2px
+    class think think
+    class guard guard
+    class act act
+    class prove prove
 ```
 
-An action completing successfully is not, by itself, proof that a user goal was achieved. The verifier evaluates explicit completion predicates against runtime evidence and reports `SUCCESS`, `PARTIAL`, `BLOCKED`, or `NOT_VERIFIED` rather than manufacturing a result.
+If the proof is missing, NomadicOS says so. It can continue, recover, stop as blocked, or report `NOT_VERIFIED`—but it does not turn a model’s “done” into a result.
 
 ## What is implemented
 
