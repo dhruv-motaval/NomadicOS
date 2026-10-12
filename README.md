@@ -88,49 +88,38 @@ The Action IR rejects authority-shaped fields supplied by a model, including `au
 
 ## Architecture
 
-```text
-src/nomadicos/
-├── action_ir/       proposal parsing and validation
-├── agents/          planning, coding, inspection, and critic components
-├── authority/       owner state, policy, authorization, and revocation
-├── cli/             Typer command-line interface
-├── contracts/       typed cross-component contracts
-├── evaluation/      evaluation and benchmarking components
-├── executor/        authorized-action dispatch
-├── inference/       llama.cpp, Ollama, and test-engine abstractions
-├── kernel/          configuration, IDs, errors, and events
-├── orchestration/   LangGraph application and task state
-├── registry/        local-model discovery and metadata
-├── router/          task analysis and model selection
-├── tools/           filesystem, terminal, paths, and process supervision
-└── verification/    evidence and completion-predicate evaluation
-```
+Rather than a monolith, the codebase is organized around a few clear responsibilities:
+
+| 🧭 Coordinate | 🧠 Decide | 🛡️ Control | ✓ Prove |
+| --- | --- | --- | --- |
+| **`kernel/`** — configuration, events, errors<br>**`contracts/`** — shared typed contracts<br>**`cli/`** — command-line entry point | **`inference/`** — llama.cpp, Ollama, test engine<br>**`registry/`** — local model discovery<br>**`router/`** — task analysis and model selection<br>**`agents/`** — planning, coding, inspection, critic | **`action_ir/`** — proposal parsing and validation<br>**`authority/`** — owner state, policy, authorization<br>**`executor/`** — authorized-action dispatch<br>**`tools/`** — filesystem, terminal, processes | **`orchestration/`** — LangGraph task flow<br>**`verification/`** — evidence and completion checks<br>**`evaluation/`** — benchmarks and evaluation |
 
 The high-level lifecycle is:
 
 ```mermaid
-stateDiagram-v2
-    [*] --> Intake
-    Intake --> Classify
-    Classify --> Plan
-    Plan --> Select_model
-    Select_model --> Propose
-    Propose --> Validate
-    Validate --> Authorize: valid
-    Validate --> Recover: invalid
-    Authorize --> Execute: allowed
-    Authorize --> Blocked: denied / owner conflict
-    Execute --> Observe
-    Observe --> Verify_step
-    Verify_step --> Verify_goal: complete
-    Verify_step --> Propose: next action
-    Verify_goal --> Success: proven
-    Verify_goal --> Recover: needs repair
-    Recover --> Select_model: bounded retry
-    Recover --> Partial: budget exhausted
-    Success --> [*]
-    Partial --> [*]
-    Blocked --> [*]
+flowchart LR
+    goal(["🎯 Goal"]) --> plan["1. Plan"]
+    plan --> guard["2. Check<br/>authority"]
+    guard --> act["3. Act"]
+    act --> verify{"4. Verify"}
+
+    verify -->|proved| success(["✓ Success"])
+    verify -. needs another step .-> plan
+    guard -->|not allowed| blocked(["⊘ Blocked"])
+    verify -->|limit reached| partial(["◐ Partial"])
+
+    classDef start fill:#dbeafe,color:#1e3a8a,stroke:#3b82f6,stroke-width:2px
+    classDef process fill:#ede9fe,color:#4c1d95,stroke:#8b5cf6,stroke-width:2px
+    classDef action fill:#d1fae5,color:#065f46,stroke:#10b981,stroke-width:2px
+    classDef check fill:#fef3c7,color:#92400e,stroke:#f59e0b,stroke-width:2px
+    classDef success fill:#ccfbf1,color:#115e59,stroke:#14b8a6,stroke-width:2px
+    classDef outcome fill:#fee2e2,color:#991b1b,stroke:#f87171,stroke-width:2px
+    class goal start
+    class plan,guard process
+    class act action
+    class verify check
+    class success success
+    class blocked,partial outcome
 ```
 
 Security authority and raw OS execution stay outside model reasoning. The executor does not choose models, grant permissions, change policy, or determine whether the overall goal succeeded.
