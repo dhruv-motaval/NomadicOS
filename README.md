@@ -1,7 +1,8 @@
 <p align="center">
   <h1 align="center">NomadicOS</h1>
   <p align="center"><strong>Local-first AI orchestration for controlled computer operation.</strong></p>
-  <p align="center">Models propose. NomadicOS authorizes. Executors act. Verifiers prove.</p>
+  <p align="center"><em>Models propose. NomadicOS authorizes. Executors act. Verifiers prove.</em></p>
+  <p align="center"><a href="#the-idea">Architecture</a> · <a href="#cli-quickstart">Quickstart</a> · <a href="#security-and-authority-model">Security model</a> · <a href="NOMADICOS_REBUILD_MASTER_SPEC_FINAL.md">Specification</a></p>
 </p>
 
 <p align="center">
@@ -14,11 +15,14 @@
 
 ---
 
-NomadicOS is an active Python runtime for AI systems that need to operate a local environment without treating generated text as permission. It separates reasoning, authority, side effects, and proof of completion into explicit, testable layers.
+NomadicOS is a Python runtime for AI systems that operate a local environment without treating generated text as permission. Reasoning, authority, side effects, and proof of completion each have their own explicit, testable boundary.
 
-The current release, **v0.2.0**, provides the controlled-execution foundation: local model routing, typed actions, owner authority, filesystem and terminal tooling, LangGraph orchestration, evidence collection, goal verification, a coding worker, and a critic/evaluator loop.
+> [!IMPORTANT]
+> **v0.2.0 is a controlled-execution foundation—not a finished general-purpose desktop agent.** Desktop control, durable restart behavior, semantic memory, and broader tool coverage are still in development.
 
-> **Scope note:** NomadicOS is a foundation runtime, not a finished general-purpose desktop agent. Desktop control, durable restart behavior, semantic memory, and broader tool coverage remain in development.
+| Build with confidence | Run locally | Verify honestly |
+| --- | --- | --- |
+| Typed actions, owner authority, and policy | llama.cpp primary · Ollama compatible | Evidence, completion predicates, and explicit outcomes |
 
 ## The idea
 
@@ -30,27 +34,31 @@ User → LLM → Tool
 
 NomadicOS inserts distinct boundaries:
 
-```text
-Owner goal
-   ↓
-Planning + model selection
-   ↓
-Model / worker proposal              (untrusted intent)
-   ↓
-Action IR validation
-   ↓
-Policy + owner authority
-   ↓
-AuthorizedAction
-   ↓
-Filesystem / terminal execution
-   ↓
-Execution evidence
-   ↓
-Independent goal verification
+```mermaid
+flowchart LR
+    owner([Owner goal]) --> plan[Plan & select model]
+    plan --> model[Model / worker]
+    model -->|untrusted proposal| ir[Validate Action IR]
+    ir --> policy[Policy & owner authority]
+    policy --> action[[AuthorizedAction]]
+    action --> execute[Filesystem / terminal]
+    execute --> evidence[(Execution evidence)]
+    evidence --> verify{Goal verified?}
+    verify -->|yes| success([SUCCESS])
+    verify -->|not yet| recover[Recover or replan]
+    recover --> plan
+
+    classDef owner fill:#1f2937,color:#fff,stroke:#1f2937
+    classDef guard fill:#eef2ff,color:#312e81,stroke:#818cf8
+    classDef action fill:#ecfdf5,color:#065f46,stroke:#34d399
+    classDef proof fill:#fff7ed,color:#9a3412,stroke:#fb923c
+    class owner owner
+    class ir,policy guard
+    class action,execute action
+    class evidence,verify,success proof
 ```
 
-An action completing successfully is not, by itself, proof that a user goal was achieved. The verifier evaluates explicit completion predicates against runtime evidence and can report outcomes such as `SUCCESS`, `PARTIAL`, `BLOCKED`, or `NOT_VERIFIED`.
+An action completing successfully is not, by itself, proof that a user goal was achieved. The verifier evaluates explicit completion predicates against runtime evidence and reports `SUCCESS`, `PARTIAL`, `BLOCKED`, or `NOT_VERIFIED` rather than manufacturing a result.
 
 ## What is implemented
 
@@ -105,10 +113,29 @@ src/nomadicos/
 
 The high-level lifecycle is:
 
-```text
-INTAKE → CLASSIFY → PLAN → SELECT MODEL → PROPOSE → VALIDATE
-      → AUTHORIZE → EXECUTE → OBSERVE → VERIFY STEP
-      → CRITIC / RECOVERY → VERIFY GOAL
+```mermaid
+stateDiagram-v2
+    [*] --> Intake
+    Intake --> Classify
+    Classify --> Plan
+    Plan --> Select_model
+    Select_model --> Propose
+    Propose --> Validate
+    Validate --> Authorize: valid
+    Validate --> Recover: invalid
+    Authorize --> Execute: allowed
+    Authorize --> Blocked: denied / owner conflict
+    Execute --> Observe
+    Observe --> Verify_step
+    Verify_step --> Verify_goal: complete
+    Verify_step --> Propose: next action
+    Verify_goal --> Success: proven
+    Verify_goal --> Recover: needs repair
+    Recover --> Select_model: bounded retry
+    Recover --> Partial: budget exhausted
+    Success --> [*]
+    Partial --> [*]
+    Blocked --> [*]
 ```
 
 Security authority and raw OS execution stay outside model reasoning. The executor does not choose models, grant permissions, change policy, or determine whether the overall goal succeeded.
@@ -148,7 +175,7 @@ uv sync --extra dev
 
 ## CLI quickstart
 
-The package exposes a `nomadicos` command.
+The package exposes a `nomadicos` command. Start by checking what is available locally, then make an explicit owner grant only when you are ready to allow actions.
 
 ```bash
 # Inspect the configured local engines and discovered models
