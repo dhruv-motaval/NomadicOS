@@ -12,32 +12,8 @@ from __future__ import annotations
 
 from typing import Any
 
-_NOMADICOS_MODEL_CLASSES = (
-    # module, class
-    ("nomadicos.contracts.core", "Goal"),
-    ("nomadicos.contracts.core", "PlanStep"),
-    ("nomadicos.contracts.core", "FailureRecord"),
-    ("nomadicos.contracts.core", "TaskStatus"),
-    ("nomadicos.contracts.core", "Predicate"),
-    ("nomadicos.contracts.core", "PredicateGroup"),
-    ("nomadicos.contracts.core", "GoalPredicate"),
-    ("nomadicos.contracts.core", "LogicalOp"),
-    ("nomadicos.contracts.action", "ActionProposal"),
-    ("nomadicos.contracts.action", "ProposalKind"),
-    ("nomadicos.contracts.action", "CapabilityRef"),
-    ("nomadicos.contracts.action", "CompletionClaim"),
-    ("nomadicos.contracts.execution", "ExecutionResult"),
-    ("nomadicos.contracts.execution", "ExecutionStatus"),
-    ("nomadicos.contracts.execution", "Observation"),
-    ("nomadicos.contracts.execution", "ObservationKind"),
-    ("nomadicos.contracts.model", "TaskRequirements"),
-    ("nomadicos.contracts.model", "TaskType"),
-    ("nomadicos.contracts.model", "CapabilityTag"),
-    ("nomadicos.contracts.verification", "VerificationResult"),
-    ("nomadicos.contracts.verification", "VerificationLevel"),
-    ("nomadicos.contracts.verification", "VerificationOutcome"),
-    ("nomadicos.contracts.verification", "EvidenceItem"),
-    ("nomadicos.kernel.errors", "Failure"),
+from nomadicos.persistence.checkpoints import (
+    NOMADICOS_SERDE_CLASSES as _NOMADICOS_MODEL_CLASSES,
 )
 
 
@@ -52,3 +28,14 @@ def make_saver() -> Any:
         return InMemorySaver(serde=serde)
     except TypeError:  # older/newer langgraph signature: fall back, warnings only
         return InMemorySaver()
+
+
+def make_durable_saver(persistence) -> Any:
+    """Durable checkpoint saver selected by PersistenceConfig (Phase 13B,
+    SPEC §34/§47): PostgreSQL when dsn is configured, otherwise the
+    deterministic file adapter under state_dir. Both reuse the InMemorySaver
+    serialization semantics via the existing allow-list; orchestration
+    checkpoints remain orchestration state - NOT the authority path."""
+    from nomadicos.persistence.checkpoints import make_durable_saver as _make_durable
+
+    return _make_durable(persistence)

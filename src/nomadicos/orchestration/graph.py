@@ -49,6 +49,7 @@ from nomadicos.kernel.errors import (
     ActionFailed,
     AuthorizationDenied,
     BudgetExhausted,
+    ConfigInvalid,
     Failure,
     InvalidProposal,
     NomadicOSBaseError,
@@ -59,6 +60,7 @@ from nomadicos.kernel.events import EventType
 from nomadicos.orchestration.boundaries import NoGoalVerifier, NoStepVerifier
 from nomadicos.orchestration.runtime import TaskRuntime
 from nomadicos.orchestration.state import TaskState
+from nomadicos.persistence.errors import PersistenceError
 from nomadicos.router.analyzer import analyze_goal
 from nomadicos.tools.context import ExecutionContext
 
@@ -194,6 +196,10 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
         request = (runtime.context_builder or _build_request)(
             state, step.description, state["goal"], model_id, cfg, runtime.tools.catalog_lines()
         )
+        if runtime.memory is not None:
+            # Phase 11G: bounded DATA-only memory block into the existing
+            # request seam; read-only, fail-safe, never an instruction
+            request = runtime.memory.augment_request(request, state)
         engine = runtime.engine_for(model_id)
         try:
             response = await engine.generate(request)
@@ -304,7 +310,23 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
         answer = str(decision or "").upper()
         if answer not in {"ALLOW", "DENY"}:
             return await owner_wait(state)  # demand again; never self-resolve
-        runtime.authz.answer_conflict(str(conflict.get("id")), answer, resolver="owner")
+        try:
+            runtime.authz.answer_conflict(str(conflict.get("id")), answer, resolver="owner")
+        except ConfigInvalid as exc:
+            # the pending conflict was voided while stopped (e.g. master
+            # revoke): fail the task safely - no approval, no execution
+            f = make_failure(
+                state,
+                Failure.CONFIG_INVALID,
+                f"pending conflict no longer answerable: {exc.message}",
+            )
+            return {
+                "failures": [f],
+                "last_failure": f.model_dump(mode="json"),
+                "task_status": TaskStatus.FAILED,
+                "outcome_note": "conflict voided (authority changed while stopped)",
+                "pending_conflict": None,
+            }
         log.log(EventType.OWNER_DECISION, task_id=state["task_id"], result=answer)
         updates: dict[str, Any] = {"pending_conflict": None}
         if answer == "ALLOW":
@@ -350,7 +372,7 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
                 "task_status": TaskStatus.BLOCKED,
                 "outcome_note": "authority revoked mid-task",
             }
-        except (ActionFailed, AuthorizationDenied, InvalidProposal) as exc:
+        except (ActionFailed, AuthorizationDenied, InvalidProposal, PersistenceError) as exc:
             f = make_failure(state, exc.failure, str(exc.message))
             return {
                 "failures": [f],

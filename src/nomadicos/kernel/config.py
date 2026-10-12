@@ -127,6 +127,11 @@ class RouterConfig(_Contract):
         default_factory=lambda: {"FAST": 0.55, "BALANCED": 0.7, "QUALITY": 0.85}
     )
     historical_weight: float = Field(default=0.3, ge=0.0, le=1.0)
+    #: minimum measured samples before the quality gate may reject a
+    #: candidate (Phase 14C-B): fewer samples are insufficient evidence for
+    #: the gate - a single failed sample can no longer exclude a model;
+    #: N=1 reproduces the previous always-gate behavior
+    minimum_sample_count: int = Field(default=3, ge=1)
 
 
 class OrchestrationConfig(_Contract):
@@ -137,6 +142,17 @@ class PersistenceConfig(_Contract):
     dsn: str | None = None
     task_workspace: str = "data/task-workspaces"
     state_dir: str = "data/state"
+
+
+class MemoryConfig(_Contract):
+    """Memory brick settings (SPEC §32, §52E-G; Phase 11A). DATA only."""
+
+    state_dir: str = "data/state"
+    #: hard cap per memory collection (working/episodic/semantic/procedural
+    #: records, object nodes, relations): oldest entries evicted first
+    max_records_per_kind: int = Field(default=500, ge=1, le=100_000)
+    #: cap for memory context rendered into model prompts (used by 11F/11G)
+    context_char_budget: int = Field(default=1200, ge=200, le=8000)
 
 
 class EvaluationConfig(_Contract):
@@ -155,6 +171,7 @@ class AppConfig(_Contract):
     routing: RouterConfig = Field(default_factory=RouterConfig)
     persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
 
     @model_validator(mode="after")
     def _engine_coherence(self) -> AppConfig:

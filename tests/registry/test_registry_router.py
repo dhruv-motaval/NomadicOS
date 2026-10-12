@@ -68,12 +68,16 @@ def test_registry_roundtrip_and_fail_closed() -> None:
 
 def test_no_invented_metrics() -> None:
     reg = registry()
-    bundle = reg.bundle_for("m1", "coding")
+    bundle = reg.bundle_for("m1", "mock", "coding")
     assert bundle.samples == 0
     assert bundle.success_rate is None
-    reg.record_production(ProductionSample(model_id="m1", task_class="coding", success=True))
-    reg.record_production(ProductionSample(model_id="m1", task_class="coding", success=False))
-    after = reg.bundle_for("m1", "coding")
+    reg.record_production(
+        ProductionSample(model_id="m1", engine="mock", task_class="coding", success=True)
+    )
+    reg.record_production(
+        ProductionSample(model_id="m1", engine="mock", task_class="coding", success=False)
+    )
+    after = reg.bundle_for("m1", "mock", "coding")
     assert after.samples == 2
     assert after.success_rate == 0.5
 
@@ -94,7 +98,7 @@ def test_benchmark_and_production_stays_separate() -> None:
         environment={},
     )
     reg.record_benchmark(rec)
-    metrics = reg.metrics("m1")
+    metrics = reg.metrics("m1", "mock")
     assert metrics.benchmark and not metrics.production
     assert metrics.benchmark["bug_fix"].samples == 1
 
@@ -219,9 +223,13 @@ def test_smallest_capable_when_both_meet_quality() -> None:
     reg.register(big)
     for mid in ("models/ornith.gguf", "models/qwen3-coder-30b.gguf"):
         for _ in range(10):
-            reg.record_production(ProductionSample(model_id=mid, task_class="coding", success=True))
+            reg.record_production(
+                ProductionSample(model_id=mid, engine="mock", task_class="coding", success=True)
+            )
     reg.record_production(
-        ProductionSample(model_id="models/ornith.gguf", task_class="coding", success=False)
+        ProductionSample(
+            model_id="models/ornith.gguf", engine="mock", task_class="coding", success=False
+        )
     )
     sel = ModelSelector(RouterConfig(mode="BALANCED", historical_weight=0.9))
     result = sel.select(reg, coding_req())
@@ -247,10 +255,14 @@ def test_quality_gate_excludes_measured_worse_models() -> None:
     )
     for _ in range(10):
         reg.record_production(
-            ProductionSample(model_id="models/weak.gguf", task_class="coding", success=False)
+            ProductionSample(
+                model_id="models/weak.gguf", engine="mock", task_class="coding", success=False
+            )
         )
         reg.record_production(
-            ProductionSample(model_id="models/good.gguf", task_class="coding", success=True)
+            ProductionSample(
+                model_id="models/good.gguf", engine="mock", task_class="coding", success=True
+            )
         )
     reg.register(weak)
     reg.register(good)
@@ -369,7 +381,7 @@ async def test_probe_records_success_and_failure() -> None:
     assert ok.success and ok.total_latency_ms is not None
     bad = await runner.probe(m, ProbeCase(id="p2", prompt="other", must_contain=["xyz"]))
     assert not bad.success and bad.failure_type == "WRONG_OUTPUT"
-    bundle = reg.metrics("models/probe.gguf").benchmark["bug_fix"]
+    bundle = reg.metrics("models/probe.gguf", "mock").benchmark["bug_fix"]
     assert bundle.samples == 2 and bundle.success_rate == 0.5
     # environment recorded for reproduction
     assert bad.environment["platform"]
@@ -393,5 +405,5 @@ def test_run_workspace_task_stores_full_outcome() -> None:
         ),
     )
     assert result.goal_verified and result.steps == 6
-    agg = reg.metrics("models/w.gguf").benchmark["repair"]
+    agg = reg.metrics("models/w.gguf", "mock").benchmark["repair"]
     assert agg.avg_retries == 1
