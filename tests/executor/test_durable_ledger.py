@@ -229,6 +229,19 @@ async def test_crash_window_side_effect_without_durable_record(tmp_path: Path) -
         def put(self, key, result):
             raise PersistenceUnavailable("disk full: ledger write failed")
 
+        def claim_intent(self, key, intent):
+            # claim succeeds, but the result put will fail → crash gap
+            return self._inner.claim_intent(key, intent)
+
+        def get_intent(self, key):
+            return self._inner.get_intent(key)
+
+        def mark_intent_started(self, key):
+            self._inner.mark_intent_started(key)
+
+        def mark_intent_completed(self, key):
+            self._inner.mark_intent_completed(key)
+
     executor = Executor(chain.tools, chain.store, chain.log, ledger=BrokenPutLedger())
     parsed = chain.parse(fs_json("write", {"path": "w.txt", "content": "x"}), ctx)
     authorized = chain.authz.authorize(parsed.value, chain.validate(parsed.value, ctx))
@@ -239,9 +252,12 @@ async def test_crash_window_side_effect_without_durable_record(tmp_path: Path) -
     assert result.evidence["durable_ledger"] == "unrecorded"
     assert "disk full" in result.evidence["ledger_error"]
     # nothing retried automatically; the ledger holds no record
-    assert DurableFileLedger(tmp_path).get(
-        __import__("hashlib").sha256(parsed.value.fingerprint().encode()).hexdigest()[:32]
-    ) is None
+    assert (
+        DurableFileLedger(tmp_path).get(
+            __import__("hashlib").sha256(parsed.value.fingerprint().encode()).hexdigest()[:32]
+        )
+        is None
+    )
 
 
 # ------------------------------------- side-effect duplicate protection -----

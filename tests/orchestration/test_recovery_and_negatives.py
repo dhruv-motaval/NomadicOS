@@ -30,8 +30,19 @@ async def test_model_error_escalates_to_next_smallest(tmp_path: Path) -> None:
 async def test_repeated_identical_failure_is_stuck_detected_and_escalates(
     tmp_path: Path,
 ) -> None:
-    """Same fingerprint repeatedly => escalation without a model crash (§31)."""
-    bad = write_json("/", "cannot write to root")  # deterministic IO failure
+    """Same fingerprint repeatedly => escalation without a model crash (§31).
+
+    NOTE: the original payload wrote to "/" — a deterministic IO failure on
+    POSIX. On Windows the path policy now refuses a POSIX absolute path at
+    the authorization boundary (AUTHORIZATION_DENIED is a policy DENIAL:
+    per SPEC §30 it is never retried, let alone escalated), so the semantic
+    repeat is driven by a deterministic in-scope tool failure instead: a
+    terminal command that always exits non-zero. Intent unchanged: the same
+    fingerprint failing repeatedly must escalate, stay bounded, and never
+    declare success."""
+    from helpers import term_json
+
+    bad = term_json("cmd", "/c", "exit", "1")  # deterministic non-zero exit
     app = make_app(
         tmp_path, scripts=[("out.txt", bad)], models=("models/small.gguf", "models/big.gguf")
     )

@@ -50,9 +50,7 @@ class ScriptedCatalog:
         self.hits = hits
         self.seen: list[SecurityCapabilityRequest] = []
 
-    def security_capabilities(
-        self, request: SecurityCapabilityRequest
-    ) -> list[dict]:
+    def security_capabilities(self, request: SecurityCapabilityRequest) -> list[dict]:
         self.seen.append(request)
         return self.hits
 
@@ -74,9 +72,7 @@ def test_option_parsing_fails_closed() -> None:
     assert options[0].capability == "RECON"
     # binding mismatch rejected (no target/engagement substitution)
     with pytest.raises(ModelOutputRejected):
-        parse_security_options(
-            [option(target_id="tgt_other")], request()
-        )
+        parse_security_options([option(target_id="tgt_other")], request())
     # unknown capability rejected
     with pytest.raises(ModelOutputRejected):
         parse_security_options([option(capability="EXPLOIT")], request())
@@ -95,10 +91,7 @@ def test_deterministic_lowest_risk_selection() -> None:
     selected = select_security_option(options)
     assert selected is not None and selected.capability == "RECON"  # lowest risk wins
     assert (
-        select_security_option(
-            [SecurityOption.model_validate(option(available=False))]
-        )
-        is None
+        select_security_option([SecurityOption.model_validate(option(available=False))]) is None
     )  # fail safe
     assert select_security_option([]) is None
     # deterministic across runs
@@ -110,15 +103,11 @@ def test_deterministic_lowest_risk_selection() -> None:
 
 def test_plan_is_bounded_and_authority_free() -> None:
     selected = select_security_option(parse_security_options([option()], request()))
-    plan = plan_security_research(
-        selected, "sb_lab", {"path": "src"}, rationale="recon in scope"
-    )
+    plan = plan_security_research(selected, "sb_lab", {"path": "src"}, rationale="recon in scope")
     assert plan.expected_evidence == "OBSERVATION"  # from the closed taxonomy
     assert plan.capability == "RECON" and plan.sandbox_id == "sb_lab"
     with pytest.raises(Exception):  # noqa: B017 - pydantic ValidationError
-        SecurityResearchPlan.model_validate(
-            {**plan.model_dump(mode="json"), "executed": True}
-        )
+        SecurityResearchPlan.model_validate({**plan.model_dump(mode="json"), "executed": True})
     with pytest.raises(Exception):  # noqa: B017 - pydantic ValidationError
         plan_security_research(selected, "sb_lab", {f"k{i}": 1 for i in range(9)})
 
@@ -127,8 +116,7 @@ def test_brain_security_module_imports_nothing_dangerous() -> None:
     """AST check: no concrete security tools, OS/subprocess/network APIs,
     or runtime bricks are imported by the brain seam."""
     path = (
-        pathlib.Path(__file__).resolve().parents[2]
-        / "src" / "nomadicos" / "brain" / "security.py"
+        pathlib.Path(__file__).resolve().parents[2] / "src" / "nomadicos" / "brain" / "security.py"
     )
     tree = ast.parse(path.read_text(encoding="utf-8"))
     for node in ast.walk(tree):
@@ -151,8 +139,6 @@ def test_scripted_catalog_end_to_end_discovery_selection_plan() -> None:
     req = request()
     options = parse_security_options(catalog.security_capabilities(req), req)
     selected = select_security_option(options)
-    plan = plan_security_research(
-        selected, "sb_lab", {"path": "src"}, rationale="recon in scope"
-    )
+    plan = plan_security_research(selected, "sb_lab", {"path": "src"}, rationale="recon in scope")
     assert plan.engagement_id == "eng_lab"
     assert len(catalog.seen) == 1  # exactly one bounded request

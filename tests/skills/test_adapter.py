@@ -77,7 +77,10 @@ def test_adapter_proposal_rejected_for_invalid_args() -> None:
     validator = ProposalValidator(catalog, EventLogger())
     proposal = to_proposal(
         invocation(path="out.md", content=42),  # type: ignore[arg-type]
-        definition(), model_id="model_1", task_id="task_1", step_id="s1",
+        definition(),
+        model_id="model_1",
+        task_id="task_1",
+        step_id="s1",
     )
     with pytest.raises(InvalidProposal):
         validator.validate(
@@ -94,8 +97,7 @@ def test_adapter_cannot_authorize_or_execute() -> None:
     import pathlib
 
     path = (
-        pathlib.Path(__file__).resolve().parents[2]
-        / "src" / "nomadicos" / "skills" / "adapter.py"
+        pathlib.Path(__file__).resolve().parents[2] / "src" / "nomadicos" / "skills" / "adapter.py"
     )
     tree = ast.parse(path.read_text(encoding="utf-8"))
     for node in ast.walk(tree):
@@ -114,20 +116,18 @@ def test_adapter_cannot_authorize_or_execute() -> None:
             name = getattr(func, "id", "") or getattr(func, "attr", "")
             assert name not in ("authorize", "execute"), name
     # the produced proposal cannot carry authority fields (closed schema)
-    proposal = to_proposal(
-        invocation(), definition(), model_id="m", task_id="t", step_id="s"
-    )
+    proposal = to_proposal(invocation(), definition(), model_id="m", task_id="t", step_id="s")
     with pytest.raises(ValidationError):
-        ActionProposal.model_validate(
-            {**proposal.model_dump(mode="json"), "authorized": True}
-        )
+        ActionProposal.model_validate({**proposal.model_dump(mode="json"), "authorized": True})
     with pytest.raises(ValidationError):
         ActionProposal.model_validate({**proposal.model_dump(mode="json"), "grant": {"x": 1}})
 
 
 def test_adapter_capability_mismatch_fails_closed() -> None:
     other = SkillDefinition(
-        skill_id="other-skill", name="other", description="other skill",
+        skill_id="other-skill",
+        name="other",
+        description="other skill",
         capability="terminal.execute",
     )
     with pytest.raises(ValueError):
@@ -135,7 +135,10 @@ def test_adapter_capability_mismatch_fails_closed() -> None:
     with pytest.raises(ValueError):
         to_proposal(
             SkillInvocation(skill_id="different", version=1, args={}),
-            definition(), model_id="m", task_id="t", step_id="s",
+            definition(),
+            model_id="m",
+            task_id="t",
+            step_id="s",
         )
 
 
@@ -143,11 +146,20 @@ def test_result_mapping_from_real_execution_result() -> None:
     from datetime import UTC, datetime
 
     execution = ExecutionResult(
-        task_id="task_1", step_id="s1", action_id="prop_1",
-        action_fingerprint="f" * 64, model_id="m", tool="filesystem",
-        operation="write", status=ExecutionStatus.SUCCEEDED, exit_code=0,
-        stdout="ok", evidence={"bytes": 12}, message="written",
-        started_at=datetime.now(UTC), finished_at=datetime.now(UTC),
+        task_id="task_1",
+        step_id="s1",
+        action_id="prop_1",
+        action_fingerprint="f" * 64,
+        model_id="m",
+        tool="filesystem",
+        operation="write",
+        status=ExecutionStatus.SUCCEEDED,
+        exit_code=0,
+        stdout="ok",
+        evidence={"bytes": 12},
+        message="written",
+        started_at=datetime.now(UTC),
+        finished_at=datetime.now(UTC),
     )
     result = to_result(execution, invocation(), definition())
     assert result.skill_id == "write-report"

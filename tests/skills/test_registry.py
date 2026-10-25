@@ -11,8 +11,14 @@ from nomadicos.kernel.errors import InvalidProposal
 from nomadicos.skills.registry import MAX_SKILL_VERSIONS, SkillRegistry
 
 
-def skill(skill_id: str, *, capability: str = "filesystem.write", version: int = 1,
-          enabled: bool = True, healthy: bool = True) -> SkillDefinition:
+def skill(
+    skill_id: str,
+    *,
+    capability: str = "filesystem.write",
+    version: int = 1,
+    enabled: bool = True,
+    healthy: bool = True,
+) -> SkillDefinition:
     return SkillDefinition(
         skill_id=skill_id,
         version=version,
@@ -50,11 +56,16 @@ def test_deterministic_enumeration_and_capability_index() -> None:
         registry.register(skill(sid, capability="terminal.execute"))
     registry.register(skill("delta", capability="filesystem.write"))
     assert [s.skill_id for s in registry.enumerate_skills()] == [
-        "alpha", "bravo", "charlie", "delta"
+        "alpha",
+        "bravo",
+        "charlie",
+        "delta",
     ]
     assert registry.capabilities() == ["filesystem.write", "terminal.execute"]
     assert [s.skill_id for s in registry.by_capability("terminal.execute")] == [
-        "alpha", "bravo", "charlie"
+        "alpha",
+        "bravo",
+        "charlie",
     ]
     assert registry.by_capability("ghost.op") == []
 
@@ -75,9 +86,7 @@ def test_version_bound_evicts_oldest_deterministically() -> None:
     registry = SkillRegistry()
     for version in range(1, MAX_SKILL_VERSIONS + 3):
         registry.register(skill("alpha", version=version))
-    versions = sorted(
-        d.version for d in registry.enumerate_skills() if d.skill_id == "alpha"
-    )
+    versions = sorted(d.version for d in registry.enumerate_skills() if d.skill_id == "alpha")
     assert versions == list(range(3, MAX_SKILL_VERSIONS + 3))  # oldest evicted
 
 
@@ -95,7 +104,9 @@ def test_malformed_definitions_cannot_enter() -> None:
         registry.register(
             SkillDefinition(
                 skill_id="bad capability",  # type: ignore[arg-type]
-                name="n", description="d", capability="tool.op",
+                name="n",
+                description="d",
+                capability="tool.op",
             )
         )
     assert len(registry) == 0

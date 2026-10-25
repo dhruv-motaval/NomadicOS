@@ -122,14 +122,20 @@ def test_observation_covers_only_real_data_entries() -> None:
         facts={"kept": WorldFact(key="kept", value=1, kind=WorldFactKind.VERIFIED_FACT)}
     )
     observation = Observation(
-        id="obs_10", task_id="task_g", kind=ObservationKind.STEP_RESULT,
-        summary="no data", data={},
+        id="obs_10",
+        task_id="task_g",
+        kind=ObservationKind.STEP_RESULT,
+        summary="no data",
+        data={},
     )
     updated = apply_observation(state, observation)
     assert updated is state  # nothing to record: identical state returned
     observation2 = Observation(
-        id="obs_11", task_id="task_g", kind=ObservationKind.STEP_RESULT,
-        summary="adds", data={"new_fact": "v", "kept": "overwritten-by-observation"},
+        id="obs_11",
+        task_id="task_g",
+        kind=ObservationKind.STEP_RESULT,
+        summary="adds",
+        data={"new_fact": "v", "kept": "overwritten-by-observation"},
     )
     updated2 = apply_observation(state, observation2)
     assert "new_fact" in updated2.world.facts
@@ -146,8 +152,10 @@ def test_predictions_stay_unverified_in_beliefs() -> None:
         update={
             "predictions": [
                 Prediction(
-                    id="pred_1", candidate_id="cand_1",
-                    predicted_world=prediction_world, confidence=0.3,
+                    id="pred_1",
+                    candidate_id="cand_1",
+                    predicted_world=prediction_world,
+                    confidence=0.3,
                 )
             ]
         }
@@ -166,9 +174,7 @@ def test_belief_assessment_is_bounded() -> None:
     with pytest.raises(ValidationError):
         BeliefAssessment(
             facts=[
-                FactUncertainty(
-                    key=f"k{i}", level=UncertaintyLevel.UNKNOWN, confidence=0.0
-                )
+                FactUncertainty(key=f"k{i}", level=UncertaintyLevel.UNKNOWN, confidence=0.0)
                 for i in range(MAX_BELIEF_FACTS + 1)
             ],
             overall_uncertainty=1.0,
@@ -190,8 +196,11 @@ def test_unknown_keys_listed_as_missing() -> None:
 def test_belief_update_is_attributable_and_replayable() -> None:
     state = make_state(facts={"k": WorldFact(key="k", kind=WorldFactKind.UNKNOWN)})
     observation = Observation(
-        id="obs_x", task_id="task_g", kind=ObservationKind.STEP_RESULT,
-        summary="probe", data={"k": "v"},
+        id="obs_x",
+        task_id="task_g",
+        kind=ObservationKind.STEP_RESULT,
+        summary="probe",
+        data={"k": "v"},
     )
     first = apply_observation(state, observation)
     second = apply_observation(state, observation)

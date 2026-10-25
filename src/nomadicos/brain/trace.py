@@ -101,21 +101,15 @@ def reconstruct_trace(
     goal stage comes from the state itself. Execution and verification
     stages appear ONLY from the real artifacts passed in — a trace can
     never claim an execution that did not happen."""
-    steps: list[TraceStep] = [
-        TraceStep(stage="goal", detail=state.goal.objective[:180])
-    ]
+    steps: list[TraceStep] = [TraceStep(stage="goal", detail=state.goal.objective[:180])]
     stages: list[str] = ["goal"]
     proposed_count = 0
     for event in events:
         stage = _STAGE_BY_EVENT.get(event.event_type)
         if stage is None:
             continue  # non-trace events (e.g. model probes) are skipped
-        ok = event.event_type not in (
-            BrainEventType.BRAIN_SEARCH_COMPLETED,
-        ) or bool(event.payload)
-        steps.append(
-            TraceStep(stage=stage, event_id=event.event_id, ok=ok)
-        )
+        ok = event.event_type not in (BrainEventType.BRAIN_SEARCH_COMPLETED,) or bool(event.payload)
+        steps.append(TraceStep(stage=stage, event_id=event.event_id, ok=ok))
         if stage == "proposal":
             proposed_count += 1
         if stage not in stages:
@@ -125,9 +119,7 @@ def reconstruct_trace(
     failed_executions: list[str] = []
     for execution in executions or []:
         executed_ids.append(execution.id)
-        ok = execution.status is not None and execution.status.value in (
-            "SUCCEEDED",
-        )
+        ok = execution.status is not None and execution.status.value in ("SUCCEEDED",)
         if not ok:
             failed_executions.append(execution.id)
         steps.append(

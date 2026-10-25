@@ -64,8 +64,12 @@ def test_engagement_metadata_rejects_secrets() -> None:
 def test_only_active_engagements_pass() -> None:
     ok, reasons = validate_engagement(engagement(), SecurityCapabilityKind.RECON, "tgt_repo")
     assert ok and reasons == []
-    for status in (EngagementStatus.DRAFT, EngagementStatus.SUSPENDED,
-                   EngagementStatus.COMPLETED, EngagementStatus.REVOKED):
+    for status in (
+        EngagementStatus.DRAFT,
+        EngagementStatus.SUSPENDED,
+        EngagementStatus.COMPLETED,
+        EngagementStatus.REVOKED,
+    ):
         ok, reasons = validate_engagement(
             engagement(status=status), SecurityCapabilityKind.RECON, "tgt_repo"
         )
@@ -86,9 +90,7 @@ def test_capability_and_target_scope_enforced() -> None:
     )
     assert not ok and any("not granted" in r for r in reasons)
     # target out of scope
-    ok, reasons = validate_engagement(
-        engagement(), SecurityCapabilityKind.RECON, "tgt_ghost"
-    )
+    ok, reasons = validate_engagement(engagement(), SecurityCapabilityKind.RECON, "tgt_ghost")
     assert not ok and any("outside engagement" in r for r in reasons)
     # never silently re-scoped: both failures name the requested ids
     assert "DEPENDENCY_ANALYSIS" in reasons[0] or "tgt_ghost" in reasons[0]
@@ -117,8 +119,13 @@ def test_lifecycle_transitions_are_deterministic_and_fail_closed() -> None:
 
 def test_taxonomy_is_closed_and_risk_ordered() -> None:
     assert set(SECURITY_CAPABILITIES) == {
-        "RECON", "ANALYSIS", "CONFIGURATION_REVIEW", "CODE_ANALYSIS",
-        "DEPENDENCY_ANALYSIS", "VULNERABILITY_VALIDATION", "EVIDENCE_COLLECTION",
+        "RECON",
+        "ANALYSIS",
+        "CONFIGURATION_REVIEW",
+        "CODE_ANALYSIS",
+        "DEPENDENCY_ANALYSIS",
+        "VULNERABILITY_VALIDATION",
+        "EVIDENCE_COLLECTION",
     }
     validation = SECURITY_CAPABILITIES["VULNERABILITY_VALIDATION"]
     assert validation.risk.rank == 2 and validation.sandbox_class is SandboxClass.ISOLATED

@@ -36,14 +36,22 @@ def action(**overrides) -> SecurityAction:
 def test_evidence_append_is_deterministic_and_bound() -> None:
     store = EvidenceStore()
     first = store.append(
-        engagement_id="eng_lab", target_id="tgt_repo", capability="RECON",
-        classification=EvidenceType.OBSERVATION, content="found config",
-        provenance=["exec_1"], invocation_id="task_1",
+        engagement_id="eng_lab",
+        target_id="tgt_repo",
+        capability="RECON",
+        classification=EvidenceType.OBSERVATION,
+        content="found config",
+        provenance=["exec_1"],
+        invocation_id="task_1",
     )
     second = store.append(
-        engagement_id="eng_lab", target_id="tgt_repo", capability="RECON",
-        classification=EvidenceType.OBSERVATION, content="found config",
-        provenance=["exec_1"], invocation_id="task_1",
+        engagement_id="eng_lab",
+        target_id="tgt_repo",
+        capability="RECON",
+        classification=EvidenceType.OBSERVATION,
+        content="found config",
+        provenance=["exec_1"],
+        invocation_id="task_1",
     )
     assert first.sequence == 0 and second.sequence == 1  # deterministic order
     assert first.evidence_id != second.evidence_id
@@ -56,7 +64,9 @@ def test_evidence_append_is_deterministic_and_bound() -> None:
 def test_evidence_content_scrubbed_before_persistence() -> None:
     store = EvidenceStore()
     entry = store.append(
-        engagement_id="eng_lab", target_id="tgt_repo", capability="RECON",
+        engagement_id="eng_lab",
+        target_id="tgt_repo",
+        capability="RECON",
         classification=EvidenceType.FINDING,
         content="response contained password=hunter2 in the fixture",
         source="token: abc123 probe",
@@ -69,22 +79,38 @@ def test_evidence_content_scrubbed_before_persistence() -> None:
 def test_evidence_rejects_unscrubbed_secrets_at_contract_level() -> None:
     with pytest.raises(ValidationError):
         SecurityEvidence(
-            evidence_id="evt-sec-x", engagement_id="e", target_id="t",
-            capability="RECON", sequence=0, classification=EvidenceType.FINDING,
+            evidence_id="evt-sec-x",
+            engagement_id="e",
+            target_id="t",
+            capability="RECON",
+            sequence=0,
+            classification=EvidenceType.FINDING,
             content="api_key: supersecretvalue",
         )
 
 
 def test_evidence_store_is_append_only_and_bounded() -> None:
     store = EvidenceStore(max_entries=2)
-    store.append(engagement_id="e", target_id="t", capability="RECON",
-                 classification=EvidenceType.OBSERVATION)
-    store.append(engagement_id="e", target_id="t", capability="RECON",
-                 classification=EvidenceType.OBSERVATION)
+    store.append(
+        engagement_id="e",
+        target_id="t",
+        capability="RECON",
+        classification=EvidenceType.OBSERVATION,
+    )
+    store.append(
+        engagement_id="e",
+        target_id="t",
+        capability="RECON",
+        classification=EvidenceType.OBSERVATION,
+    )
     with pytest.raises(OverflowError):
         # full store FAILS CLOSED — audit evidence is never silently evicted
-        store.append(engagement_id="e", target_id="t", capability="RECON",
-                     classification=EvidenceType.OBSERVATION)
+        store.append(
+            engagement_id="e",
+            target_id="t",
+            capability="RECON",
+            classification=EvidenceType.OBSERVATION,
+        )
     assert not hasattr(store, "delete")
     assert not hasattr(store, "update")
 
@@ -93,9 +119,13 @@ def test_evidence_persists_and_reloads(tmp_path) -> None:
     path = tmp_path / "evidence.jsonl"
     store = EvidenceStore(path)
     entry = store.append(
-        engagement_id="eng_lab", target_id="tgt_repo", capability="RECON",
-        classification=EvidenceType.OBSERVATION, content="observed layout",
-        provenance=["exec_9"], invocation_id="task_7",
+        engagement_id="eng_lab",
+        target_id="tgt_repo",
+        capability="RECON",
+        classification=EvidenceType.OBSERVATION,
+        content="observed layout",
+        provenance=["exec_9"],
+        invocation_id="task_7",
     )
     reloaded = EvidenceStore(path)
     assert len(reloaded) == 1
@@ -107,8 +137,12 @@ def test_evidence_persists_and_reloads(tmp_path) -> None:
 def test_evidence_survives_corrupt_lines(tmp_path) -> None:
     path = tmp_path / "evidence.jsonl"
     store = EvidenceStore(path)
-    store.append(engagement_id="e", target_id="t", capability="RECON",
-                 classification=EvidenceType.OBSERVATION)
+    store.append(
+        engagement_id="e",
+        target_id="t",
+        capability="RECON",
+        classification=EvidenceType.OBSERVATION,
+    )
     path.write_text("{corrupt\n" + path.read_text(encoding="utf-8"), encoding="utf-8")
     reloaded = EvidenceStore(path)
     assert len(reloaded) == 1  # corrupt line dropped, good evidence kept
@@ -127,8 +161,13 @@ def test_audit_distinguishes_proposed_from_executed() -> None:
     # an execution record REQUIRES a real execution result reference
     with pytest.raises(ValidationError):
         AuditRecord(
-            audit_id="", sequence=0, engagement_id="eng_lab", target_id="tgt_repo",
-            capability="RECON", executed=True, execution_ref="",
+            audit_id="",
+            sequence=0,
+            engagement_id="eng_lab",
+            target_id="tgt_repo",
+            capability="RECON",
+            executed=True,
+            execution_ref="",
         )
     trail.record_execution(act, "exec_abc123")
     executed_entry = trail.entries()[-1]
@@ -156,8 +195,13 @@ def test_audit_records_every_gate() -> None:
 
 def test_audit_records_failures_and_scrubs_them() -> None:
     trail = AuditTrail()
-    trail.record_failure("eng_lab", "tgt_repo", "RECON", "task_1",
-                         "authorization denied: token=abc123 leaked in reason")
+    trail.record_failure(
+        "eng_lab",
+        "tgt_repo",
+        "RECON",
+        "task_1",
+        "authorization denied: token=abc123 leaked in reason",
+    )
     entry = trail.entries()[0]
     assert entry.failure and "abc123" not in entry.failure
     assert "[REDACTED]" in entry.failure

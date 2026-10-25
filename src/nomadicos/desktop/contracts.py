@@ -105,6 +105,19 @@ class PressKeyArgs(_Args):
         return "+".join(validate_hotkey(v))
 
 
+class HotkeyArgs(_Args):
+    """A keyboard CHORD as typed structured intent (SPEC §26): an ordered
+    key list from the closed vocabulary — never shell syntax. Bounds,
+    allowed keys, and malformed input all fail closed."""
+
+    keys: list[str] = Field(min_length=1, max_length=MAX_HOTKEY_PARTS)
+
+    @field_validator("keys")
+    @classmethod
+    def _vocab(cls, keys: list[str]) -> list[str]:
+        return [validate_key(key) for key in keys]
+
+
 class ListWindowsArgs(_Args):
     limit: int = Field(default=MAX_WINDOWS, ge=1, le=MAX_WINDOWS)
 

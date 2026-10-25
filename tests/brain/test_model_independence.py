@@ -48,8 +48,14 @@ def test_role_profile_contract_is_closed_and_bounded() -> None:
 def test_selection_parsing_fails_closed() -> None:
     profile = role_profile(CognitiveRole.PREDICTOR)
     good = parse_role_selection(
-        {"role": "PREDICTOR", "model_id": "m1", "engine": "e1",
-         "score": 0.9, "reasons": ["measured"], "rejected": ["m2: weak"]},
+        {
+            "role": "PREDICTOR",
+            "model_id": "m1",
+            "engine": "e1",
+            "score": 0.9,
+            "reasons": ["measured"],
+            "rejected": ["m2: weak"],
+        },
         profile=profile,
     )
     assert good.model_id == "m1" and good.available
@@ -59,15 +65,19 @@ def test_selection_parsing_fails_closed() -> None:
     # authority-shaped extra
     with pytest.raises(ModelOutputRejected):
         parse_role_selection(
-            {"role": "PREDICTOR", "model_id": "m1", "engine": "e1", "score": 0.9,
-             "authorized": True},
+            {
+                "role": "PREDICTOR",
+                "model_id": "m1",
+                "engine": "e1",
+                "score": 0.9,
+                "authorized": True,
+            },
             profile=profile,
         )
     # unavailable selection must not carry a model id
     with pytest.raises(ModelOutputRejected):
         parse_role_selection(
-            {"role": "PREDICTOR", "model_id": "m1", "engine": "", "score": 0.0,
-             "available": False},
+            {"role": "PREDICTOR", "model_id": "m1", "engine": "", "score": 0.0, "available": False},
             profile=profile,
         )
     # out-of-range score
@@ -81,8 +91,13 @@ def test_selection_parsing_fails_closed() -> None:
 def test_role_model_router_is_a_structural_protocol() -> None:
     class Adapter:
         def select_for_role(self, profile: RoleModelProfile) -> dict:
-            return {"role": profile.role.value, "model_id": "m", "engine": "e",
-                    "score": 0.5, "available": True}
+            return {
+                "role": profile.role.value,
+                "model_id": "m",
+                "engine": "e",
+                "score": 0.5,
+                "available": True,
+            }
 
     assert isinstance(Adapter(), RoleModelRouter)  # satisfied structurally
 
@@ -104,11 +119,7 @@ def test_sprint7_module_has_no_provider_specific_logic() -> None:
     import pathlib
 
     source = (
-        pathlib.Path(__file__).resolve().parents[2]
-        / "src"
-        / "nomadicos"
-        / "brain"
-        / "models.py"
+        pathlib.Path(__file__).resolve().parents[2] / "src" / "nomadicos" / "brain" / "models.py"
     ).read_text(encoding="utf-8")
     for provider in ("glm", "nvidia", "ollama", "openai", "anthropic", "qwen", "llama"):
         assert provider not in source.lower(), provider
@@ -131,12 +142,16 @@ def test_brainstate_never_contains_live_clients() -> None:
 
 
 def test_selection_is_data_only() -> None:
-    selection = RoleModelSelection(
-        role=CognitiveRole.ACTOR, model_id="m", engine="e", score=0.5
-    )
+    selection = RoleModelSelection(role=CognitiveRole.ACTOR, model_id="m", engine="e", score=0.5)
     dump = selection.model_dump(mode="json")
     forbidden_fields = (
-        "authorized", "allowed", "approved", "permission", "bypass", "secret", "api_key",
+        "authorized",
+        "allowed",
+        "approved",
+        "permission",
+        "bypass",
+        "secret",
+        "api_key",
     )
     for forbidden in forbidden_fields:
         assert forbidden not in dump

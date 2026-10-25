@@ -12,7 +12,13 @@ benchmark_version and retain their exact 14A.2 semantics.
 from __future__ import annotations
 
 from nomadicos.contracts.benchmark import BenchmarkRecord
-from nomadicos.contracts.model import CapabilityTag, ModelRecord, TaskRequirements, TaskType
+from nomadicos.contracts.model import (
+    CapabilityTag,
+    ModelHealth,
+    ModelRecord,
+    TaskRequirements,
+    TaskType,
+)
 from nomadicos.kernel.config import RouterConfig
 from nomadicos.kernel.events import EventLogger
 from nomadicos.registry import ModelRegistry, ProductionSample
@@ -190,8 +196,8 @@ def test_router_requests_version_scoped_bundles() -> None:
         def enabled(self):
             return self._inner.enabled()
 
-        def get(self, model_id: str):
-            return self._inner.get(model_id)
+        def get(self, model_id: str, engine: str | None = None):
+            return self._inner.get(model_id, engine)
 
     reg = ModelRegistry(EventLogger())
     # v1: perfect history, v2: failing history — under the benchmark
@@ -206,6 +212,7 @@ def test_router_requests_version_scoped_bundles() -> None:
             engine="ollama",
             roles=["coding"],
             capabilities=[CapabilityTag.TEXT, CapabilityTag.TOOL_USE, CapabilityTag.CODING],
+            health=ModelHealth.HEALTHY,
         )
     )
     spy = SpyRegistry(reg)

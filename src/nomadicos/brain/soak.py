@@ -132,12 +132,8 @@ def run_soak(
                 raise ValueError("workflow returned an unchanged state")
             attention_items = len(result.attention.items) if result.attention else 0
             if attention_items > MAX_ATTENTION_ITEMS:
-                raise ValueError(
-                    f"attention grew beyond the {MAX_ATTENTION_ITEMS}-item bound"
-                )
-            within_state = len(result.history) - len(
-                {ref.event_id for ref in result.history}
-            )
+                raise ValueError(f"attention grew beyond the {MAX_ATTENTION_ITEMS}-item bound")
+            within_state = len(result.history) - len({ref.event_id for ref in result.history})
             if within_state:
                 raise ValueError(f"{within_state} duplicate event ids in one state")
             ids = {ref.event_id for ref in result.history}

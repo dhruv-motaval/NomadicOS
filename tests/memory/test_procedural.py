@@ -40,9 +40,7 @@ def pass_result() -> VerificationResult:
 
 
 def store_at(tmp_path) -> JsonlMemoryStore:
-    return JsonlMemoryStore(
-        tmp_path / "memory.jsonl", MemoryConfig(state_dir=str(tmp_path))
-    )
+    return JsonlMemoryStore(tmp_path / "memory.jsonl", MemoryConfig(state_dir=str(tmp_path)))
 
 
 STEPS = ("run pytest -q", "repair multiply", "rerun pytest -q")
@@ -80,7 +78,11 @@ def test_unverified_procedure_cannot_become_verified(tmp_path) -> None:
     # without a real verifier artifact nothing becomes a verified procedure
     assert (
         record_verified_procedure(
-            store, task_id="task_1", objective="x", steps=["s"], goal_verdict=None  # type: ignore[arg-type]
+            store,
+            task_id="task_1",
+            objective="x",
+            steps=["s"],
+            goal_verdict=None,  # type: ignore[arg-type]
         )
         is None
     )
@@ -114,9 +116,7 @@ def test_deterministic_procedure_identity(tmp_path) -> None:
 def test_duplicate_procedure_is_deterministic(tmp_path) -> None:
     store = store_at(tmp_path)
     first = record_procedure(store, task_id="task_1", objective="fix  calc", steps=STEPS)
-    second = record_procedure(
-        store, task_id="task_1", objective="fix calc", steps=STEPS
-    )
+    second = record_procedure(store, task_id="task_1", objective="fix calc", steps=STEPS)
     assert first is not None and first.id == second.id
     assert len(store.records(MemoryKind.PROCEDURAL)) == 1
 
@@ -124,11 +124,17 @@ def test_duplicate_procedure_is_deterministic(tmp_path) -> None:
 def test_distinct_procedures_are_preserved(tmp_path) -> None:
     store = store_at(tmp_path)
     a = record_verified_procedure(
-        store, task_id="task_1", objective="fix calc", steps=STEPS,
+        store,
+        task_id="task_1",
+        objective="fix calc",
+        steps=STEPS,
         goal_verdict=pass_result(),
     )
     b = record_verified_procedure(
-        store, task_id="task_2", objective="fix calc", steps=STEPS,
+        store,
+        task_id="task_2",
+        objective="fix calc",
+        steps=STEPS,
         goal_verdict=pass_result(),
     )
     assert a is not None and b is not None and a.id != b.id  # distinct tasks
@@ -154,7 +160,10 @@ def test_provenance_preserved(tmp_path) -> None:
 def test_procedure_is_retrieval_data_only(tmp_path) -> None:
     store = store_at(tmp_path)
     got = record_verified_procedure(
-        store, task_id="task_1", objective="fix it", steps=STEPS,
+        store,
+        task_id="task_1",
+        objective="fix it",
+        steps=STEPS,
         goal_verdict=pass_result(),
     )
     assert got is not None
@@ -190,9 +199,7 @@ def test_persistence_round_trip(tmp_path) -> None:
 
 
 def test_no_authority_imports_and_no_success_path() -> None:
-    source = inspect.getsource(
-        __import__("nomadicos.memory.procedural", fromlist=["x"])
-    )
+    source = inspect.getsource(__import__("nomadicos.memory.procedural", fromlist=["x"]))
     for forbidden in (
         "nomadicos.authority",
         "nomadicos.executor",

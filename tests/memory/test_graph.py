@@ -18,9 +18,7 @@ from nomadicos.memory.store import JsonlMemoryStore
 
 def graph_at(tmp_path, **cfg) -> ObjectGraph:
     return ObjectGraph(
-        JsonlMemoryStore(
-            tmp_path / "memory.jsonl", MemoryConfig(state_dir=str(tmp_path), **cfg)
-        )
+        JsonlMemoryStore(tmp_path / "memory.jsonl", MemoryConfig(state_dir=str(tmp_path), **cfg))
     )
 
 
@@ -180,9 +178,7 @@ def test_repeated_identical_operations_are_deterministic(tmp_path) -> None:
         g.upsert_object(ObjectRecord(id="tool:pytest", type="tool"))
         g.upsert_relation(rel("model:ornith", "runs", "tool:pytest"))
         g.upsert_relation(rel("model:ornith", "uses", "lib:langgraph"))
-        g.upsert_object(
-            ObjectRecord(id="model:ornith", type="model", properties={"v": 2})
-        )
+        g.upsert_object(ObjectRecord(id="model:ornith", type="model", properties={"v": 2}))
         neighbors = [(r.relation, r.id) for r in g.neighbors("model:ornith")]
         objs = [o.id for o in g.find_objects()]
         return neighbors, objs

@@ -154,9 +154,7 @@ class Engagement(Contract):
 
 #: deterministic lifecycle transitions (everything else fails closed)
 ENGAGEMENT_TRANSITIONS: dict[EngagementStatus, frozenset[EngagementStatus]] = {
-    EngagementStatus.DRAFT: frozenset(
-        {EngagementStatus.ACTIVE, EngagementStatus.REVOKED}
-    ),
+    EngagementStatus.DRAFT: frozenset({EngagementStatus.ACTIVE, EngagementStatus.REVOKED}),
     EngagementStatus.ACTIVE: frozenset(
         {
             EngagementStatus.SUSPENDED,
@@ -164,17 +162,13 @@ ENGAGEMENT_TRANSITIONS: dict[EngagementStatus, frozenset[EngagementStatus]] = {
             EngagementStatus.REVOKED,
         }
     ),
-    EngagementStatus.SUSPENDED: frozenset(
-        {EngagementStatus.ACTIVE, EngagementStatus.REVOKED}
-    ),
+    EngagementStatus.SUSPENDED: frozenset({EngagementStatus.ACTIVE, EngagementStatus.REVOKED}),
     EngagementStatus.COMPLETED: frozenset(),
     EngagementStatus.REVOKED: frozenset(),
 }
 
 
-def transition_engagement(
-    engagement: Engagement, to_status: EngagementStatus
-) -> Engagement:
+def transition_engagement(engagement: Engagement, to_status: EngagementStatus) -> Engagement:
     """Deterministic lifecycle transition; illegal transitions fail closed."""
     if to_status not in ENGAGEMENT_TRANSITIONS[engagement.status]:
         raise ValueError(
@@ -417,9 +411,7 @@ class SecurityAction(Contract):
         lowered = {str(k).lower() for k in self.args}
         clash = lowered & {f.lower() for f in MODEL_AUTHORITY_FIELDS}
         if clash:
-            raise ValueError(
-                f"security args carry authority-shaped fields: {sorted(clash)}"
-            )
+            raise ValueError(f"security args carry authority-shaped fields: {sorted(clash)}")
         if contains_secret(self.note):
             raise ValueError("security action notes must not contain secrets")
         return self

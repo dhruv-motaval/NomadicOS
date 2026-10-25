@@ -57,9 +57,7 @@ class SandboxManager:
             granted = list(dict.fromkeys(capabilities))
         unknown = [c for c in granted if c not in engagement.allowed_capabilities]
         if unknown:
-            raise InvalidProposal(
-                f"sandbox capabilities exceed engagement grant: {unknown}"
-            )
+            raise InvalidProposal(f"sandbox capabilities exceed engagement grant: {unknown}")
         if not granted:
             raise InvalidProposal("a sandbox with no permitted capabilities is invalid")
         sandbox = SandboxRecord(
@@ -99,8 +97,7 @@ class SandboxManager:
             )
         if sandbox.target_id != target.target_id:
             reasons.append(
-                f"sandbox bound to target {sandbox.target_id!r}, "
-                f"not {target.target_id!r}"
+                f"sandbox bound to target {sandbox.target_id!r}, not {target.target_id!r}"
             )
         spec_class = self._required_class(capability)
         if sandbox.sandbox_class.rank < spec_class.rank:
@@ -109,9 +106,7 @@ class SandboxManager:
                 f"{spec_class.value}; sandbox is {sandbox.sandbox_class.value}"
             )
         if capability.value not in sandbox.allowed_capabilities:
-            reasons.append(
-                f"capability {capability.value} not permitted by sandbox {sandbox_id!r}"
-            )
+            reasons.append(f"capability {capability.value} not permitted by sandbox {sandbox_id!r}")
         return (not reasons), reasons
 
     @staticmethod

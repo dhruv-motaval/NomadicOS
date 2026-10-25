@@ -24,7 +24,7 @@ def make_desktop_app(
     tmp_path: Path,
     backend: FakeDesktopBackend | None = None,
     *,
-    scripts: list[tuple[str, str]] | None = None,
+    scripts: list[tuple[str, str | list[str]]] | None = None,
     default_response: str = '{"finished": true}',
     grant: bool = True,
 ) -> NomadicApp:

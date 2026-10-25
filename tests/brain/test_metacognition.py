@@ -62,7 +62,9 @@ def test_metacognition_answers_the_five_questions() -> None:
         facts={"db_status": WorldFact(key="db_status", value="ok", kind=WorldFactKind.FACT)},
         hypotheses=[
             Hypothesis(
-                id="hyp_1", statement="config error", confidence=0.6,
+                id="hyp_1",
+                statement="config error",
+                confidence=0.6,
                 supporting_evidence=["obs_1"],
             )
         ],
@@ -83,8 +85,13 @@ def test_metacognition_flags_uncertainty_and_missing() -> None:
             "stale_cfg": WorldFact(key="stale_cfg", kind=WorldFactKind.STALE_FACT),
         },
         hypotheses=[
-            Hypothesis(id="hyp_weak", statement="maybe cache", confidence=0.2,
-                       supporting_evidence=[], conflicting_evidence=[])
+            Hypothesis(
+                id="hyp_weak",
+                statement="maybe cache",
+                confidence=0.2,
+                supporting_evidence=[],
+                conflicting_evidence=[],
+            )
         ],
     )
     assessment = assess_metacognition(state)
@@ -134,8 +141,10 @@ def test_metacognition_is_advisory_data_only() -> None:
 
 def test_metacognition_is_bounded() -> None:
     state = make_state(
-        facts={f"unknown_{i}": WorldFact(key=f"unknown_{i}", kind=WorldFactKind.UNKNOWN)
-               for i in range(20)}
+        facts={
+            f"unknown_{i}": WorldFact(key=f"unknown_{i}", kind=WorldFactKind.UNKNOWN)
+            for i in range(20)
+        }
     )
     assessment = assess_metacognition(state)
     assert len(assessment.missing) <= 8  # MAX_METACOGNITION_ITEMS
@@ -162,8 +171,9 @@ def test_information_requests_from_unevidenced_hypotheses() -> None:
     state = make_state(
         hypotheses=[
             Hypothesis(id="hyp_no_ev", statement="cache issue", confidence=0.5),
-            Hypothesis(id="hyp_ev", statement="config issue", confidence=0.5,
-                       supporting_evidence=["obs_1"]),
+            Hypothesis(
+                id="hyp_ev", statement="config issue", confidence=0.5, supporting_evidence=["obs_1"]
+            ),
         ]
     )
     requests = identify_information_needs(state)

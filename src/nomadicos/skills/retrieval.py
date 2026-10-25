@@ -33,9 +33,7 @@ _EVIDENCE_SCORE = 0.5
 def _input_compatible(definition: SkillDefinition, provided: list[str]) -> bool:
     """All REQUIRED inputs must be coverable by the caller's args."""
     provided_set = set(provided)
-    return all(
-        (not param.required) or param.name in provided_set for param in definition.inputs
-    )
+    return all((not param.required) or param.name in provided_set for param in definition.inputs)
 
 
 def _prerequisites_met(definition: SkillDefinition, satisfied: list[str]) -> bool:
@@ -93,9 +91,9 @@ def rank_skills(registry: SkillRegistry, query: SkillQuery) -> SkillRetrieval:
             reasons.append("cold start: no measured evidence yet")
         matches.append((score, measured, definition, reasons))
 
-    ordered = sorted(
-        matches, key=lambda m: (-m[0], m[2].skill_id, -m[2].version)
-    )[: query.max_candidates]
+    ordered = sorted(matches, key=lambda m: (-m[0], m[2].skill_id, -m[2].version))[
+        : query.max_candidates
+    ]
     return SkillRetrieval(
         capability=query.capability,
         matches=[

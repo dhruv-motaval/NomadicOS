@@ -48,9 +48,7 @@ class FakeValidator(ProposalValidator):
         logger = EventLogger()
         super().__init__(FakeCatalog(), logger)
 
-    def validate(
-        self, proposal: ActionProposal, context: ValidationContext
-    ) -> CapabilityRef:
+    def validate(self, proposal: ActionProposal, context: ValidationContext) -> CapabilityRef:
         self.calls.append((proposal, context))
         if self.should_reject:
             raise Exception("validation rejected")
@@ -101,9 +99,7 @@ class FakeExecutor(Executor):
         self.should_fail = False
         self.failure_result: ExecutionResult | None = None
 
-    async def execute(
-        self, authorized: AuthorizedAction, ctx: ExecutionContext
-    ) -> ExecutionResult:
+    async def execute(self, authorized: AuthorizedAction, ctx: ExecutionContext) -> ExecutionResult:
         self.calls.append(authorized)
         if self.should_fail:
             raise Exception("executor failed")

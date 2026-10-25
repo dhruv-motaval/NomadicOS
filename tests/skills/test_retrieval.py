@@ -61,8 +61,7 @@ def test_capability_match_required() -> None:
 
 def test_measured_outranks_cold_start() -> None:
     measured = skill(
-        "measured", evidence=SkillEvidence(samples=4, successes=4, failures=0,
-                                            success_rate=1.0)
+        "measured", evidence=SkillEvidence(samples=4, successes=4, failures=0, success_rate=1.0)
     )
     cold = skill("cold")
     query = SkillQuery(capability="terminal.execute", provided_args=["command"])
@@ -75,12 +74,10 @@ def test_measured_outranks_cold_start() -> None:
 
 def test_higher_success_rate_ranks_higher() -> None:
     good = skill(
-        "good", evidence=SkillEvidence(samples=5, successes=5, failures=0,
-                                        success_rate=1.0)
+        "good", evidence=SkillEvidence(samples=5, successes=5, failures=0, success_rate=1.0)
     )
     mediocre = skill(
-        "mediocre", evidence=SkillEvidence(samples=5, successes=3, failures=2,
-                                            success_rate=0.6)
+        "mediocre", evidence=SkillEvidence(samples=5, successes=3, failures=2, success_rate=0.6)
     )
     query = SkillQuery(capability="terminal.execute", provided_args=["command"])
     result = rank_skills(reg(mediocre, good), query)
@@ -120,15 +117,23 @@ def test_prerequisite_filter() -> None:
     assert any("prerequisites" in e for e in result.excluded)
     met = rank_skills(
         reg(skill("gated", prereqs=["filesystem.exists"])),
-        SkillQuery(capability="terminal.execute", satisfied_prerequisites=["filesystem.exists"],
-                   provided_args=["command"]),
+        SkillQuery(
+            capability="terminal.execute",
+            satisfied_prerequisites=["filesystem.exists"],
+            provided_args=["command"],
+        ),
     )
     assert [m.skill_id for m in met.matches] == ["gated"]
 
 
 def test_input_compatibility_filter() -> None:
-    strict = skill("strict", inputs=[SkillParameter(name="command", type="string", required=True),
-                                      SkillParameter(name="cwd", type="string", required=True)])
+    strict = skill(
+        "strict",
+        inputs=[
+            SkillParameter(name="command", type="string", required=True),
+            SkillParameter(name="cwd", type="string", required=True),
+        ],
+    )
     result = rank_skills(
         reg(strict), SkillQuery(capability="terminal.execute", provided_args=["command"])
     )
@@ -164,8 +169,7 @@ def test_deterministic_order_and_tiebreak() -> None:
 
 def test_retrieval_is_bounded_and_deterministic() -> None:
     registry = reg(*[skill(f"s{i:02d}") for i in range(20)])
-    query = SkillQuery(capability="terminal.execute", max_candidates=3,
-                       provided_args=["command"])
+    query = SkillQuery(capability="terminal.execute", max_candidates=3, provided_args=["command"])
     first = rank_skills(registry, query)
     second = rank_skills(registry, query)
     assert first == second  # deterministic

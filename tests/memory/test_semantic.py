@@ -50,9 +50,7 @@ def not_pass_result() -> VerificationResult:
 
 
 def store_at(tmp_path) -> JsonlMemoryStore:
-    return JsonlMemoryStore(
-        tmp_path / "memory.jsonl", MemoryConfig(state_dir=str(tmp_path))
-    )
+    return JsonlMemoryStore(tmp_path / "memory.jsonl", MemoryConfig(state_dir=str(tmp_path)))
 
 
 def test_verified_fact_stored_and_round_trips(tmp_path) -> None:
@@ -87,16 +85,17 @@ def test_claims_cannot_become_verified_fact(tmp_path) -> None:
     store = store_at(tmp_path)
     assert (
         record_verified_fact(
-            store, task_id="task_1", fact="model said it works", goal_verdict=None  # type: ignore[arg-type]
+            store,
+            task_id="task_1",
+            fact="model said it works",
+            goal_verdict=None,  # type: ignore[arg-type]
         )
         is None
     )
     legacy = pass_result().model_copy(update={"verifier": "legacy-placeholder"})
     assert record_verified_fact(store, task_id="t", fact="f", goal_verdict=legacy) is None
     assert (
-        record_verified_fact(
-            store, task_id="task_1", fact="x", goal_verdict=not_pass_result()
-        )
+        record_verified_fact(store, task_id="task_1", fact="x", goal_verdict=not_pass_result())
         is None
     )
     assert store.records(MemoryKind.SEMANTIC) == []

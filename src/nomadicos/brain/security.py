@@ -117,9 +117,7 @@ class SecurityCatalog(Protocol):
     """The ONLY security seam the brain knows (structural protocol —
     satisfied by the security brick's catalog adapter)."""
 
-    def security_capabilities(
-        self, request: SecurityCapabilityRequest
-    ) -> list[dict[str, Any]]: ...
+    def security_capabilities(self, request: SecurityCapabilityRequest) -> list[dict[str, Any]]: ...
 
 
 def parse_security_options(
@@ -134,9 +132,10 @@ def parse_security_options(
         payload = dict(entry)
         payload.setdefault("engagement_id", request.engagement_id)
         payload.setdefault("target_id", request.target_id)
-        if payload["engagement_id"] != request.engagement_id or payload[
-            "target_id"
-        ] != request.target_id:
+        if (
+            payload["engagement_id"] != request.engagement_id
+            or payload["target_id"] != request.target_id
+        ):
             raise ModelOutputRejected(
                 "security option binding mismatch (no target/engagement substitution)"
             )

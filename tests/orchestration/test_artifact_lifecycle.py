@@ -36,9 +36,7 @@ async def test_workspace_and_artifacts_survive_restart(tmp_path: Path) -> None:
     # the durable task record carries the artifact reference as DATA
     record = app_b.task_store.load_task(task_id)
     assert record is not None
-    artifact = next(
-        (tmp_path / "ws").rglob("report.txt")
-    )
+    artifact = next((tmp_path / "ws").rglob("report.txt"))
     assert artifact.read_text(encoding="utf-8") == "ARTIFACT-DATA"
     # the recorded evidence hash can be re-established after restart
     sha_entry = record.executions[-1].evidence.get("sha256")
@@ -59,11 +57,7 @@ async def test_screenshot_artifact_survives_restart(tmp_path: Path) -> None:
     app_b = make_app(tmp_path)
     record = app_b.task_store.load_task(task_id)
     assert record is not None
-    shots = [
-        e
-        for e in record.executions
-        if e.tool == "desktop" and e.evidence.get("artifact")
-    ]
+    shots = [e for e in record.executions if e.tool == "desktop" and e.evidence.get("artifact")]
     assert shots, "screenshot artifact reference must be durable in the task record"
     evidence = shots[-1].evidence
     path = Path(evidence["path"])
@@ -135,11 +129,21 @@ async def test_model_absolute_paths_stay_confined(tmp_path: Path) -> None:
     uses resolved real paths - model writes stay inside the task scope)."""
     import json
 
-    app = make_app(tmp_path, scripts=[("escape", json.dumps({
-        "tool": "filesystem",
-        "operation": "write",
-        "args": {"path": str(tmp_path.parent / "escaped.txt"), "content": "x"},
-    }))])
+    app = make_app(
+        tmp_path,
+        scripts=[
+            (
+                "escape",
+                json.dumps(
+                    {
+                        "tool": "filesystem",
+                        "operation": "write",
+                        "args": {"path": str(tmp_path.parent / "escaped.txt"), "content": "x"},
+                    }
+                ),
+            )
+        ],
+    )
     summary = await app.run_goal("Write the escaped file")
     results = [e.result for e in app.log.events(summary.task_id)]
     assert "SUCCEEDED" not in results or not (tmp_path.parent / "escaped.txt").exists()

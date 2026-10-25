@@ -154,9 +154,7 @@ class WorkingMemory:
         if task.critic_feedback:
             out.append(WorkingItem("critic", "critic_feedback", task.critic_feedback, True))
         if task.execution_context:
-            out.append(
-                WorkingItem("exec_ctx", "execution_context", task.execution_context, True)
-            )
+            out.append(WorkingItem("exec_ctx", "execution_context", task.execution_context, True))
         return out
 
     def context(self, task_id: str) -> str:
@@ -237,9 +235,7 @@ class WorkingMemory:
         setattr(task, slot, text)
         return True
 
-    def _push(
-        self, task_id: str, section: str, text: str, pinned: bool
-    ) -> str | None:
+    def _push(self, task_id: str, section: str, text: str, pinned: bool) -> str | None:
         text = text.strip()
         if not text or len(text) > self._max_chars:
             return None

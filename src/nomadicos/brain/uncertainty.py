@@ -107,9 +107,7 @@ def apply_observation(state: BrainState, observation: Observation) -> BrainState
         facts[key] = WorldFact(key=key, value=value, kind=WorldFactKind.FACT)
     return state.model_copy(
         update={
-            "world": WorldState(
-                version=state.world.version + 1, facts=facts
-            ),
+            "world": WorldState(version=state.world.version + 1, facts=facts),
             "state_version": state.state_version + 1,
         }
     )

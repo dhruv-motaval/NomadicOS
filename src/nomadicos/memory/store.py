@@ -213,9 +213,7 @@ class JsonlMemoryStore(MemoryStore):
                 "goal_text": scrub(trajectory.goal_text),
                 "outcome": scrub(trajectory.outcome),
                 "steps": [
-                    step.model_copy(
-                        update={"summary": scrub(step.summary), "ref": scrub(step.ref)}
-                    )
+                    step.model_copy(update={"summary": scrub(step.summary), "ref": scrub(step.ref)})
                     for step in trajectory.steps
                 ],
             }

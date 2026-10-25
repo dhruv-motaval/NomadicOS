@@ -42,10 +42,7 @@ def _episodic(rt):
 
 
 def _by_kind(rt, kind: MemoryKind):
-    return [
-        r.record
-        for r in rt.store.query(MemoryQuery(text="", kinds=[kind], limit=32))
-    ]
+    return [r.record for r in rt.store.query(MemoryQuery(text="", kinds=[kind], limit=32))]
 
 
 def test_memory_reopens_and_records_stay_stable(tmp_path: Path) -> None:

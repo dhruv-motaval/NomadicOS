@@ -34,9 +34,17 @@ from nomadicos.brain.cognition import (
 )
 from nomadicos.brain.errors import InvalidBrainState, InvalidTransition, ModelOutputRejected
 from nomadicos.brain.planner.task_graph import MAX_NODES, TaskGraph, TaskNode, is_safe_node_id
-from nomadicos.brain.schemas import MAX_DESCRIPTION, Subgoal, canonical_json
+from nomadicos.brain.schemas import (
+    MAX_DESCRIPTION,
+    MAX_ITEM_CHARS,
+    MAX_PROVENANCE_REFS,
+    CandidateKind,
+    Subgoal,
+    canonical_json,
+)
 from nomadicos.brain.state import BrainState
 from nomadicos.contracts.core import Contract, GoalPredicate, parse_predicate
+from nomadicos.contracts.worker import WorkerRole
 
 MAX_SUBGOALS = 64
 
@@ -74,23 +82,39 @@ class SubgoalSpec(Contract):
 
 
 class TaskSpec(Contract):
-    """One model-proposed task node (typed, closed schema)."""
+    """One model-proposed task node (typed, closed schema).
+
+    May carry concrete action fields (``kind``, ``tool``, ``arguments``,
+    ``preconditions``, ``expected_effect``, ``rationale``) that the runtime
+    converts directly into an ActionProposal — bypassing a separate actor
+    model call per task (SPEC §13 Phase 4A).  These fields are bounded and
+    validated; authority-shaped fields (``authorized`` / ``allowed`` / etc.)
+    are rejected by extra="forbid" (SPEC §19).
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str
-    description: str
+    description: str = ""
     subgoal_id: str | None = None
     depends_on: list[str] = Field(default_factory=list)
     success_predicate: dict[str, Any] | None = None
+    # Concrete action fields for brain-led EXECUTE tasks (Phase 4A):
+    kind: str = "EXECUTE"
+    tool: str = ""
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    preconditions: list[str] = Field(default_factory=list)
+    expected_effect: str = ""
+    rationale: str = ""
+    # Phase 4B specialist role: the Brain may delegate this task to a
+    # specialist worker instead of executing it as a direct tool action.
+    worker_role: str = WorkerRole.EXECUTE.value
 
     @model_validator(mode="after")
     def _coherent(self) -> TaskSpec:
         if not is_safe_node_id(self.id):
             raise ValueError(f"unsafe task id {self.id!r}")
-        if not self.description.strip():
-            raise ValueError("task description must not be empty")
-        if len(self.description) > MAX_DESCRIPTION:
+        if self.description and len(self.description) > MAX_DESCRIPTION:
             raise ValueError(f"task description exceeds {MAX_DESCRIPTION} chars")
         if len(set(self.depends_on)) != len(self.depends_on):
             raise ValueError(f"task {self.id!r} has duplicate dependencies")
@@ -99,6 +123,31 @@ class TaskSpec(Contract):
                 raise ValueError(f"unsafe dependency id {dep!r}")
         if self.subgoal_id is not None and not is_safe_node_id(self.subgoal_id):
             raise ValueError(f"unsafe subgoal reference {self.subgoal_id!r}")
+        # Validate action fields (mirrors ActionCandidate constraints).
+        # An empty ``tool`` means the task carries no concrete action and
+        # the runtime's Actor<->Monitor loop proposes for it at execution
+        # time - that is a legitimate decomposition shape, not an error.
+        try:
+            CandidateKind(self.kind)
+        except ValueError as exc:
+            raise ValueError(f"task {self.id!r}: unknown kind {self.kind!r}") from exc
+        try:
+            WorkerRole(self.worker_role)
+        except ValueError:
+            raise ValueError(
+                f"task {self.id!r}: unknown worker_role {self.worker_role!r}"
+            ) from None
+        if len(self.tool) > MAX_ITEM_CHARS or len(self.rationale) > MAX_ITEM_CHARS:
+            raise ValueError(f"task {self.id!r}: tool/rationale exceed {MAX_ITEM_CHARS} chars")
+        if len(self.expected_effect) > MAX_DESCRIPTION:
+            raise ValueError(f"task {self.id!r}: expected_effect exceeds {MAX_DESCRIPTION} chars")
+        if len(self.preconditions) > MAX_PROVENANCE_REFS:
+            raise ValueError(f"task {self.id!r}: preconditions exceed {MAX_PROVENANCE_REFS}")
+        for pre in self.preconditions:
+            if not pre.strip() or len(pre) > MAX_ITEM_CHARS:
+                raise ValueError(
+                    f"task {self.id!r}: precondition must be non-empty ≤{MAX_ITEM_CHARS} chars"
+                )
         return self
 
 
@@ -152,6 +201,7 @@ def decomposition_request_payload(state: BrainState) -> dict[str, Any]:
         for key, fact in list(state.world.facts.items())[:16]
     }
     return {
+        "goal_objective": state.goal.objective,
         "goal": {
             "id": state.goal.id,
             "objective": state.goal.objective,
@@ -189,10 +239,21 @@ def parse_decomposition(text: str, *, goal_id: str, context: str = "decomposer")
         nodes = [
             TaskNode(
                 id=spec.id,
-                description=spec.description,
+                # A task's description is its human-readable summary; when the
+                # model omits it, derive it from the expected effect so every
+                # task has a meaningful description (used by step display and
+                # validation).
+                description=spec.description or spec.expected_effect or f"task {spec.id}",
                 subgoal_id=spec.subgoal_id,
                 depends_on=list(spec.depends_on),
                 success_predicate=_parse_predicate(spec.success_predicate, spec.id),
+                kind=CandidateKind(spec.kind),
+                tool=spec.tool,
+                arguments=dict(spec.arguments),
+                preconditions=list(spec.preconditions),
+                expected_effect=spec.expected_effect,
+                rationale=spec.rationale,
+                worker_role=WorkerRole(spec.worker_role),
             )
             for spec in parsed.tasks
         ]

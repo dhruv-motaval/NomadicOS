@@ -14,7 +14,13 @@ layer already preserved engine identity per record and is unchanged.
 from __future__ import annotations
 
 from nomadicos.contracts.benchmark import BenchmarkRecord
-from nomadicos.contracts.model import CapabilityTag, ModelRecord, TaskRequirements, TaskType
+from nomadicos.contracts.model import (
+    CapabilityTag,
+    ModelHealth,
+    ModelRecord,
+    TaskRequirements,
+    TaskType,
+)
 from nomadicos.kernel.config import RouterConfig
 from nomadicos.kernel.events import EventLogger
 from nomadicos.registry import ModelRegistry, ProductionSample
@@ -124,8 +130,8 @@ class SpyRegistry(ModelRegistry):
     def enabled(self):
         return self._inner.enabled()
 
-    def get(self, model_id: str):
-        return self._inner.get(model_id)
+    def get(self, model_id: str, engine: str | None = None):
+        return self._inner.get(model_id, engine)
 
 
 # ---------------------------- C. router consumes exact engine history ------
@@ -151,6 +157,7 @@ def test_router_consumes_exact_engine_history() -> None:
             engine="ollama",
             roles=["coding"],
             capabilities=[CapabilityTag.TEXT, CapabilityTag.TOOL_USE, CapabilityTag.CODING],
+            health=ModelHealth.HEALTHY,
         )
     )
     spy = SpyRegistry(reg)
@@ -241,6 +248,7 @@ def test_router_consumes_exact_engine_production_history() -> None:
             engine="ollama",
             roles=["coding"],
             capabilities=[CapabilityTag.TEXT, CapabilityTag.TOOL_USE, CapabilityTag.CODING],
+            health=ModelHealth.HEALTHY,
         )
     )
     spy = SpyRegistry(reg)

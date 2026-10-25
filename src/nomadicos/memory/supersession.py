@@ -56,9 +56,7 @@ def supersede(
         return None
     try:
         stored_new = store.write(new)
-        marked_old = old.model_copy(
-            update={"superseded": True, "superseded_by": stored_new.id}
-        )
+        marked_old = old.model_copy(update={"superseded": True, "superseded_by": stored_new.id})
         stored_old = store.write(marked_old)
         relation = RelationRecord(
             id=relation_id(stored_new.id, SUPERSEDES, stored_old.id),

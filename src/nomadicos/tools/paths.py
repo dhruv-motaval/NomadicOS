@@ -38,6 +38,10 @@ def resolve_scoped(raw: str, ctx: ExecutionContext) -> Path:
     """
     if not isinstance(raw, str) or not raw.strip():
         raise PathDenied("empty path")
+    # Reject POSIX-style absolute paths on Windows (they are not valid Windows
+    # paths and would resolve to the drive root, e.g. /usr/bin -> C:\usr\bin).
+    if os.name == "nt" and raw.startswith("/"):
+        raise PathDenied(f"POSIX absolute path not allowed on Windows: {raw}")
     candidate = Path(raw).expanduser()
     _reject_invalid(candidate)
     if not candidate.is_absolute():

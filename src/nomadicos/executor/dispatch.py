@@ -23,7 +23,12 @@ from typing import Protocol
 
 from nomadicos.authority.store import AuthorityStore
 from nomadicos.contracts.action import AuthorizedAction
-from nomadicos.contracts.execution import ExecutionResult, ExecutionStatus
+from nomadicos.contracts.execution import (
+    ExecutionIntent,
+    ExecutionResult,
+    ExecutionStatus,
+    IntentStatus,
+)
 from nomadicos.kernel.errors import (
     ActionFailed,
     Failure,
@@ -47,16 +52,45 @@ class ExecutionLedger(Protocol):
 
     def put(self, key: str, result: ExecutionResult) -> None: ...
 
+    def claim_intent(self, key: str, intent: ExecutionIntent) -> bool: ...
+
+    def get_intent(self, key: str) -> ExecutionIntent | None: ...
+
+    def mark_intent_started(self, key: str) -> None: ...
+
+    def mark_intent_completed(self, key: str) -> None: ...
+
 
 class InMemoryLedger:
     def __init__(self) -> None:
         self._results: dict[str, ExecutionResult] = {}
+        self._intents: dict[str, ExecutionIntent] = {}
 
     def get(self, key: str) -> ExecutionResult | None:
         return self._results.get(key)
 
     def put(self, key: str, result: ExecutionResult) -> None:
         self._results[key] = result
+
+    def claim_intent(self, key: str, intent: ExecutionIntent) -> bool:
+        if key in self._intents:
+            return False
+        self._intents[key] = intent
+        return True
+
+    def get_intent(self, key: str) -> ExecutionIntent | None:
+        return self._intents.get(key)
+
+    def mark_intent_started(self, key: str) -> None:
+        intent = self._intents.get(key)
+        if intent is not None:
+            intent.status = IntentStatus.EXECUTION_STARTED
+
+    def mark_intent_completed(self, key: str) -> None:
+        intent = self._intents.get(key)
+        if intent is not None:
+            intent.status = IntentStatus.COMPLETED
+            intent.completed_at = datetime.now(UTC)
 
 
 def action_key(authorized: AuthorizedAction) -> str:
@@ -118,6 +152,42 @@ class Executor:
             self._log.log(EventType.TOOL_EXECUTED, result="DUPLICATE_BLOCKED", **base)
             return duplicate
 
+        # 3b. claim execution intent durably BEFORE crossing the side-effect
+        # boundary (§56.14 crash-gap hardening). First-writer-wins prevents
+        # concurrent workers or resumed processes from both initiating the
+        # same operation.
+        intent = ExecutionIntent(
+            task_id=proposal.task_id,
+            step_id=proposal.step_id,
+            fingerprint=proposal.fingerprint(),
+            authorization_epoch=grant.authority_epoch,
+            tool=proposal.tool,
+            operation=proposal.operation,
+            args=dict(proposal.args),
+        )
+        if not self._ledger.claim_intent(key, intent):
+            prior_result = self._ledger.get(key)
+            if prior_result is not None:
+                duplicate = prior_result.model_copy(
+                    update={
+                        "evidence": {**prior_result.evidence, "duplicate_blocked": True},
+                        "message": "action already executed; re-execution refused (SPEC §6.2)",
+                    }
+                )
+                self._log.log(EventType.TOOL_EXECUTED, result="DUPLICATE_BLOCKED", **base)
+                return duplicate
+            # intent claimed by another worker/resumed process but no durable
+            # result: outcome unknown — refuse rather than replay
+            self._log.log(EventType.TOOL_EXECUTED, result="INTENT_CLAIMED_UNKNOWN", **base)
+            raise ActionFailed(
+                "execution intent already claimed; outcome unknown - do not replay",
+                **base,
+            )
+
+        # 3c. mark execution started: the side-effect boundary is about to be
+        # crossed. If we crash here, the tool may or may not have run.
+        self._ledger.mark_intent_started(key)
+
         # 4. unknown tool/operation cannot execute even past earlier gates
         try:
             tool = self._tools.get(proposal.tool)
@@ -175,8 +245,27 @@ class Executor:
                     }
                 }
             )
+            # intent stays EXECUTION_STARTED with no result → restart will
+            # classify UNKNOWN and block (never replay)
+        else:
+            self._ledger.mark_intent_completed(key)
         self._log.log(EventType.TOOL_EXECUTED, result=outcome.status.value, **base)
         return result
+
+    def recorded_result(self, action_fingerprint: str) -> ExecutionResult | None:
+        """Durable read seam (DATA only): what does the ledger know about
+        this action identity? Used by recovery to reconcile an outcome the
+        in-memory state cannot prove (crash window, SPEC §56.14). It never
+        authorizes or executes - it only answers "already recorded?"."""
+        key = hashlib.sha256(action_fingerprint.encode()).hexdigest()[:32]
+        return self._ledger.get(key)
+
+    def get_intent(self, action_fingerprint: str) -> ExecutionIntent | None:
+        """Read seam for execution intents (DATA only). Used by recovery to
+        detect the crash gap where execution started but no result was
+        recorded (SPEC §56.14)."""
+        key = hashlib.sha256(action_fingerprint.encode()).hexdigest()[:32]
+        return self._ledger.get_intent(key)
 
     def cleanup_task(self, task_id: str) -> list[int]:
         """Kill only processes owned by this task (SPEC §6.7)."""

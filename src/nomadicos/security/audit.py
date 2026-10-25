@@ -41,9 +41,7 @@ class AuditTrail:
     # ------------------------------------------------------------- append ---
     def record(self, record: AuditRecord) -> AuditRecord:
         if len(self._records) >= self._max:
-            raise OverflowError(
-                f"audit trail full ({self._max}); refusing to drop audit records"
-            )
+            raise OverflowError(f"audit trail full ({self._max}); refusing to drop audit records")
         sequence = len(self._records)
         stamped = record.model_copy(
             update={
@@ -72,9 +70,7 @@ class AuditTrail:
             )
         )
 
-    def record_validation(
-        self, action: SecurityAction, ok: bool, reason: str = ""
-    ) -> AuditRecord:
+    def record_validation(self, action: SecurityAction, ok: bool, reason: str = "") -> AuditRecord:
         return self.record(
             AuditRecord(
                 audit_id="",
@@ -106,9 +102,7 @@ class AuditTrail:
             )
         )
 
-    def record_execution(
-        self, action: SecurityAction, execution_ref: str
-    ) -> AuditRecord:
+    def record_execution(self, action: SecurityAction, execution_ref: str) -> AuditRecord:
         """Execution is recorded ONLY from a real result reference —
         passing a proposal here cannot fabricate an execution."""
         return self.record(

@@ -133,6 +133,7 @@ async def test_sync_from_engine_and_health() -> None:
     assert m in reg.enabled()
     assert m.roles == ["coding", "worker"] or "coding" in m.roles
     assert CapabilityTag.TOOL_USE in m.capabilities
+    assert CapabilityTag.TESTING in m.capabilities
 
 
 # -------------------------------------------------------------- analyzer ---

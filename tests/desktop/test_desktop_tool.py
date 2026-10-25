@@ -27,6 +27,7 @@ OPS = {
     "mouse_scroll",
     "type_text",
     "press_key",
+    "hotkey",
     "list_windows",
     "foreground_window",
     "focus_window",
@@ -144,9 +145,7 @@ async def test_list_windows_returns_titles(tmp_path) -> None:
 
 async def test_window_titles_truncated_and_capped(tmp_path) -> None:
     tool, backend = make()
-    backend.windows = [
-        {"handle": i, "title": f"{'x' * 300} #{i}"} for i in range(MAX_WINDOWS + 5)
-    ]
+    backend.windows = [{"handle": i, "title": f"{'x' * 300} #{i}"} for i in range(MAX_WINDOWS + 5)]
     outcome = await tool.run("list_windows", {}, ctx(tmp_path))
     # listing is bounded at MAX_WINDOWS: the tool caps what it reports
     assert outcome.evidence["count"] == MAX_WINDOWS

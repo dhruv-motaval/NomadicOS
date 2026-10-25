@@ -49,6 +49,38 @@ class ExecutionResult(Contract):
         return self.status is ExecutionStatus.SUCCEEDED
 
 
+class IntentStatus(StrEnum):
+    """Durable execution-intent lifecycle (§56.14 crash-gap hardening).
+
+    Recorded BEFORE the side-effecting tool runs so that, on restart, we can
+    distinguish "never started" from "may have started but result lost".
+    """
+
+    INTENT_RECORDED = "INTENT_RECORDED"  # decision made, tool not yet invoked
+    EXECUTION_STARTED = "EXECUTION_STARTED"  # side-effect boundary about to be crossed
+    COMPLETED = "COMPLETED"  # terminal result durably recorded
+
+
+class ExecutionIntent(Contract):
+    """Durable record of an execution intent, recorded before side effects.
+
+    Data only — never authority, never executable permission. The intent is
+    claimed atomically (first-writer-wins) so concurrent workers or resumed
+    processes cannot both initiate the same operation.
+    """
+
+    status: IntentStatus = IntentStatus.INTENT_RECORDED
+    task_id: str
+    step_id: str
+    fingerprint: str
+    authorization_epoch: int
+    claimed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    completed_at: datetime | None = None
+    tool: str
+    operation: str
+    args: dict[str, Any] = Field(default_factory=dict)
+
+
 class ObservationKind(StrEnum):
     TERMINAL = "TERMINAL"
     FILESYSTEM = "FILESYSTEM"

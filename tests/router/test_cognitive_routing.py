@@ -20,8 +20,15 @@ def registry_with(*records: ModelRecord) -> ModelRegistry:
     return registry
 
 
-def record(model_id: str, *, roles=None, capabilities=None, context=8192,
-           health=ModelHealth.HEALTHY, enabled=True) -> ModelRecord:
+def record(
+    model_id: str,
+    *,
+    roles=None,
+    capabilities=None,
+    context=8192,
+    health=ModelHealth.HEALTHY,
+    enabled=True,
+) -> ModelRecord:
     return ModelRecord(
         model_id=model_id,
         engine="mock",
@@ -76,8 +83,12 @@ def test_selection_is_deterministic_with_stable_tiebreak() -> None:
 
 def test_unhealthy_and_disabled_models_excluded() -> None:
     registry = registry_with(
-        record("down-m", roles=["reasoning"], capabilities=["text", "reasoning"],
-               health=ModelHealth.UNHEALTHY),
+        record(
+            "down-m",
+            roles=["reasoning"],
+            capabilities=["text", "reasoning"],
+            health=ModelHealth.UNHEALTHY,
+        ),
         record("off-m", roles=["reasoning"], capabilities=["text", "reasoning"], enabled=False),
         record("ok-m", roles=["reasoning"], capabilities=["text", "reasoning"]),
     )
@@ -91,7 +102,9 @@ def test_unhealthy_and_disabled_models_excluded() -> None:
 def test_insufficient_context_rejected_fail_safe() -> None:
     registry = registry_with(
         record(
-            "small-m", roles=["reasoning"], capabilities=["text", "reasoning"],
+            "small-m",
+            roles=["reasoning"],
+            capabilities=["text", "reasoning"],
             context=4096,
         )
     )

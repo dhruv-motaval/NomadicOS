@@ -63,9 +63,7 @@ def test_target_registration_lookup_and_duplicates() -> None:
 
 def test_target_contracts_bounded_and_closed() -> None:
     with pytest.raises(ValidationError):
-        TargetRecord.model_validate(
-            {**target().model_dump(mode="json"), "discovery": True}
-        )
+        TargetRecord.model_validate({**target().model_dump(mode="json"), "discovery": True})
     with pytest.raises(ValidationError):
         target(target_id="x" * 65)
     with pytest.raises(ValidationError):
@@ -107,9 +105,7 @@ def test_target_registry_bounded() -> None:
 
 def test_sandbox_creation_binds_engagement_and_target() -> None:
     manager = SandboxManager()
-    sandbox = manager.create(
-        "sb_lab", engagement(), target(), sandbox_class=SandboxClass.WORKSPACE
-    )
+    sandbox = manager.create("sb_lab", engagement(), target(), sandbox_class=SandboxClass.WORKSPACE)
     assert sandbox.engagement_id == "eng_lab"
     assert sandbox.target_id == "tgt_repo"
     assert sandbox.allowed_capabilities == ["RECON", "CODE_ANALYSIS"]  # engagement grant
@@ -122,12 +118,16 @@ def test_sandbox_never_exceeds_engagement_grant() -> None:
     manager = SandboxManager()
     with pytest.raises(InvalidProposal):
         manager.create(
-            "sb_over", engagement(), target(), sandbox_class=SandboxClass.WORKSPACE,
+            "sb_over",
+            engagement(),
+            target(),
+            sandbox_class=SandboxClass.WORKSPACE,
             capabilities=["DEPENDENCY_ANALYSIS"],  # NOT granted by the engagement
         )
     with pytest.raises(InvalidProposal):
-        manager.create("sb_none", engagement(), target(), sandbox_class=SandboxClass.WORKSPACE,
-                       capabilities=[])
+        manager.create(
+            "sb_none", engagement(), target(), sandbox_class=SandboxClass.WORKSPACE, capabilities=[]
+        )
 
 
 def test_sandbox_validation_fail_closed() -> None:
@@ -151,7 +151,10 @@ def test_sandbox_validation_fail_closed() -> None:
     # capability not permitted by THIS sandbox
     manager2 = SandboxManager()
     manager2.create(
-        "sb_narrow", engagement(), target(), sandbox_class=SandboxClass.WORKSPACE,
+        "sb_narrow",
+        engagement(),
+        target(),
+        sandbox_class=SandboxClass.WORKSPACE,
         capabilities=["RECON"],
     )
     ok, reasons = manager2.validate(
@@ -164,20 +167,14 @@ def test_isolation_class_enforced_per_capability() -> None:
     """VULNERABILITY_VALIDATION requires ISOLATED — a WORKSPACE sandbox
     fails closed."""
     manager = SandboxManager()
-    full_engagement = engagement(
-        allowed_capabilities=["RECON", "VULNERABILITY_VALIDATION"]
-    )
-    manager.create(
-        "sb_ws", full_engagement, target(), sandbox_class=SandboxClass.WORKSPACE
-    )
+    full_engagement = engagement(allowed_capabilities=["RECON", "VULNERABILITY_VALIDATION"])
+    manager.create("sb_ws", full_engagement, target(), sandbox_class=SandboxClass.WORKSPACE)
     ok, reasons = manager.validate(
         "sb_ws", full_engagement, target(), SecurityCapabilityKind.VULNERABILITY_VALIDATION
     )
     assert not ok
     assert any("requires sandbox class ISOLATED" in r for r in reasons)
-    manager.create(
-        "sb_iso", full_engagement, target(), sandbox_class=SandboxClass.ISOLATED
-    )
+    manager.create("sb_iso", full_engagement, target(), sandbox_class=SandboxClass.ISOLATED)
     ok, reasons = manager.validate(
         "sb_iso", full_engagement, target(), SecurityCapabilityKind.VULNERABILITY_VALIDATION
     )

@@ -69,9 +69,7 @@ def to_action_proposal(
         raise ValueError("sandbox binding mismatch")
     tool, operation = capability_tool(action.capability)
     if f"{tool}.{operation}" not in target.allowed_operations:
-        raise ValueError(
-            f"target {target.target_id!r} does not allow {tool}.{operation}"
-        )
+        raise ValueError(f"target {target.target_id!r} does not allow {tool}.{operation}")
     note = (
         f"security={action.capability.value} engagement={engagement.engagement_id} "
         f"target={target.target_id} sandbox={sandbox.sandbox_id}"
@@ -98,8 +96,5 @@ def to_security_result(execution: ExecutionResult, action: SecurityAction) -> di
         "target_id": action.target_id,
         "execution_id": execution.id,
         "status": execution.status.value,
-        "evidence": {
-            str(key)[:64]: value
-            for key, value in list(execution.evidence.items())[:16]
-        },
+        "evidence": {str(key)[:64]: value for key, value in list(execution.evidence.items())[:16]},
     }

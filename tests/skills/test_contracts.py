@@ -90,9 +90,7 @@ def test_skill_definitions_reject_secrets() -> None:
     with pytest.raises(ValidationError):
         SkillParameter(name="p", type="string", description="api_key: zzz")
     with pytest.raises(ValidationError):
-        SkillInvocation(
-            skill_id="write-report", version=1, args={"path": "token=abc123"}
-        )
+        SkillInvocation(skill_id="write-report", version=1, args={"path": "token=abc123"})
     assert contains_secret("password=hunter2") is True
     assert contains_secret("plain text") is False
 
@@ -100,7 +98,8 @@ def test_skill_definitions_reject_secrets() -> None:
 def test_invocation_bounded_and_authority_free() -> None:
     with pytest.raises(ValidationError):
         SkillInvocation(
-            skill_id="write-report", version=1,
+            skill_id="write-report",
+            version=1,
             args={f"k{i}": "v" for i in range(33)},
         )
     with pytest.raises(ValidationError):
@@ -136,17 +135,26 @@ def test_skill_evidence_never_invents_metrics() -> None:
 
 def test_skill_result_mapping_shape() -> None:
     result = SkillResult(
-        skill_id="write-report", version=1, invocation_id="task_1",
-        status=ExecutionStatus.SUCCEEDED, evidence={"bytes": 10},
+        skill_id="write-report",
+        version=1,
+        invocation_id="task_1",
+        status=ExecutionStatus.SUCCEEDED,
+        evidence={"bytes": 10},
     )
     assert result.failure_category == ""
     with pytest.raises(ValidationError):
         SkillResult(
-            skill_id="write-report", version=1, invocation_id="task_1",
-            status=ExecutionStatus.SUCCEEDED, evidence={f"k{i}": 1 for i in range(17)},
+            skill_id="write-report",
+            version=1,
+            invocation_id="task_1",
+            status=ExecutionStatus.SUCCEEDED,
+            evidence={f"k{i}": 1 for i in range(17)},
         )
     with pytest.raises(ValidationError):
         SkillResult(
-            skill_id="write-report", version=1, invocation_id="task_1",
-            status=ExecutionStatus.SUCCEEDED, evidence={"secret": "api_key: zzz"},
+            skill_id="write-report",
+            version=1,
+            invocation_id="task_1",
+            status=ExecutionStatus.SUCCEEDED,
+            evidence={"secret": "api_key: zzz"},
         )

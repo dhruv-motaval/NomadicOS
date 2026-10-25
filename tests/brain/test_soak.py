@@ -110,9 +110,7 @@ def test_soak_full_production_workflow_memory_skills() -> None:
         seq = count(1)  # fresh per pass: replayable ids
         with tempfile.TemporaryDirectory() as tmp:
             store = JsonlMemoryStore(Path(tmp) / "m.jsonl")
-            fact = record_fact(
-                store, task_id=f"task_{iteration}", fact=f"fact {iteration}"
-            )
+            fact = record_fact(store, task_id=f"task_{iteration}", fact=f"fact {iteration}")
             if fact is not None and iteration > 0:
                 replacement = MemoryRecord(
                     id=f"mem_new_{iteration}",

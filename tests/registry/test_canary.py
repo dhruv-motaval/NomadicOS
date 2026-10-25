@@ -37,8 +37,7 @@ def test_candidate_promotion_requires_full_margin() -> None:
 
 
 def test_candidate_below_incumbent_keeps_incumbent() -> None:
-    evaluator = CanaryEvaluator(min_samples=3, promotion_margin=0.1,
-                                incumbent_reference_rate=0.9)
+    evaluator = CanaryEvaluator(min_samples=3, promotion_margin=0.1, incumbent_reference_rate=0.9)
     verdict = evaluator.evaluate("inc", "cand", samples(10, successes=8))
     assert verdict.decision is CanaryDecision.KEEP_INCUMBENT
     assert verdict.candidate_success_rate == 0.8

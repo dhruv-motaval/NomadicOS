@@ -190,9 +190,13 @@ def compute_attention(state: BrainState) -> AttentionView:
 
     candidates = state.action_candidates
     for index, candidate in enumerate(candidates):
-        dependency = 1.0 if (
-            state.active_subgoal is not None and candidate.subgoal_id == state.active_subgoal.id
-        ) else 0.0
+        dependency = (
+            1.0
+            if (
+                state.active_subgoal is not None and candidate.subgoal_id == state.active_subgoal.id
+            )
+            else 0.0
+        )
         items.append(
             _item(
                 candidate.id,

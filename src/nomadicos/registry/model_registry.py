@@ -6,6 +6,10 @@ metrics bundle is aggregated from stored measurement records.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
 from pydantic import Field
 
 from nomadicos.contracts.benchmark import BenchmarkRecord
@@ -35,6 +39,9 @@ class ProductionSample(ProductionOutcome):
     #: unknown — never a guessed engine; unattributed evidence stays in its
     #: own bucket and is never used as exact-engine routing history.
     engine: str = Field(default="")
+    #: actual write time stamped by the registry clock (Phase 14C-C);
+    #: None = legacy record with unknown age — never expired, never invented
+    recorded_at: datetime | None = None
 
 
 def _rate(values: list[bool | None]) -> float | None:
@@ -102,17 +109,37 @@ def aggregate_production(samples: list[ProductionSample]) -> MetricsBundle:
 
 
 class ModelRegistry:
-    """Enabled models, their health, and their measured evidence (§12)."""
+    """Enabled models, their health, and their measured evidence (§12).
 
-    def __init__(self, logger: EventLogger, metric_store: ModelMetricStore | None = None) -> None:
+    Registry identity is engine-aware (Phase 14C-F): records are keyed by
+    ``(model_id, engine)``, so the same model_id can be registered under
+    several engines without overwriting. Bare model_id lookups resolve
+    deterministically: exactly one record returns it; several raise
+    (fail-closed, never an arbitrary winner)."""
+
+    def __init__(
+        self,
+        logger: EventLogger,
+        metric_store: ModelMetricStore | None = None,
+        *,
+        metric_ttl_s: float | None = None,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self._logger = logger
-        self._records: dict[str, ModelRecord] = {}
+        #: (model_id, engine) -> record (Phase 14C-F engine-aware identity)
+        self._records: dict[tuple[str, str], ModelRecord] = {}
         #: (model_id, engine, task_category, benchmark_version) -> records
         #: (Phase 14C-A): benchmark identity is version-scoped — a bench-v1
         #: record never blends into a bench-v2 bundle
         self._benchmark_records: dict[tuple[str, str, str, str], list[BenchmarkRecord]] = {}
         self._production_samples: dict[tuple[str, str, str], list[ProductionSample]] = {}
         self._metric_store = metric_store
+        #: freshness policy (Phase 14C-C): None = disabled (all evidence
+        #: eligible); otherwise records older than the TTL are excluded
+        #: from every aggregation — expired evidence cannot dominate fresh
+        self._metric_ttl_s = metric_ttl_s
+        #: injectable clock (tests use a fixed one; never a fabricated time)
+        self._clock = clock or (lambda: datetime.now(UTC))
         if metric_store is not None:
             self.reload_metrics()
 
@@ -134,26 +161,58 @@ class ModelRegistry:
 
     # ---------------------------------------------------------------- base --
     def register(self, record: ModelRecord) -> ModelRecord:
-        self._records[record.model_id] = record
+        self._records[(record.model_id, record.engine)] = record
         return record
 
-    def remove(self, model_id: str) -> None:
-        self._records.pop(model_id, None)
+    def register_dir(self, record: ModelRecord) -> ModelRecord:
+        """Register a models-dir scan record WITHOUT downgrading health.
 
-    def get(self, model_id: str) -> ModelRecord:
-        try:
-            return self._records[model_id]
-        except KeyError:
+        A file on disk is not proof of serving availability (SPEC §12): the
+        dir scan is a fallback that must never overwrite a record whose live
+        engine health is already known. HEALTHY/DEGRADED stay authoritative;
+        UNKNOWN is only written when no live record exists for this identity.
+        """
+        key = (record.model_id, record.engine)
+        existing = self._records.get(key)
+        if existing is not None and existing.health in (ModelHealth.HEALTHY, ModelHealth.DEGRADED):
+            return existing
+        self._records[key] = record
+        return record
+
+    def remove(self, model_id: str, engine: str | None = None) -> None:
+        """Exact engine identity when given; a bare model_id removes every
+        engine record for it (deterministic sweep)."""
+        if engine is not None:
+            self._records.pop((model_id, engine), None)
+            return
+        for key in [k for k in self._records if k[0] == model_id]:
+            del self._records[key]
+
+    def get(self, model_id: str, engine: str | None = None) -> ModelRecord:
+        if engine is not None:
+            try:
+                return self._records[(model_id, engine)]
+            except KeyError:
+                raise ResourceUnavailable(
+                    f"model {model_id!r} not registered on engine {engine!r}"
+                ) from None
+        matches = [r for (mid, _eng), r in self._records.items() if mid == model_id]
+        if not matches:
             raise ResourceUnavailable(f"model {model_id!r} not registered") from None
+        if len(matches) > 1:
+            raise ResourceUnavailable(
+                f"model {model_id!r} is registered under multiple engines; specify engine"
+            ) from None
+        return matches[0]
 
     def all(self) -> list[ModelRecord]:
-        return sorted(self._records.values(), key=lambda r: r.model_id)
+        return sorted(self._records.values(), key=lambda r: (r.model_id, r.engine))
 
     def enabled(self) -> list[ModelRecord]:
         return [r for r in self.all() if r.enabled]
 
-    def set_health(self, model_id: str, health: ModelHealth) -> None:
-        self.get(model_id).health = health
+    def set_health(self, model_id: str, health: ModelHealth, engine: str | None = None) -> None:
+        self.get(model_id, engine).health = health
 
     # ------------------------------------------------------------ metrics --
     def record_benchmark(self, record: BenchmarkRecord) -> None:
@@ -178,10 +237,14 @@ class ModelRegistry:
     def record_production(self, sample: ProductionSample) -> None:
         # production samples carry explicit engine identity (Phase 14A.2);
         # unattributed samples (engine "") stay in their own bucket and are
-        # never blended into exact-engine routing history
+        # never blended into exact-engine routing history. The write time is
+        # recorded from the actual clock (Phase 14C-C) — never fabricated.
         key: tuple[str, str, str] = (sample.model_id, sample.engine, sample.task_class)
         stored = sample.model_copy(
-            update={"id": f"prod_{key[0]}_{key[2]}_{len(self._production_samples.get(key, []))}"}
+            update={
+                "id": f"prod_{key[0]}_{key[2]}_{len(self._production_samples.get(key, []))}",
+                "recorded_at": sample.recorded_at or self._clock(),
+            }
         )
         self._production_samples.setdefault(key, []).append(stored)
         if self._metric_store is not None:
@@ -228,7 +291,14 @@ class ModelRegistry:
         is preserved — non-routing views; routing itself always requests
         the newest recorded version explicitly, so a bench-v1 record never
         influences a bench-v2 routing bundle. Production samples carry no
-        benchmark_version and are unaffected by this parameter."""
+        benchmark_version and are unaffected by this parameter.
+
+        Freshness (Phase 14C-C): when the registry TTL policy is configured,
+        records older than ``now - metric_ttl_s`` are excluded from every
+        aggregation (expired evidence cannot dominate fresh evidence); a
+        record with unknown age (None timestamp) is never expired. All
+        evidence stale ⇒ an empty bundle ⇒ deterministic cold start."""
+        now = self._clock()
         benchmark: dict[str, MetricsBundle] = {}
         production: dict[str, MetricsBundle] = {}
         benchmark_raw: dict[str, list[BenchmarkRecord]] = {}
@@ -238,13 +308,24 @@ class ModelRegistry:
                 and eng == engine
                 and (benchmark_version is None or ver == benchmark_version)
             ):
-                benchmark_raw.setdefault(cls, []).extend(records)
+                benchmark_raw.setdefault(cls, []).extend(self._fresh(records, now, "timestamp"))
         for cls, records in benchmark_raw.items():
             benchmark[cls] = aggregate_benchmarks(records)
         for (mid, eng, cls), samples in self._production_samples.items():
             if mid == model_id and eng == engine:
-                production[cls] = aggregate_production(samples)
+                production[cls] = aggregate_production(self._fresh(samples, now, "recorded_at"))
         return ModelMetrics(model_id=model_id, benchmark=benchmark, production=production)
+
+    def _fresh(self, records: list[Any], now: datetime, field: str) -> list[Any]:
+        """Freshness filter (Phase 14C-C): drop records older than the TTL
+        measured against the actual clock; unknown age (None) stays —
+        unknown is never treated as stale and never invented."""
+        if self._metric_ttl_s is None:
+            return records
+        cutoff = now - timedelta(seconds=self._metric_ttl_s)
+        return [
+            r for r in records if getattr(r, field, None) is None or getattr(r, field) >= cutoff
+        ]
 
     def metrics_versions(
         self, model_id: str, engine: str, task_class: str | None = None

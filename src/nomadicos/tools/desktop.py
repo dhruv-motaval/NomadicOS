@@ -30,6 +30,7 @@ from nomadicos.desktop.contracts import (
     MAX_WINDOWS,
     FocusWindowArgs,
     ForegroundWindowArgs,
+    HotkeyArgs,
     ListWindowsArgs,
     MouseClickArgs,
     MouseMoveArgs,
@@ -40,7 +41,7 @@ from nomadicos.desktop.contracts import (
     validate_point,
 )
 from nomadicos.kernel.errors import Failure
-from nomadicos.tools.base import Tool, ToolOutcome
+from nomadicos.tools.base import Tool, ToolOutcome, error_text
 from nomadicos.tools.context import ExecutionContext
 
 
@@ -55,6 +56,7 @@ class DesktopTool(Tool):
         "mouse_scroll": MouseScrollArgs,
         "type_text": TypeTextArgs,
         "press_key": PressKeyArgs,
+        "hotkey": HotkeyArgs,
         "list_windows": ListWindowsArgs,
         "foreground_window": ForegroundWindowArgs,
         "focus_window": FocusWindowArgs,
@@ -63,9 +65,7 @@ class DesktopTool(Tool):
     def __init__(self, backend: DesktopBackend | None = None) -> None:
         self.backend = backend if backend is not None else default_backend()
 
-    async def run(
-        self, operation: str, args: dict[str, Any], ctx: ExecutionContext
-    ) -> ToolOutcome:
+    async def run(self, operation: str, args: dict[str, Any], ctx: ExecutionContext) -> ToolOutcome:
         model = self.ops.get(operation)
         if model is None:
             return ToolOutcome(
@@ -79,7 +79,7 @@ class DesktopTool(Tool):
             return ToolOutcome(
                 status=ExecutionStatus.ERRORED,
                 failure=Failure.TOOL_ERROR,
-                message=f"desktop.{operation} args: {exc.errors()}",
+                message=f"desktop.{operation} args: {error_text(exc)}",
             )
         started = time.monotonic()
         try:
@@ -99,15 +99,11 @@ class DesktopTool(Tool):
                 message=f"{type(exc).__name__}: {exc}",
                 duration_s=round(time.monotonic() - started, 3),
             )
-        return outcome.model_copy(
-            update={"duration_s": round(time.monotonic() - started, 3)}
-        )
+        return outcome.model_copy(update={"duration_s": round(time.monotonic() - started, 3)})
 
     # ------------------------------------------------------- dispatch ---
 
-    def _dispatch(
-        self, operation: str, typed: BaseModel, ctx: ExecutionContext
-    ) -> ToolOutcome:
+    def _dispatch(self, operation: str, typed: BaseModel, ctx: ExecutionContext) -> ToolOutcome:
         if operation == "screenshot" and isinstance(typed, ScreenshotArgs):
             return self._screenshot(typed, ctx)
         if operation == "mouse_move" and isinstance(typed, MouseMoveArgs):
@@ -120,6 +116,8 @@ class DesktopTool(Tool):
             return self._type_text(typed, ctx)
         if operation == "press_key" and isinstance(typed, PressKeyArgs):
             return self._press_key(typed, ctx)
+        if operation == "hotkey" and isinstance(typed, HotkeyArgs):
+            return self._hotkey(typed, ctx)
         if operation == "list_windows" and isinstance(typed, ListWindowsArgs):
             return self._list_windows(typed, ctx)
         if operation == "foreground_window" and isinstance(typed, ForegroundWindowArgs):
@@ -208,6 +206,10 @@ class DesktopTool(Tool):
     def _press_key(self, a: PressKeyArgs, ctx: ExecutionContext) -> ToolOutcome:
         self.backend.press_key(a.key)
         return ToolOutcome(status=ExecutionStatus.SUCCEEDED, evidence={"keys": a.key.split("+")})
+
+    def _hotkey(self, a: HotkeyArgs, ctx: ExecutionContext) -> ToolOutcome:
+        self.backend.hotkey(a.keys)
+        return ToolOutcome(status=ExecutionStatus.SUCCEEDED, evidence={"keys": a.keys})
 
     def _list_windows(self, a: ListWindowsArgs, ctx: ExecutionContext) -> ToolOutcome:
         windows = self.backend.list_windows(a.limit)

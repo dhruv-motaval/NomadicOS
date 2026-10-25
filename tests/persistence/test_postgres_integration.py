@@ -71,8 +71,10 @@ def test_postgres_corrupt_record_fails_closed() -> None:
     store.save_task(record)
     store._conn.execute(
         "UPDATE nomadic_task_state SET record = %s WHERE task_id = %s",
-        ('{"kind": "task_state", "schema_version": 1, "record": {"task_id": "WRONG"}}',
-         record.task_id),
+        (
+            '{"kind": "task_state", "schema_version": 1, "record": {"task_id": "WRONG"}}',
+            record.task_id,
+        ),
     )
     with pytest.raises(PersistenceCorrupt):
         store.load_task(record.task_id)
@@ -99,4 +101,3 @@ def test_postgres_unavailable_is_structured() -> None:
         PostgresTaskStateStore(
             "postgresql://nomadicos:nomadicos@localhost:9999/nomadicos", connect_timeout_s=1
         )
-

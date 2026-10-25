@@ -349,11 +349,7 @@ def _window_present(p: Predicate, ctx: EvidenceContext) -> LeafResult:
     exact = bool(p.field("exact"))
     text = str(needle).lower()
     matched = next(
-        (
-            t
-            for t in observed
-            if (t.lower() == text if exact else text in t.lower())
-        ),
+        (t for t in observed if (t.lower() == text if exact else text in t.lower())),
         None,
     )
     return LeafResult(

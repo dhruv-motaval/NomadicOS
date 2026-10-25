@@ -65,9 +65,9 @@ def identify_information_needs(
             InformationRequest(
                 id=_derived_id("info", "hypothesis", hypothesis.id),
                 target=hypothesis.id,
-                rationale=(
-                    f"hypothesis {hypothesis.id!r} has no supporting evidence; observe"
-                )[:_RATIONALE_CHARS],
+                rationale=(f"hypothesis {hypothesis.id!r} has no supporting evidence; observe")[
+                    :_RATIONALE_CHARS
+                ],
                 priority=_HYP_PRIORITY,
             )
         )
@@ -93,9 +93,7 @@ def to_observe_candidate(
         id=_derived_id("cand", request.id, "observe"),
         subgoal_id=subgoal_id,
         kind=CandidateKind.OBSERVE,
-        expected_effect=(
-            f"reduce uncertainty about {request.target!r} (request {request.id})"
-        ),
+        expected_effect=(f"reduce uncertainty about {request.target!r} (request {request.id})"),
         rationale=rationale[:2000],
     )
 

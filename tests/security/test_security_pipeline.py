@@ -95,8 +95,13 @@ def test_full_security_pipeline_through_real_gates(tmp_path) -> None:
     audit.record_validation(action, ok=True)
 
     proposal = to_action_proposal(
-        action, eng, found, sandboxes.lookup("sb_lab"),
-        model_id="model_1", task_id="task_sec", step_id="step_sec",
+        action,
+        eng,
+        found,
+        sandboxes.lookup("sb_lab"),
+        model_id="model_1",
+        task_id="task_sec",
+        step_id="step_sec",
     )
     assert isinstance(proposal, ActionProposal)
     assert (proposal.tool, proposal.operation) == ("filesystem", "exists")
@@ -150,8 +155,13 @@ def test_pipeline_rejects_out_of_scope_capability() -> None:
     audit = AuditTrail()
     ok, reasons = validate_engagement(eng, action.capability, action.target_id)
     assert not ok  # capability not granted: chain stops here, fail closed
-    audit.record_failure(eng.engagement_id, action.target_id,
-                         action.capability.value, action.invocation_id, reasons[0])
+    audit.record_failure(
+        eng.engagement_id,
+        action.target_id,
+        action.capability.value,
+        action.invocation_id,
+        reasons[0],
+    )
     assert audit.entries()[-1].failure.startswith("capability")
 
 
@@ -176,13 +186,18 @@ def test_adapter_rejects_binding_substitution() -> None:
     # swapped target: fail closed, no silent substitution
     with pytest.raises(ValueError):
         to_action_proposal(
-            security_action(), eng, TargetRecord(
-                target_id="tgt_other", type=TargetType.REPOSITORY,
+            security_action(),
+            eng,
+            TargetRecord(
+                target_id="tgt_other",
+                type=TargetType.REPOSITORY,
                 canonical_identifier="repo://other",
                 allowed_operations=["filesystem.exists"],
             ),
             sandboxes.lookup("sb_lab"),
-            model_id="m", task_id="t", step_id="s",
+            model_id="m",
+            task_id="t",
+            step_id="s",
         )
 
 
@@ -195,8 +210,7 @@ def test_benchmark_suite_is_deterministic_and_enforcement_focused() -> None:
     assert [r.passed for r in first] == [r.passed for r in second]  # deterministic
     assert len(first) == 12  # 2 cases x 6 gates, bounded
     gates = {r.gate for r in first}
-    assert gates == {"scope", "authorization", "capability", "sandbox",
-                     "evidence", "audit"}
+    assert gates == {"scope", "authorization", "capability", "sandbox", "evidence", "audit"}
     assert all(r.passed for r in first)  # active fixture enforces everything
 
 

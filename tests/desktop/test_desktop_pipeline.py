@@ -1,4 +1,4 @@
-﻿"""Phase 12A/12B pipeline proof: desktop actions travel the EXISTING path
+"""Phase 12A/12B pipeline proof: desktop actions travel the EXISTING path
 only — IR -> validation -> authorization -> AuthorizedAction -> Executor ->
 tool. Raw model output can reach a desktop backend through NO other route."""
 
@@ -265,9 +265,7 @@ def test_hostile_ui_text_cannot_resolve_desktop_conflict(tmp_path) -> None:
     parsed = chain.parse(
         desktop_json("focus_window", {"title": "Finance - Q3"}), chain.ctx(tmp_path)
     )
-    request = chain.authz.authorize(
-        parsed.value, chain.validate(parsed.value, chain.ctx(tmp_path))
-    )
+    request = chain.authz.authorize(parsed.value, chain.validate(parsed.value, chain.ctx(tmp_path)))
     assert not isinstance(request, AuthorizedAction)
     state_after_request = chain.store.state()
     with pytest.raises(AuthorizationDenied, match="owner only|may not answer"):
@@ -283,9 +281,7 @@ def test_only_owner_can_answer_desktop_conflicts(tmp_path) -> None:
     parsed = chain.parse(
         desktop_json("focus_window", {"title": "Finance - Q3"}), chain.ctx(tmp_path)
     )
-    request = chain.authz.authorize(
-        parsed.value, chain.validate(parsed.value, chain.ctx(tmp_path))
-    )
+    request = chain.authz.authorize(parsed.value, chain.validate(parsed.value, chain.ctx(tmp_path)))
     with pytest.raises(AuthorizationDenied, match="owner only|may not answer"):
         chain.authz.answer_conflict(request.id, "ALLOW", resolver="model")
     with pytest.raises(AuthorizationDenied, match="owner only|may not answer"):

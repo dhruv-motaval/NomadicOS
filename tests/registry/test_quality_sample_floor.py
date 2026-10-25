@@ -12,7 +12,13 @@ N=1 reproduces the previous always-gate behavior.
 
 from __future__ import annotations
 
-from nomadicos.contracts.model import CapabilityTag, ModelRecord, TaskRequirements, TaskType
+from nomadicos.contracts.model import (
+    CapabilityTag,
+    ModelHealth,
+    ModelRecord,
+    TaskRequirements,
+    TaskType,
+)
 from nomadicos.kernel.config import RouterConfig
 from nomadicos.kernel.events import EventLogger
 from nomadicos.registry import ModelRegistry, ProductionSample
@@ -40,6 +46,7 @@ def reg_with(
             engine=engine,  # type: ignore[arg-type]
             roles=["coding"],
             capabilities=[CapabilityTag.TEXT, CapabilityTag.TOOL_USE, CapabilityTag.CODING],
+            health=ModelHealth.HEALTHY,
         )
     )
     for _ in range(samples):
@@ -140,6 +147,7 @@ def test_engine_isolation_remains_intact() -> None:
             engine="ollama",  # type: ignore[arg-type]
             roles=["coding"],
             capabilities=[CapabilityTag.TEXT, CapabilityTag.TOOL_USE, CapabilityTag.CODING],
+            health=ModelHealth.HEALTHY,
         )
     )
     # ollama: 1 failed sample (insufficient -> ranked);
@@ -169,6 +177,7 @@ def test_benchmark_version_isolation_remains_intact() -> None:
             engine="ollama",  # type: ignore[arg-type]
             roles=["coding"],
             capabilities=[CapabilityTag.TEXT, CapabilityTag.TOOL_USE, CapabilityTag.CODING],
+            health=ModelHealth.HEALTHY,
         )
     )
 

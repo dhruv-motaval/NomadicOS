@@ -49,8 +49,13 @@ def test_valid_invocation_passes_with_audit_trail() -> None:
     assert result.ok is True
     assert result.reasons == []
     assert result.checked == [
-        "exists", "enabled", "healthy", "capability", "input_contract",
-        "prerequisites", "role",
+        "exists",
+        "enabled",
+        "healthy",
+        "capability",
+        "input_contract",
+        "prerequisites",
+        "role",
     ]
 
 
@@ -67,9 +72,7 @@ def test_unknown_version_fails_closed() -> None:
 
 
 def test_disabled_and_unhealthy_fail_closed() -> None:
-    result = validate_invocation(
-        reg(definition(enabled=False, healthy=False)), invocation()
-    )
+    result = validate_invocation(reg(definition(enabled=False, healthy=False)), invocation())
     assert result.ok is False
     assert any("disabled" in r for r in result.reasons)
     assert any("unhealthy" in r for r in result.reasons)
@@ -101,7 +104,8 @@ def test_missing_prerequisites_fail_closed() -> None:
     assert result.ok is False
     assert any("prerequisites missing" in r for r in result.reasons)
     ok = validate_invocation(
-        reg(gated), invocation(),
+        reg(gated),
+        invocation(),
         satisfied_prerequisites=["filesystem.exists", "terminal.execute"],
     )
     assert ok.ok is True
@@ -122,7 +126,10 @@ def test_validation_is_not_authorization() -> None:
 
     path = (
         pathlib.Path(__file__).resolve().parents[2]
-        / "src" / "nomadicos" / "skills" / "validation.py"
+        / "src"
+        / "nomadicos"
+        / "skills"
+        / "validation.py"
     )
     tree = ast.parse(path.read_text(encoding="utf-8"))
     for node in ast.walk(tree):

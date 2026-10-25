@@ -67,8 +67,11 @@ class ScriptedActor:
         self.last: list[ActionCandidate] = []
 
     async def propose(
-        self, state: BrainState, subgoal: Subgoal,
-        feedback: Sequence[MonitorResult] = (), iteration: int = 1,
+        self,
+        state: BrainState,
+        subgoal: Subgoal,
+        feedback: Sequence[MonitorResult] = (),
+        iteration: int = 1,
     ):
         from nomadicos.brain.actor import ActorProposal
 
@@ -81,12 +84,18 @@ class ScriptedActor:
 
 class AcceptingMonitor:
     async def evaluate(
-        self, state: BrainState, subgoal: Subgoal, proposal, iteration: int,
+        self,
+        state: BrainState,
+        subgoal: Subgoal,
+        proposal,
+        iteration: int,
     ) -> list[MonitorResult]:
         return [
             MonitorResult(
-                candidate_id=c.id, decision=MonitorDecision.ACCEPTED,
-                stage=MonitorStage.STRUCTURAL, iteration=iteration,
+                candidate_id=c.id,
+                decision=MonitorDecision.ACCEPTED,
+                stage=MonitorStage.STRUCTURAL,
+                iteration=iteration,
             )
             for c in proposal.candidates
         ]
@@ -134,8 +143,12 @@ class ScriptedEvaluator:
             prediction_id=prediction.id,
             score=score,
             factors=EvaluationFactors(
-                goal_progress=score, feasibility=1.0, risk=0.0,
-                uncertainty=1.0 - score, resource_cost=0.0, reversibility=1.0,
+                goal_progress=score,
+                feasibility=1.0,
+                risk=0.0,
+                uncertainty=1.0 - score,
+                resource_cost=0.0,
+                reversibility=1.0,
             ),
         )
 
@@ -167,9 +180,7 @@ def test_effort_gather_info_when_unknowns() -> None:
 
 def test_effort_full_on_high_uncertainty() -> None:
     state = make_state(
-        world=WorldState(
-            facts={"c": WorldFact(key="c", kind=WorldFactKind.HYPOTHESIS)}
-        ),
+        world=WorldState(facts={"c": WorldFact(key="c", kind=WorldFactKind.HYPOTHESIS)}),
         action_candidates=[candidate("cand_1")],
     )
     plan = decide_effort(state)
@@ -227,7 +238,8 @@ async def test_adaptive_search_terminates_early_when_confident() -> None:
         ScriptedEvaluator([0.5]),
     )
     _, full_result = await full.run(
-        make_state(), Subgoal(id="subgoal_s1", goal_id="task_g", description="d"),
+        make_state(),
+        Subgoal(id="subgoal_s1", goal_id="task_g", description="d"),
         [candidate("cand_a")],
     )
     adaptive = DeliberationSearch(
@@ -237,7 +249,8 @@ async def test_adaptive_search_terminates_early_when_confident() -> None:
         ScriptedEvaluator([0.95]),
     )
     _, early_result = await adaptive.run(
-        make_state(), Subgoal(id="subgoal_s1", goal_id="task_g", description="d"),
+        make_state(),
+        Subgoal(id="subgoal_s1", goal_id="task_g", description="d"),
         [candidate("cand_a")],
         policy=AdaptiveSearchPolicy(stop_score=0.9, stop_confidence=0.9),
     )
@@ -255,7 +268,9 @@ async def test_adaptive_search_depth_is_hard_capped() -> None:
     )
     subgoal = Subgoal(id="subgoal_s1", goal_id="task_g", description="d")
     _, result = await search.run(
-        make_state(), subgoal, [candidate("cand_a"), candidate("cand_b")],
+        make_state(),
+        subgoal,
+        [candidate("cand_a"), candidate("cand_b")],
         policy=AdaptiveSearchPolicy(max_depth=SEARCH_MAX_DEPTH),
     )
     assert all(n.depth <= SEARCH_MAX_DEPTH for n in result.nodes)
@@ -273,7 +288,9 @@ async def test_adaptive_search_shallow_depth_expands_less() -> None:
     )
     subgoal = Subgoal(id="subgoal_s1", goal_id="task_g", description="d")
     _, result = await shallow.run(
-        make_state(), subgoal, [candidate("cand_a")],
+        make_state(),
+        subgoal,
+        [candidate("cand_a")],
         policy=AdaptiveSearchPolicy(max_depth=0),
     )
     assert all(n.depth <= 1 for n in result.nodes)
@@ -288,7 +305,10 @@ async def test_default_search_behavior_is_unchanged() -> None:
     events: list[BrainEvent] = []
     seq = count(1)
     search = DeliberationSearch(
-        actor, AcceptingMonitor(), predictor, evaluator,
+        actor,
+        AcceptingMonitor(),
+        predictor,
+        evaluator,
         now=lambda: __import__("datetime").datetime(2026, 1, 1, tzinfo=None),
         event_id=lambda: f"evt_{next(seq):04d}",
         events=events,
@@ -313,7 +333,8 @@ async def test_adaptive_search_is_deterministic() -> None:
             event_id=lambda: f"evt_{next(seq):04d}",
         )
         return await search.run(
-            make_state(), Subgoal(id="subgoal_s1", goal_id="task_g", description="d"),
+            make_state(),
+            Subgoal(id="subgoal_s1", goal_id="task_g", description="d"),
             [candidate("cand_a"), candidate("cand_b")],
             policy=AdaptiveSearchPolicy(stop_score=0.6, stop_confidence=0.5),
         )
@@ -342,7 +363,8 @@ def test_controller_one_pass_populates_all_adaptive_fields() -> None:
 
     hit = RetrievedMemory(
         record=MemoryRecord(
-            id="mem_prev", kind=MemoryKind.SEMANTIC,
+            id="mem_prev",
+            kind=MemoryKind.SEMANTIC,
             content="auth module previously fixed with fastapi",
             provenance=MemoryProvenance(confidence=0.9, verified=True),
         ),

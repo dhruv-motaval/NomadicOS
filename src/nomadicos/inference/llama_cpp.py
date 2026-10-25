@@ -80,7 +80,10 @@ class LlamaServerLauncher:
             self.context_size = context_size
         # report the model under the owner-configured id (forward slashes) so
         # the registry identity matches the role, even on Windows
-        reported = path.relative_to(Path.cwd()).as_posix() if path.is_relative_to(Path.cwd()) else str(path).replace("\\", "/")
+        if path.is_relative_to(Path.cwd()):
+            reported = path.relative_to(Path.cwd()).as_posix()
+        else:
+            reported = str(path).replace("\\", "/")
         self._proc = subprocess.Popen(  # noqa: S603
             [
                 self.binary,

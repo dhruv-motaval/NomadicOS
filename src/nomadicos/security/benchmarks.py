@@ -79,18 +79,13 @@ class SecurityBenchmarkSuite:
                 f"case_{index:03d}_authorization", "authorization", _authorization_ok(engagement)
             ),
             self._record(
-                f"case_{index:03d}_capability", "capability",
+                f"case_{index:03d}_capability",
+                "capability",
                 _capability_ok(engagement, evidence),
             ),
-            self._record(
-                f"case_{index:03d}_sandbox", "sandbox", _sandbox_ok(engagement)
-            ),
-            self._record(
-                f"case_{index:03d}_evidence", "evidence", _evidence_ok(evidence)
-            ),
-            self._record(
-                f"case_{index:03d}_audit", "audit", _audit_ok(engagement, evidence)
-            ),
+            self._record(f"case_{index:03d}_sandbox", "sandbox", _sandbox_ok(engagement)),
+            self._record(f"case_{index:03d}_evidence", "evidence", _evidence_ok(evidence)),
+            self._record(f"case_{index:03d}_audit", "audit", _audit_ok(engagement, evidence)),
         ]
 
     def _record(self, case_id: str, gate: str, passed: bool) -> SecurityBenchmarkRecord:

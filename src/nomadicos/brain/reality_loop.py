@@ -109,12 +109,15 @@ class RealityLoop:
         )
 
         try:
-            capability_ref = self._validator.validate(proposal, ValidationContext(
-                task_id=task_id,
-                step_id=step_id,
-                model_id=model_id,
-                attempt=attempt_number,
-            ))
+            capability_ref = self._validator.validate(
+                proposal,
+                ValidationContext(
+                    task_id=task_id,
+                    step_id=step_id,
+                    model_id=model_id,
+                    attempt=attempt_number,
+                ),
+            )
             execution_attempt = ExecutionAttempt(
                 action_candidate_id=action_candidate.get("id", ""),
                 task_id=task_id,

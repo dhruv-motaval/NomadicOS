@@ -81,9 +81,7 @@ class EvidenceStore:
             )
         sequence = len(self._entries)
         # high-risk evidence keeps confidence conservative (never inflated)
-        confidence = (
-            min(confidence, 0.6) if risk is SecurityRisk.HIGH else confidence
-        )
+        confidence = min(confidence, 0.6) if risk is SecurityRisk.HIGH else confidence
         entry = SecurityEvidence(
             evidence_id=evidence_id(engagement_id, target_id, capability, sequence),
             engagement_id=engagement_id,

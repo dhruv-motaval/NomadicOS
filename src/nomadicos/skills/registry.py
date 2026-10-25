@@ -86,9 +86,7 @@ class SkillRegistry:
 
     def enumerate_skills(self) -> list[SkillDefinition]:
         """Deterministic (skill_id, version) order."""
-        return [
-            self._skills[key] for key in sorted(self._skills, key=lambda k: (k[0], k[1]))
-        ]
+        return [self._skills[key] for key in sorted(self._skills, key=lambda k: (k[0], k[1]))]
 
     def capabilities(self) -> list[str]:
         return sorted(self._by_capability)
@@ -101,12 +99,10 @@ class SkillRegistry:
         index: dict[str, list[str]] = {}
         for (skill_id, _version), definition in self._skills.items():
             index.setdefault(definition.capability, []).append(skill_id)
-        self._by_capability = {
-            capability: sorted(set(ids)) for capability, ids in index.items()
-        }
+        self._by_capability = {capability: sorted(set(ids)) for capability, ids in index.items()}
         # deterministic version eviction: keep newest MAX_SKILL_VERSIONS per id
         per_id: dict[str, list[int]] = {}
-        for (skill_id, version) in self._skills:
+        for skill_id, version in self._skills:
             per_id.setdefault(skill_id, []).append(version)
         for skill_id, versions in per_id.items():
             if len(versions) > MAX_SKILL_VERSIONS:

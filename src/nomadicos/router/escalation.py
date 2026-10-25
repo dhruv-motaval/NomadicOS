@@ -33,5 +33,7 @@ class EscalationPolicy:
         ranked = self._selector.rank(registry, requirements)
         for candidate in ranked:
             if candidate.model_id not in tried:
-                return registry.get(candidate.model_id)
+                # exact engine identity (Phase 14C-F): the same model_id
+                # under several engines never collapses to an arbitrary one
+                return registry.get(candidate.model_id, candidate.engine or None)
         raise BudgetExhausted("no untried qualified model remains", tried=tried)

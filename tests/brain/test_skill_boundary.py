@@ -24,7 +24,8 @@ from nomadicos.brain.skills import (
 
 def make_request(**overrides) -> SkillRequest:
     base = dict(
-        capability="filesystem.write", role="ACTOR",
+        capability="filesystem.write",
+        role="ACTOR",
         provided_args=["path", "content"],
     )
     base.update(overrides)
@@ -73,14 +74,17 @@ def test_discovery_selection_and_plan_flow() -> None:
     selected = select_skill(options)
     assert selected is not None and selected.skill_id == "write-report"
     plan = plan_invocation(
-        selected, {"path": "out.md"}, requested_by="ACTOR",
+        selected,
+        {"path": "out.md"},
+        requested_by="ACTOR",
         rationale="needs the report skill",
     )
     assert plan.skill_id == "write-report" and plan.capability == "filesystem.write"
     assert plan.args == {"path": "out.md"}
     # deterministic: same inputs → same plan
-    again = plan_invocation(options[0], {"path": "out.md"}, requested_by="ACTOR",
-                            rationale="needs the report skill")
+    again = plan_invocation(
+        options[0], {"path": "out.md"}, requested_by="ACTOR", rationale="needs the report skill"
+    )
     assert plan == again
 
 
@@ -113,8 +117,7 @@ def test_deterministic_selection_and_empty_fail_safe() -> None:
 
 def test_brain_skill_module_has_no_tool_or_provider_imports() -> None:
     source = (
-        pathlib.Path(__file__).resolve().parents[2]
-        / "src" / "nomadicos" / "brain" / "skills.py"
+        pathlib.Path(__file__).resolve().parents[2] / "src" / "nomadicos" / "brain" / "skills.py"
     ).read_text(encoding="utf-8")
     assert not re.search(r"from nomadicos\.(tools|skills|executor|authority)", source)
     for provider in ("glm", "nvidia", "ollama", "openai", "anthropic", "qwen"):
@@ -127,13 +130,13 @@ def test_plan_is_bounded_and_authority_free() -> None:
         selected, {"path": "out.md"}, requested_by="ACTOR", rationale="report needed"
     )
     with pytest.raises(ValidationError):
-        SkillInvocationPlan.model_validate(
-            {**plan.model_dump(mode="json"), "authorized": True}
-        )
+        SkillInvocationPlan.model_validate({**plan.model_dump(mode="json"), "authorized": True})
     with pytest.raises(Exception):  # noqa: B017 - pydantic ValidationError
         SkillInvocationPlan.model_validate(
             {
-                "skill_id": "s", "version": 1, "capability": "a.b",
+                "skill_id": "s",
+                "version": 1,
+                "capability": "a.b",
                 "args": {f"k{i}": 1 for i in range(33)},
             }
         )

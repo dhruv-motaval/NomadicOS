@@ -22,15 +22,38 @@ MAX_ENUM_WINDOWS = 200
 MOUSE = {"left": (0x0002, 0x0004), "right": (0x0008, 0x0010), "middle": (0x0020, 0x0040)}
 
 VK = {
-    "enter": 0x0D, "tab": 0x09, "space": 0x20, "backspace": 0x08,
-    "delete": 0x2E, "esc": 0x1B, "home": 0x24, "end": 0x23,
-    "pageup": 0x21, "pagedown": 0x22, "insert": 0x2D,
-    "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27,
-    "shift": 0x10, "ctrl": 0x11, "alt": 0x12, "win": 0x5B,
+    "enter": 0x0D,
+    "tab": 0x09,
+    "space": 0x20,
+    "backspace": 0x08,
+    "delete": 0x2E,
+    "esc": 0x1B,
+    "home": 0x24,
+    "end": 0x23,
+    "pageup": 0x21,
+    "pagedown": 0x22,
+    "insert": 0x2D,
+    "up": 0x26,
+    "down": 0x28,
+    "left": 0x25,
+    "right": 0x27,
+    "shift": 0x10,
+    "ctrl": 0x11,
+    "alt": 0x12,
+    "win": 0x5B,
     "capslock": 0x14,
-    "f1": 0x70, "f2": 0x71, "f3": 0x72, "f4": 0x73, "f5": 0x74,
-    "f6": 0x75, "f7": 0x76, "f8": 0x77, "f9": 0x78, "f10": 0x79,
-    "f11": 0x7A, "f12": 0x7B,
+    "f1": 0x70,
+    "f2": 0x71,
+    "f3": 0x72,
+    "f4": 0x73,
+    "f5": 0x74,
+    "f6": 0x75,
+    "f7": 0x76,
+    "f8": 0x77,
+    "f9": 0x78,
+    "f10": 0x79,
+    "f11": 0x7A,
+    "f12": 0x7B,
 }
 
 
@@ -60,9 +83,7 @@ def _enum_windows(user32: Any, ct: Any, limit: int) -> list[dict[str, int | str]
 
 def _bitmap_info(width: int, height: int) -> bytes:
     """BITMAPINFOHEADER: negative height = top-down rows."""
-    return struct.pack(
-        "<IiiHHIIiiII", 40, width, -height, 1, 32, 0, width * height * 4, 0, 0, 0, 0
-    )
+    return struct.pack("<IiiHHIIiiII", 40, width, -height, 1, 32, 0, width * height * 4, 0, 0, 0, 0)
 
 
 class Win32DesktopBackend(DesktopBackend):
@@ -128,7 +149,15 @@ class Win32DesktopBackend(DesktopBackend):
     def press_key(self, key: str) -> None:
         """Press a key or a '+'-joined hotkey: modifiers are held, the final
         key is tapped, and modifiers release in reverse order."""
-        parts = key.split("+")
+        self._chord(key.split("+"))
+
+    def hotkey(self, keys: list[str]) -> None:
+        """Press a keyboard CHORD from typed structured intent (SPEC §26):
+        modifiers are held, the final key is tapped, and modifiers release
+        in reverse order."""
+        self._chord(keys)
+
+    def _chord(self, parts: list[str]) -> None:
         held = [self._vk(p) for p in parts[:-1]]
         vk = self._vk(parts[-1])
         for code in held:

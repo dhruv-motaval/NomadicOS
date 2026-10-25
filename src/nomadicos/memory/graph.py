@@ -80,9 +80,7 @@ class ObjectGraph:
     def upsert_relation(self, relation: RelationRecord) -> RelationRecord:
         rid = relation.id or relation_id(relation.source, relation.relation, relation.target)
         return self._store.upsert_relation(
-            relation.model_copy(
-                update={"id": rid, "properties": _bounded(relation.properties)}
-            )
+            relation.model_copy(update={"id": rid, "properties": _bounded(relation.properties)})
         )
 
     # -------------------------------------------------------------- reads ---

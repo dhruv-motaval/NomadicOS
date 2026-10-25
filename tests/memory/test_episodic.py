@@ -35,9 +35,7 @@ def goal_result(outcome: VerificationOutcome) -> VerificationResult:
     if outcome is VerificationOutcome.PASS:
         evidence = [EvidenceItem(claim="predicate tests_pass", observed=True)]
     elif outcome is VerificationOutcome.NOT_VERIFIED:
-        evidence = [
-            EvidenceItem(claim="nothing verifiable", observed=False, unverifiable=True)
-        ]
+        evidence = [EvidenceItem(claim="nothing verifiable", observed=False, unverifiable=True)]
     else:
         evidence = [EvidenceItem(claim="predicate failed", observed=False)]
     return VerificationResult(
@@ -50,9 +48,7 @@ def goal_result(outcome: VerificationOutcome) -> VerificationResult:
 
 
 def store_at(tmp_path) -> JsonlMemoryStore:
-    return JsonlMemoryStore(
-        tmp_path / "memory.jsonl", MemoryConfig(state_dir=str(tmp_path))
-    )
+    return JsonlMemoryStore(tmp_path / "memory.jsonl", MemoryConfig(state_dir=str(tmp_path)))
 
 
 def record(store, **kw):

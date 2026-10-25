@@ -85,8 +85,7 @@ class PostgresTaskStateStore:
     def task_ids(self, limit: int = 100) -> list[str]:
         try:
             rows = self._conn.execute(
-                "SELECT task_id FROM nomadic_task_state "
-                "ORDER BY updated_at DESC LIMIT %s",
+                "SELECT task_id FROM nomadic_task_state ORDER BY updated_at DESC LIMIT %s",
                 (max(1, int(limit)),),
             ).fetchall()
         except Exception as exc:

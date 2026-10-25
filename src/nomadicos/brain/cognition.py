@@ -100,8 +100,8 @@ def _extract_single_fenced_payload(text: str) -> tuple[str | None, str]:
         return None, ""
     # Body spans from after the opening fence to before the closing fence.
     # Use max to stay within the ```json header when a space precedes the token.
-    body_end = max(fence_end + 3, len('```json'))
-    body, rest = text[body_end:fence_end + 3], text[fence_end + 3:]
+    body_end = max(fence_end + 3, len("```json"))
+    body, rest = text[body_end : fence_end + 3], text[fence_end + 3 :]
     if rest.startswith("```"):
         return None, ""
     return body, rest

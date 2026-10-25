@@ -114,15 +114,11 @@ async def test_episodic_write_from_verified_outcome(tmp_path) -> None:
     )
     summary = await app.run_goal(GOAL, task_id="memok", predicates=PRED_PASS)
     assert summary.status is TaskStatus.SUCCESS
-    verified = [
-        r for r in app.memory_store.records(MemoryKind.EPISODIC) if r.provenance.verified
-    ]
+    verified = [r for r in app.memory_store.records(MemoryKind.EPISODIC) if r.provenance.verified]
     assert len(verified) == 1  # ONLY verified evidence may produce this
     assert verified[0].provenance.source_task_id == "memok"
     assert "verif:" in verified[0].content  # real verifier artifact referenced
-    events = [
-        e for e in app.log.events(task_id="memok") if e.type is EventType.MEMORY_UPDATED
-    ]
+    events = [e for e in app.log.events(task_id="memok") if e.type is EventType.MEMORY_UPDATED]
     assert len(events) == 1
     assert events[0].result == "episodic"
     assert events[0].payload["record_id"] == verified[0].id
@@ -172,9 +168,7 @@ async def test_memory_persistence_failure_does_not_fail_task(tmp_path) -> None:
     summary = await app.run_goal(GOAL, task_id="broke1", predicates=PRED_PASS)
     assert summary.status is TaskStatus.SUCCESS  # task unaffected
     assert summary.memory_note == "memory: write failed"  # observable metadata
-    events = [
-        e for e in app.log.events(task_id="broke1") if e.type is EventType.MEMORY_UPDATED
-    ]
+    events = [e for e in app.log.events(task_id="broke1") if e.type is EventType.MEMORY_UPDATED]
     assert not events  # no fake update for a failed write
 
 

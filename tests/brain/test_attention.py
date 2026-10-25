@@ -45,18 +45,24 @@ def focused_state() -> BrainState:
         ),
         observations=[
             Observation(
-                id="obs_1", task_id="task_g", kind=ObservationKind.STEP_RESULT,
+                id="obs_1",
+                task_id="task_g",
+                kind=ObservationKind.STEP_RESULT,
                 summary="auth module test failed",
             ),
             Observation(
-                id="obs_2", task_id="task_g", kind=ObservationKind.NOTE,
+                id="obs_2",
+                task_id="task_g",
+                kind=ObservationKind.NOTE,
                 summary="unrelated weather note",
             ),
         ],
         relevant_memories=[MemoryRef(memory_id="mem_auth", score=0.9)],
         action_candidates=[
             ActionCandidate(
-                id="cand_a", kind=CandidateKind.EXECUTE, tool="terminal",
+                id="cand_a",
+                kind=CandidateKind.EXECUTE,
+                tool="terminal",
                 subgoal_id="subgoal_s1",
             )
         ],
@@ -113,11 +119,17 @@ def test_candidate_dependency_boosts_active_subgoal() -> None:
         update={
             "action_candidates": [
                 ActionCandidate(
-                    id="cand_hit", kind=CandidateKind.EXECUTE, tool="auth tool",
+                    id="cand_hit",
+                    kind=CandidateKind.EXECUTE,
+                    tool="auth tool",
                     subgoal_id="subgoal_s1",
                 ),
-                ActionCandidate(id="cand_miss", kind=CandidateKind.EXECUTE, tool="auth tool",
-                                subgoal_id="subgoal_other"),
+                ActionCandidate(
+                    id="cand_miss",
+                    kind=CandidateKind.EXECUTE,
+                    tool="auth tool",
+                    subgoal_id="subgoal_other",
+                ),
             ]
         }
     )
@@ -134,8 +146,10 @@ def test_attention_view_is_bounded() -> None:
                 "observations": [
                     *state.observations,
                     Observation(
-                        id=f"obs_fill_{i}", task_id="task_g",
-                        kind=ObservationKind.NOTE, summary=f"note {i} auth",
+                        id=f"obs_fill_{i}",
+                        task_id="task_g",
+                        kind=ObservationKind.NOTE,
+                        summary=f"note {i} auth",
                     ),
                 ]
             }
@@ -150,9 +164,7 @@ def test_attention_is_deterministic() -> None:
     # identical inputs construct identical views; ordering is (-score, ref)
     view = compute_attention(state)
     refs = [i.ref for i in view.items]
-    assert refs == [
-        i.ref for i in sorted(view.items, key=lambda x: (-x.score, x.ref))
-    ]
+    assert refs == [i.ref for i in sorted(view.items, key=lambda x: (-x.score, x.ref))]
 
 
 def test_attention_never_mutates_state() -> None:

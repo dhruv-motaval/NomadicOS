@@ -40,6 +40,9 @@ def make_app(
     models: tuple[str, ...] = ("models/small.gguf", "models/big.gguf"),
     config_over: dict[str, Any] | None = None,
     small_size: float = 7.0,
+    brain_actor: bool = False,
+    brain_planner: bool = False,
+    workspace_per_task: bool = True,
 ) -> NomadicApp:
     mock = MockEngine(default_response=default_response)
     for needle, reply in scripts or []:
@@ -80,6 +83,9 @@ def make_app(
         registry=registry,
         workspace_root=tmp_path / "ws",
         state_dir=tmp_path / "state",
+        brain_actor=brain_actor,
+        brain_planner=brain_planner,
+        workspace_per_task=workspace_per_task,
     )
     app.mock = mock  # type: ignore[attr-defined]
     if grant:

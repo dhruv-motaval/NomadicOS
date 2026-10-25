@@ -71,9 +71,7 @@ def verdict_of(expr: dict, c: EvidenceContext):
 
 
 def test_window_present_passes_on_task_window_evidence(tmp_path) -> None:
-    execs = [
-        desktop_exec(evidence={"count": 2, "titles": ["Settings", "Untitled - Notepad"]})
-    ]
+    execs = [desktop_exec(evidence={"count": 2, "titles": ["Settings", "Untitled - Notepad"]})]
     r = verdict_of({"type": "window_present", "title": "notepad"}, ctx(tmp_path, execs))
     assert r.verdict is VerificationOutcome.PASS
 

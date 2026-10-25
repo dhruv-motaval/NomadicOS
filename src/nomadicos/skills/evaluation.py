@@ -28,9 +28,7 @@ from nomadicos.contracts.skills import (
 MAX_EVALUATION_CASES = 32
 
 
-def record_outcome(
-    definition: SkillDefinition, result: SkillResult
-) -> SkillDefinition:
+def record_outcome(definition: SkillDefinition, result: SkillResult) -> SkillDefinition:
     """Append one real outcome to the skill's measured evidence.
 
     Deterministic recomputation; the definition is immutable so a NEW

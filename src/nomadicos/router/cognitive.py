@@ -64,9 +64,7 @@ class CognitiveRoleRouter:
             min_context = int(getattr(profile, "min_context_tokens", 4096))
             latency_mode = str(getattr(profile, "latency_mode", "BALANCED"))
             needs_structured = bool(getattr(profile, "needs_structured_output", True))
-            return self._select(
-                role, required, min_context, latency_mode, needs_structured
-            )
+            return self._select(role, required, min_context, latency_mode, needs_structured)
         except ResourceUnavailable as exc:
             return {
                 "role": role,

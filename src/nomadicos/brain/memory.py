@@ -103,9 +103,7 @@ class RetrievalMetrics:
 class MemoryController:
     """One clear goal-aware memory boundary feeding BrainState."""
 
-    def __init__(
-        self, retriever: MemoryRetriever, policy: RetrievalPolicy | None = None
-    ) -> None:
+    def __init__(self, retriever: MemoryRetriever, policy: RetrievalPolicy | None = None) -> None:
         self._retriever = retriever
         self._policy = policy if policy is not None else RetrievalPolicy()
         self._retrievals = 0
@@ -137,27 +135,19 @@ class MemoryController:
         query = self.build_query(state, extra_query=extra_query)
         start = time.perf_counter()
         hits = [
-            hit
-            for hit in self._retriever.retrieve(query)
-            if hit.score >= self._policy.min_score
+            hit for hit in self._retriever.retrieve(query) if hit.score >= self._policy.min_score
         ][: self._policy.top_k]
         latency_ms = (time.perf_counter() - start) * 1000.0
         self._retrievals += 1
         if hits:
             self._hits += 1
         scores = [h.score for h in hits]
-        contents = [
-            h.record.content
-            for h in hits
-            if isinstance(h.record, MemoryRecord)
-        ]
+        contents = [h.record.content for h in hits if isinstance(h.record, MemoryRecord)]
         self.last_metrics = RetrievalMetrics(
             latency_ms=round(latency_ms, 3),
             returned=len(hits),
             superseded_returned=sum(
-                1
-                for h in hits
-                if isinstance(h.record, MemoryRecord) and h.record.superseded
+                1 for h in hits if isinstance(h.record, MemoryRecord) and h.record.superseded
             ),
             duplicates=len(contents) - len(set(contents)),
             top_score=max(scores) if scores else 0.0,

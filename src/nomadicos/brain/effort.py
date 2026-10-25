@@ -60,9 +60,7 @@ def decide_effort(
 
     beliefs = beliefs if beliefs is not None else assess_beliefs(state)
     metacognition = (
-        metacognition
-        if metacognition is not None
-        else assess_metacognition(state, beliefs)
+        metacognition if metacognition is not None else assess_metacognition(state, beliefs)
     )
 
     if metacognition.recommendation is MetacognitiveRecommendation.GATHER_INFO:
@@ -87,9 +85,8 @@ def decide_effort(
             ],
         )
 
-    if (
-        beliefs.overall_uncertainty < REDUCED_UNCERTAINTY
-        and any(d.selected for d in state.planning_decisions)
+    if beliefs.overall_uncertainty < REDUCED_UNCERTAINTY and any(
+        d.selected for d in state.planning_decisions
     ):
         return EffortPlan(
             decision=EffortDecision.REDUCED_EFFORT,

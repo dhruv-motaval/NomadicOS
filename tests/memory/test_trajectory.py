@@ -52,9 +52,7 @@ def test_trajectory_step_validation() -> None:
     with pytest.raises(Exception):  # noqa: B017 - pydantic ValidationError
         TrajectoryStep(kind=TrajectoryStepKind.ACTION, ref="  ")
     # bounded: over-long summaries are truncated, never stored verbatim
-    truncated = TrajectoryStep(
-        kind=TrajectoryStepKind.ACTION, ref="c", summary="x" * 400
-    )
+    truncated = TrajectoryStep(kind=TrajectoryStepKind.ACTION, ref="c", summary="x" * 400)
     assert len(truncated.summary) == 200
     assert len(truncated.ref) <= 128
 
@@ -74,7 +72,9 @@ def test_trajectory_record_bounds() -> None:
         )
     with pytest.raises(Exception):  # noqa: B017 - pydantic ValidationError
         TrajectoryRecord(
-            id="mem-traj-x", mission_id=" ", task_id="t",
+            id="mem-traj-x",
+            mission_id=" ",
+            task_id="t",
             provenance=MemoryProvenance(confidence=0.5),
         )
 
@@ -136,21 +136,14 @@ def test_trajectory_idempotent_upsert(tmp_path: Path) -> None:
 def test_recorder_requires_real_content(tmp_path: Path) -> None:
     store = store_at(tmp_path)
     assert (
-        record_trajectory(
-            store, mission_id="", task_id="t", goal_text="g", steps=sample_steps()
-        )
+        record_trajectory(store, mission_id="", task_id="t", goal_text="g", steps=sample_steps())
         is None
     )
     assert (
-        record_trajectory(
-            store, mission_id="m", task_id="", goal_text="g", steps=sample_steps()
-        )
+        record_trajectory(store, mission_id="m", task_id="", goal_text="g", steps=sample_steps())
         is None
     )
-    assert (
-        record_trajectory(store, mission_id="m", task_id="t", goal_text="g", steps=[])
-        is None
-    )
+    assert record_trajectory(store, mission_id="m", task_id="t", goal_text="g", steps=[]) is None
 
 
 def test_recorder_is_fail_safe(tmp_path: Path) -> None:
@@ -169,9 +162,7 @@ def test_recorder_is_fail_safe(tmp_path: Path) -> None:
 def test_trajectory_scrubs_secrets(tmp_path: Path) -> None:
     store = store_at(tmp_path)
     steps = [make_step(TrajectoryStepKind.OBSERVATION, "obs_1", "used password=hunter2")]
-    record = record_trajectory(
-        store, mission_id=MISSION, task_id=TASK, goal_text="g", steps=steps
-    )
+    record = record_trajectory(store, mission_id=MISSION, task_id=TASK, goal_text="g", steps=steps)
     assert record is not None
     assert "hunter2" not in record.steps[0].summary
 

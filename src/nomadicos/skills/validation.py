@@ -74,9 +74,7 @@ def validate_invocation(
             if not isinstance(value, expected) or (
                 param.type in ("integer",) and isinstance(value, bool)
             ):
-                reasons.append(
-                    f"arg {param.name!r} type mismatch: expected {param.type}"
-                )
+                reasons.append(f"arg {param.name!r} type mismatch: expected {param.type}")
         elif param.required:
             reasons.append(f"required arg {param.name!r} missing")
     unknown = sorted(set(args) - {p.name for p in definition.inputs})
@@ -91,12 +89,9 @@ def validate_invocation(
             reasons.append(f"prerequisites missing: {missing}")
     checked.append("prerequisites")
 
-    if definition.supported_roles and (
-        invocation.requested_by not in definition.supported_roles
-    ):
+    if definition.supported_roles and (invocation.requested_by not in definition.supported_roles):
         reasons.append(
-            f"caller role {invocation.requested_by!r} not permitted "
-            f"({definition.supported_roles})"
+            f"caller role {invocation.requested_by!r} not permitted ({definition.supported_roles})"
         )
     checked.append("role")
 

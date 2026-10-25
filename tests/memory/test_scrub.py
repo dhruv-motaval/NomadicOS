@@ -52,9 +52,7 @@ def test_store_never_persists_key_material(tmp_path: Path) -> None:
 
 def test_store_never_persists_well_known_token_shapes(tmp_path: Path) -> None:
     store = JsonlMemoryStore(tmp_path / "memory.jsonl")
-    stored = store.write(
-        rec("m3", "leaked ghp_ABCDEFGHIJKLMNOPQRSTUVWX and AKIAIOSFODNN7EXAMPLE")
-    )
+    stored = store.write(rec("m3", "leaked ghp_ABCDEFGHIJKLMNOPQRSTUVWX and AKIAIOSFODNN7EXAMPLE"))
     assert "ghp_" not in stored.content
     assert "AKIA" not in stored.content
 
@@ -67,7 +65,10 @@ def test_graph_property_values_are_scrubbed(tmp_path: Path) -> None:
     assert REDACTED in stored.properties["env"]
     stored_rel = store.upsert_relation(
         RelationRecord(
-            id="rel_x", source="a", relation="uses", target="b",
+            id="rel_x",
+            source="a",
+            relation="uses",
+            target="b",
             properties={"note": "token=abc123"},
         )
     )

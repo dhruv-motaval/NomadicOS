@@ -226,9 +226,7 @@ def _derived_prediction_id(candidate_id: str, parsed: PredictionPayload) -> str:
     )
 
 
-def _derived_evaluation_id(
-    candidate_id: str, prediction_id: str, parsed: EvaluationPayload
-) -> str:
+def _derived_evaluation_id(candidate_id: str, prediction_id: str, parsed: EvaluationPayload) -> str:
     return _derived_id(
         "eval",
         candidate_id,
@@ -379,9 +377,7 @@ class ModelEvaluator:
             payload=evaluation_request_payload(state, candidate, prediction, subgoal),
         )
         text = await self._generator.generate_structured(request)
-        return parse_evaluation(
-            text, candidate_id=candidate.id, prediction_id=prediction.id
-        )
+        return parse_evaluation(text, candidate_id=candidate.id, prediction_id=prediction.id)
 
 
 def branch_state_from_prediction(state: BrainState, prediction: Prediction) -> BrainState:
@@ -609,8 +605,7 @@ class DeliberationSearch:
                 nodes=nodes,
                 status=SearchStatus.FAILED,
                 failure_reason=(
-                    "every root candidate failed prediction or evaluation; "
-                    "no value was fabricated"
+                    "every root candidate failed prediction or evaluation; no value was fabricated"
                 ),
             )
         else:
@@ -976,9 +971,7 @@ class DeliberationCoordinator:
             raise BrainError("subgoal does not belong to the state's goal")
         accepted = self._accepted_root_candidates(state, outcome)
         if not accepted:
-            return self._fail(
-                state, "no accepted root candidate to deliberate on", parent_event_id
-            )
+            return self._fail(state, "no accepted root candidate to deliberate on", parent_event_id)
         state, result = await self._search.run(
             state, subgoal, accepted, parent_event_id=parent_event_id, policy=policy
         )
@@ -1032,9 +1025,7 @@ class DeliberationCoordinator:
             search=result,
             failure=PlanningFailure(
                 stage=PlanningStage.PROPOSAL,
-                reason=(reason if reason is not None else result.failure_reason)[
-                    :MAX_DESCRIPTION
-                ],
+                reason=(reason if reason is not None else result.failure_reason)[:MAX_DESCRIPTION],
                 iterations_used=0,
             ),
         )

@@ -31,6 +31,7 @@ from nomadicos.kernel.ids import new_id
 
 class ExecutionAttemptStatus(StrEnum):
     """Execution attempt lifecycle status."""
+
     PENDING = "PENDING"
     SUBMITTED = "SUBMITTED"
     RUNNING = "RUNNING"
@@ -46,6 +47,7 @@ class ExecutionAttempt(Contract):
     Repeated attempts for the same ActionCandidate create separate
     ExecutionAttempt records (replayable history).
     """
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str = Field(default_factory=lambda: new_id("exec"))
@@ -67,6 +69,7 @@ class RealityObservation(Contract):
     This is DATA, not authority. It may contradict predictions.
     Uses RuntimeObservation fields but wrapped for reality loop tracking.
     """
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str = Field(default_factory=lambda: new_id("obs"))
@@ -89,6 +92,7 @@ class ObservationKind(StrEnum):
 
 class FailureCategory(StrEnum):
     """Deterministic failure classification (SPEC §30)."""
+
     VALIDATION_FAILURE = "VALIDATION_FAILURE"
     AUTHORIZATION_FAILURE = "AUTHORIZATION_FAILURE"
     EXECUTION_FAILURE = "EXECUTION_FAILURE"
@@ -105,6 +109,7 @@ class Failure(Contract):
     Never inferred from model output. Always produced by deterministic
     classification of actual runtime outcomes.
     """
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str = Field(default_factory=lambda: new_id("rel"))
@@ -130,6 +135,7 @@ class RecoveryPlan(Contract):
 
     Bounded retry limit enforced by orchestrator; model cannot increase it.
     """
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str = Field(default_factory=lambda: new_id("rec"))
@@ -147,6 +153,7 @@ class RealityOutcome(Contract):
 
     Carries the complete trace: execution attempt, observation, verification.
     """
+
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str = Field(default_factory=lambda: new_id("reality"))
@@ -167,8 +174,10 @@ class RealityOutcome(Contract):
         """True only if verification passed."""
         if self.verification_result is None:
             return False
-        return self.verification_result.outcome is not None and \
-            self.verification_result.outcome.value == "PASS"
+        return (
+            self.verification_result.outcome is not None
+            and self.verification_result.outcome.value == "PASS"
+        )
 
 
 def classify_failure(

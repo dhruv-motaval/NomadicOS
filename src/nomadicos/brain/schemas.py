@@ -569,9 +569,7 @@ class SearchResult(Contract):
         if not self.root_node_id.strip():
             raise ValueError("search result root_node_id must not be empty")
         if len(self.root_candidate_ids) > SEARCH_BRANCHING:
-            raise ValueError(
-                f"search result exceeds {SEARCH_BRANCHING} root branches (B limit)"
-            )
+            raise ValueError(f"search result exceeds {SEARCH_BRANCHING} root branches (B limit)")
         if len(self.nodes) > MAX_SEARCH_NODES:
             raise ValueError(f"search result exceeds {MAX_SEARCH_NODES} nodes")
         if len(self.failure_reason) > MAX_DESCRIPTION:
@@ -654,9 +652,7 @@ class AttentionItem(Contract):
         if not self.ref.strip():
             raise ValueError("attention item ref must not be empty")
         if len(self.summary) > MAX_ATTENTION_TEXT_CHARS:
-            raise ValueError(
-                f"attention summary exceeds {MAX_ATTENTION_TEXT_CHARS} chars"
-            )
+            raise ValueError(f"attention summary exceeds {MAX_ATTENTION_TEXT_CHARS} chars")
         if len(self.reasons) > MAX_ATTENTION_REASONS:
             raise ValueError(f"attention reasons exceed {MAX_ATTENTION_REASONS}")
         for reason in self.reasons:
@@ -678,9 +674,7 @@ class AttentionView(Contract):
     def _ordered_and_bounded(self) -> AttentionView:
         if len(self.items) > MAX_ATTENTION_ITEMS:
             raise ValueError(f"attention view exceeds {MAX_ATTENTION_ITEMS} items")
-        ordered = sorted(self.items, key=lambda i: (-i.score, i.ref))[
-            :MAX_ATTENTION_ITEMS
-        ]
+        ordered = sorted(self.items, key=lambda i: (-i.score, i.ref))[:MAX_ATTENTION_ITEMS]
         if ordered != self.items:
             raise ValueError("attention items must be in deterministic (-score, ref) order")
         return self

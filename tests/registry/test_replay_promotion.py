@@ -29,12 +29,10 @@ def test_candidate_improvement_promotes_with_sufficient_evidence() -> None:
     promoter = ReplayPromoter(min_cases=3, min_win_rate=0.6)
     cases = [ReplayCase(case_id=f"case_{i:03d}") for i in range(4)]
     incumbent = [
-        ReplayCaseResult(model_id="inc", case_id=f"case_{i:03d}", success=False)
-        for i in range(4)
+        ReplayCaseResult(model_id="inc", case_id=f"case_{i:03d}", success=False) for i in range(4)
     ]
     candidate = [
-        ReplayCaseResult(model_id="cand", case_id=f"case_{i:03d}", success=True)
-        for i in range(4)
+        ReplayCaseResult(model_id="cand", case_id=f"case_{i:03d}", success=True) for i in range(4)
     ]
     result = promoter.evaluate("inc", "cand", incumbent, candidate, cases)
     assert result.decision is ReplayPromotionDecision.PROMOTE
@@ -153,9 +151,7 @@ def test_foreign_evidence_never_blends() -> None:
     incumbent = [
         ReplayCaseResult(model_id="other", case_id=f"c{i}", success=True) for i in range(4)
     ]
-    candidate = [
-        ReplayCaseResult(model_id="cand", case_id=f"c{i}", success=True) for i in range(4)
-    ]
+    candidate = [ReplayCaseResult(model_id="cand", case_id=f"c{i}", success=True) for i in range(4)]
     result = promoter.evaluate("inc", "cand", incumbent, candidate)
     assert result.decision is ReplayPromotionDecision.INCONCLUSIVE  # no like-for-like cases
 

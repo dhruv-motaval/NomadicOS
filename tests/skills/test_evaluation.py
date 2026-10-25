@@ -32,8 +32,11 @@ def definition(**evidence_overrides) -> SkillDefinition:
 
 def result(status: ExecutionStatus, *, category: str = "") -> SkillResult:
     return SkillResult(
-        skill_id="write-report", version=1, invocation_id="task_x",
-        status=status, failure_category=category,
+        skill_id="write-report",
+        version=1,
+        invocation_id="task_x",
+        status=status,
+        failure_category=category,
     )
 
 
@@ -69,11 +72,13 @@ def test_evaluation_is_bounded() -> None:
 
 
 def test_evaluation_counts_honestly() -> None:
-    outcomes = iter([
-        result(ExecutionStatus.SUCCEEDED),
-        result(ExecutionStatus.FAILED),
-        result(ExecutionStatus.ERRORED, category="VALIDATION"),
-    ])
+    outcomes = iter(
+        [
+            result(ExecutionStatus.SUCCEEDED),
+            result(ExecutionStatus.FAILED),
+            result(ExecutionStatus.ERRORED, category="VALIDATION"),
+        ]
+    )
 
     def run(defn: SkillDefinition) -> SkillResult:
         return next(outcomes)
@@ -103,8 +108,9 @@ def test_evaluation_record_validation() -> None:
         SkillEvaluationRecord(skill_id="s", version=1, cases=3, successes=3, failures=0)
     # measured evaluation must carry its rate
     with pytest.raises(Exception):  # noqa: B017 - pydantic ValidationError
-        SkillEvaluationRecord(skill_id="s", version=1, cases=2, successes=2, failures=0,
-                              success_rate=None)
+        SkillEvaluationRecord(
+            skill_id="s", version=1, cases=2, successes=2, failures=0, success_rate=None
+        )
 
 
 def test_measured_evidence_feeds_retrieval_ranking() -> None:

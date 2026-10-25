@@ -28,6 +28,16 @@ class ToolOutcome(BaseModel):
     duration_s: float = 0.0
 
 
+def error_text(exc: ValidationError) -> str:
+    """Human-readable validation error text: the replanning layer (model)
+    must be able to self-correct from it - raw pydantic dicts are opaque."""
+    parts: list[str] = []
+    for err in exc.errors():
+        loc = ".".join(str(item) for item in err.get("loc", ())) or "args"
+        parts.append(f"{loc}: {err.get('msg', 'invalid')}")
+    return "; ".join(parts)
+
+
 class Tool(ABC):
     name: ClassVar[str]
     #: operation -> typed argument model
@@ -46,7 +56,7 @@ class Tool(ABC):
         try:
             return model.model_validate(args).model_dump()
         except ValidationError as exc:
-            raise InvalidProposal(f"{self.name}.{operation} args: {exc.errors()}") from exc
+            raise InvalidProposal(f"{self.name}.{operation} args: {error_text(exc)}") from exc
 
     @abstractmethod
     async def run(

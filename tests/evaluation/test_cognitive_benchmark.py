@@ -22,8 +22,11 @@ from nomadicos.registry.model_registry import ModelRegistry
 
 def model() -> ModelRecord:
     return ModelRecord(
-        model_id="suite-m", engine="mock", roles=["worker"],
-        capabilities=["text", "reasoning"], health=ModelHealth.HEALTHY,
+        model_id="suite-m",
+        engine="mock",
+        roles=["worker"],
+        capabilities=["text", "reasoning"],
+        health=ModelHealth.HEALTHY,
     )
 
 
@@ -37,10 +40,10 @@ def runner(
 
 def cases() -> list[CapabilitySuiteCase]:
     return [
-        CapabilitySuiteCase(id="p1", capability="reasoning", prompt="plan X",
-                            must_contain=["step"]),
-        CapabilitySuiteCase(id="p2", capability="text", prompt="write Y",
-                            must_contain=["done"]),
+        CapabilitySuiteCase(
+            id="p1", capability="reasoning", prompt="plan X", must_contain=["step"]
+        ),
+        CapabilitySuiteCase(id="p2", capability="text", prompt="write Y", must_contain=["done"]),
     ]
 
 
@@ -66,10 +69,10 @@ def test_deterministic_benchmark_results() -> None:
 def test_capability_scoring_reflects_outcomes() -> None:
     suite = CapabilityBenchmarkSuite("cog-v1")
     mixed = [
-        CapabilitySuiteCase(id="hit", capability="reasoning", prompt="probe",
-                            must_contain=["ok"]),
-        CapabilitySuiteCase(id="miss", capability="reasoning", prompt="probe",
-                            must_contain=["impossible-needle"]),
+        CapabilitySuiteCase(id="hit", capability="reasoning", prompt="probe", must_contain=["ok"]),
+        CapabilitySuiteCase(
+            id="miss", capability="reasoning", prompt="probe", must_contain=["impossible-needle"]
+        ),
     ]
     records = asyncio.run(
         suite.run(runner(engine=MockEngine(default_response="ok")), model(), mixed)

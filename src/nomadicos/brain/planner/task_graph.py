@@ -23,12 +23,21 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum
+from typing import Any
 
 from pydantic import ConfigDict, Field, model_validator
 
 from nomadicos.brain.errors import InvalidTaskGraph
-from nomadicos.brain.schemas import MAX_DESCRIPTION, MAX_NODE_ID, Subgoal
+from nomadicos.brain.schemas import (
+    MAX_DESCRIPTION,
+    MAX_ITEM_CHARS,
+    MAX_NODE_ID,
+    MAX_PROVENANCE_REFS,
+    CandidateKind,
+    Subgoal,
+)
 from nomadicos.contracts.core import Contract, GoalPredicate
+from nomadicos.contracts.worker import WorkerRole
 
 _NODE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
@@ -63,6 +72,12 @@ class TaskNode(Contract):
 
     A node without a success predicate never silently counts as success:
     later verifiers treat it as not verifiable (fail closed).
+
+    Phase 4A: a task may carry a concrete action (``kind``/``tool``/
+    ``arguments``/``preconditions``/``expected_effect``/``rationale``) that
+    the runtime converts directly into an ActionProposal through the SAME
+    untrusted parse path as raw model output (SPEC §19). Authority-shaped
+    fields anywhere are rejected by extra="forbid".
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -72,6 +87,17 @@ class TaskNode(Contract):
     subgoal_id: str | None = None
     depends_on: list[str] = Field(default_factory=list)
     success_predicate: GoalPredicate | None = None
+    # Phase 4A concrete action fields (mirror ActionCandidate):
+    kind: CandidateKind = CandidateKind.EXECUTE
+    tool: str = ""
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    preconditions: list[str] = Field(default_factory=list)
+    expected_effect: str = ""
+    rationale: str = ""
+    # Phase 4B specialist role: the Brain may delegate this task to a
+    # specialist worker instead of executing it as a direct tool action.
+    # EXECUTE keeps Phase 4A behavior (direct action through the harness).
+    worker_role: WorkerRole = WorkerRole.EXECUTE
 
     @model_validator(mode="after")
     def _coherent(self) -> TaskNode:
@@ -85,6 +111,23 @@ class TaskNode(Contract):
             raise ValueError(f"task node description exceeds {MAX_DESCRIPTION} chars")
         if len(self.depends_on) > MAX_DEPENDENCIES:
             raise ValueError(f"task node exceeds {MAX_DEPENDENCIES} dependencies")
+        # A task with an empty ``tool`` carries no concrete action: the
+        # runtime's Actor<->Monitor loop proposes for it at execution time.
+        # A non-empty tool means the decomposition already proposed the
+        # concrete action (converted directly, SPEC §19).
+        if len(self.tool) > MAX_ITEM_CHARS or len(self.rationale) > MAX_ITEM_CHARS:
+            raise ValueError(f"task node {self.id!r}: tool/rationale exceed {MAX_ITEM_CHARS} chars")
+        if len(self.expected_effect) > MAX_DESCRIPTION:
+            raise ValueError(
+                f"task node {self.id!r}: expected_effect exceeds {MAX_DESCRIPTION} chars"
+            )
+        if len(self.preconditions) > MAX_PROVENANCE_REFS:
+            raise ValueError(f"task node {self.id!r}: preconditions exceed {MAX_PROVENANCE_REFS}")
+        for pre in self.preconditions:
+            if not pre.strip() or len(pre) > MAX_ITEM_CHARS:
+                raise ValueError(
+                    f"task node {self.id!r}: precondition must be non-empty ≤{MAX_ITEM_CHARS} chars"
+                )
         return self
 
 

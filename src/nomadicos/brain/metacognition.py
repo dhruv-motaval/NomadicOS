@@ -55,9 +55,7 @@ def assess_metacognition(
     exhausted = budget.steps_used >= budget.max_steps
 
     believed: list[str] = []
-    for uncertainty in sorted(beliefs.facts, key=lambda u: (-u.confidence, u.key))[
-        :_MAX_BELIEVED
-    ]:
+    for uncertainty in sorted(beliefs.facts, key=lambda u: (-u.confidence, u.key))[:_MAX_BELIEVED]:
         fact = state.world.facts.get(uncertainty.key)
         value = "" if fact is None else str(fact.value)
         believed.append(
@@ -65,8 +63,9 @@ def assess_metacognition(
         )
     for hypothesis in state.hypotheses[: 2 if len(believed) < _MAX_BELIEVED else 0]:
         believed.append(
-            f"hyp {hypothesis.id}: {hypothesis.statement[:60]} "
-            f"({hypothesis.confidence:.2f})"[:_BELIEVED_CHARS]
+            f"hyp {hypothesis.id}: {hypothesis.statement[:60]} ({hypothesis.confidence:.2f})"[
+                :_BELIEVED_CHARS
+            ]
         )
 
     evidence_refs: list[str] = []

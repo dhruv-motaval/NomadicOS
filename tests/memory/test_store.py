@@ -136,9 +136,7 @@ def test_upsert_replaces_value_without_moving_insertion_order(tmp_path: Path) ->
     store = store_at(tmp_path)
     store.upsert_object(ObjectRecord(id="model:a", type="model"))
     store.upsert_object(ObjectRecord(id="model:b", type="model"))
-    replaced = store.upsert_object(
-        ObjectRecord(id="model:a", type="model", properties={"v": 2})
-    )
+    replaced = store.upsert_object(ObjectRecord(id="model:a", type="model", properties={"v": 2}))
     assert replaced.properties == {"v": 2}
     assert [o.id for o in store.objects()] == ["model:a", "model:b"]  # position kept
     store.upsert_relation(RelationRecord(id="rel_0", source="x", relation="runs", target="y"))
@@ -167,18 +165,10 @@ def test_fifo_eviction_uses_insertion_order_after_upsert(tmp_path: Path) -> None
     store.upsert_object(ObjectRecord(id="obj:a", type="model", properties={"v": 2}))
     store.upsert_object(ObjectRecord(id="obj:c", type="model"))
     assert [o.id for o in store.objects()] == ["obj:b", "obj:c"]  # refreshed "a" evicted
-    store.upsert_relation(
-        RelationRecord(id="rel_1", source="s", relation="uses", target="t")
-    )
-    store.upsert_relation(
-        RelationRecord(id="rel_2", source="s", relation="uses", target="t")
-    )
-    store.upsert_relation(
-        RelationRecord(id="rel_1", source="s", relation="runs", target="t")
-    )
-    store.upsert_relation(
-        RelationRecord(id="rel_3", source="s", relation="uses", target="t")
-    )
+    store.upsert_relation(RelationRecord(id="rel_1", source="s", relation="uses", target="t"))
+    store.upsert_relation(RelationRecord(id="rel_2", source="s", relation="uses", target="t"))
+    store.upsert_relation(RelationRecord(id="rel_1", source="s", relation="runs", target="t"))
+    store.upsert_relation(RelationRecord(id="rel_3", source="s", relation="uses", target="t"))
     assert [r.id for r in store.relations()] == ["rel_2", "rel_3"]
 
 

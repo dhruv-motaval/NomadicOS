@@ -21,9 +21,9 @@ from nomadicos.authority.authorization import AuthorizationService
 from nomadicos.authority.policy import CapabilityPolicy
 from nomadicos.authority.store import AuthorityStore
 from nomadicos.contracts.benchmark import BenchmarkRecord, BenchmarkTask
-from nomadicos.contracts.model import ModelHealth
 from nomadicos.contracts.core import Goal, TaskStatus
 from nomadicos.contracts.execution import ExecutionStatus
+from nomadicos.contracts.model import ModelHealth
 from nomadicos.contracts.verification import VerificationLevel
 from nomadicos.evaluation.benchmarking import BenchmarkRunner, TaskRunOutcome
 from nomadicos.evaluation.suite import BENCHMARK_VERSION
@@ -39,6 +39,7 @@ from nomadicos.orchestration import memory_hooks
 from nomadicos.orchestration.checkpointing import make_durable_saver
 from nomadicos.orchestration.graph import build_graph
 from nomadicos.orchestration.planner import Planner, StructuralPlanner
+from nomadicos.orchestration.reconciliation import reconcile_resume
 from nomadicos.orchestration.runtime import TaskRuntime
 from nomadicos.persistence import TaskRecord, make_task_store
 from nomadicos.persistence.contracts import AuthorizedActionRef, new_record, now_iso
@@ -91,6 +92,9 @@ class NomadicApp:
         planner: Planner | None = None,
         workspace_root: str | Path | None = None,
         state_dir: str | Path | None = None,
+        brain_actor: bool = False,
+        brain_planner: bool = False,
+        workspace_per_task: bool = True,
     ) -> None:
         self.config = config or AppConfig()
         cfg = self.config
@@ -182,9 +186,12 @@ class NomadicApp:
             engines=engines,
             workspace_root=runtime_workspace,
             default_engine=cfg.inference.default_engine,
-            step_verifier=PredicateStepVerifier(runtime_workspace),
-            goal_verifier=PredicateGoalVerifier(runtime_workspace),
+            step_verifier=PredicateStepVerifier(runtime_workspace, per_task=workspace_per_task),
+            goal_verifier=PredicateGoalVerifier(runtime_workspace, per_task=workspace_per_task),
             full_pc=self.store.has_full_autonomy,
+            brain_actor=brain_actor,
+            brain_planner_enabled=brain_planner,
+            workspace_per_task=workspace_per_task,
         )
         self.memory_runtime = build_runtime_memory(
             Path(state_dir or cfg.persistence.state_dir), cfg.memory, logger=self.log
@@ -325,6 +332,27 @@ class NomadicApp:
                 raise PersistenceCorrupt(f"no durable task {task_id!r} to resume")
             return self._restored_summary(record)
         self.log.log(EventType.RECOVERY_STARTED, task_id=task_id, result="RESUME")
+
+        # Phase 3: crash-safe recovery reconciliation before resuming the
+        # graph. Classifies the restart situation from durable/observable
+        # evidence (checkpoint state + durable ledger) and applies state
+        # patches or blocks the resume. Never replays a serialized action.
+        reconciliation = reconcile_resume(values, self.runtime, record)
+        if reconciliation.should_block:
+            block_patches = dict(reconciliation.patches)
+            block_patches["task_status"] = TaskStatus.BLOCKED
+            block_patches["outcome_note"] = reconciliation.outcome_note
+            self.graph.update_state(config, block_patches)
+            final_values = dict(self.graph.get_state(config).values or {})
+            summary = self._summarize(final_values)
+            self._persist(summary)
+            return summary
+
+        # Apply reconciliation patches (REAUTHORIZE_ACTION, RESTORE_RECORDED_RESULT,
+        # RESUME_PLANNING) to the durable checkpoint before continuing.
+        if reconciliation.patches:
+            self.graph.update_state(config, reconciliation.patches)
+
         final = await self.graph.ainvoke(None, config)
         summary = self._summarize(final)
         self._memory_after_task(summary, final)
@@ -423,9 +451,7 @@ class NomadicApp:
         """
         for record in self.registry.enabled():
             if record.engine == engine and record.context_window != context_size:
-                self.registry.register(
-                    record.model_copy(update={"context_window": context_size})
-                )
+                self.registry.register(record.model_copy(update={"context_window": context_size}))
 
     def _default_model_path(self) -> Path | None:
         root = Path(self.config.inference.models_dir)

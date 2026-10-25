@@ -43,9 +43,7 @@ def trajectory_id(mission_id: str, task_id: str) -> str:
     return f"mem-traj-{digest}"
 
 
-def make_step(
-    kind: TrajectoryStepKind, ref: str, summary: str = ""
-) -> TrajectoryStep:
+def make_step(kind: TrajectoryStepKind, ref: str, summary: str = "") -> TrajectoryStep:
     """Bounded step constructor; invalid (empty-ref) steps are dropped by
     the recorder, never silently fabricated."""
     return TrajectoryStep(kind=kind, ref=ref.strip()[:_STEP_REFS], summary=summary)

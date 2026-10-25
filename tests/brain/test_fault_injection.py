@@ -54,6 +54,7 @@ class _FakeCatalog:
 class _FakeValidator(ProposalValidator):
     def __init__(self):
         from nomadicos.kernel.events import EventLogger
+
         super().__init__(_FakeCatalog(), EventLogger())
 
 
@@ -61,6 +62,7 @@ class _FakeAuthorizer(AuthorizationService):
     def __init__(self, tmp_path: Path):
         store = AuthorityStore(tmp_path / "auth.json")
         from nomadicos.authority.policy import CapabilityPolicy
+
         policy = CapabilityPolicy(store, granted_patterns=["terminal.*"])
         super().__init__(store, policy, EventLogger())
         store.grant_full_pc_autonomy(source="test")
@@ -89,6 +91,7 @@ class _FakeExecutor:
 class _FakeVerifier:
     def __init__(self):
         from nomadicos.contracts.verification import VerificationOutcome
+
         self.outcome = VerificationOutcome.PASS
 
     def verify_task(self, goal, execution_results):
@@ -98,6 +101,7 @@ class _FakeVerifier:
             VerificationOutcome,
             VerificationResult,
         )
+
         passed = self.outcome is VerificationOutcome.PASS
         evidence = [
             EvidenceItem(
@@ -226,8 +230,12 @@ def test_validator_rejects_unknown_action() -> None:
     validator = ProposalValidator(catalog, EventLogger())
 
     proposal = ActionProposal(
-        task_id="task_1", step_id="s1", model_id="m",
-        tool="filesystem", operation="disintegrate", args={},
+        task_id="task_1",
+        step_id="s1",
+        model_id="m",
+        tool="filesystem",
+        operation="disintegrate",
+        args={},
     )
     with pytest.raises(InvalidProposal):
         validator.validate(
@@ -256,9 +264,15 @@ def test_executor_failure_becomes_failure_state_not_success() -> None:
 
         outcome = asyncio.run(
             loop.execute_candidate(
-                {"id": "c1", "capability": "terminal.run", "tool": "terminal",
-                 "arguments": {"command": "echo"}},
-                "task_1", "s1", "m1",
+                {
+                    "id": "c1",
+                    "capability": "terminal.run",
+                    "tool": "terminal",
+                    "arguments": {"command": "echo"},
+                },
+                "task_1",
+                "s1",
+                "m1",
                 Goal(id="task_g", objective="obj", predicates=[]),
             )
         )
@@ -286,6 +300,7 @@ def test_verification_failure_is_not_success(tmp_path) -> None:
                 VerificationOutcome,
                 VerificationResult,
             )
+
             return VerificationResult(
                 id="v_1",
                 level=VerificationLevel.STEP,
@@ -316,9 +331,15 @@ def test_verification_failure_is_not_success(tmp_path) -> None:
 
         outcome = asyncio.run(
             loop.execute_candidate(
-                {"id": "c1", "capability": "terminal.run", "tool": "terminal",
-                 "arguments": {"command": "echo"}},
-                "task_1", "s1", "m1",
+                {
+                    "id": "c1",
+                    "capability": "terminal.run",
+                    "tool": "terminal",
+                    "arguments": {"command": "echo"},
+                },
+                "task_1",
+                "s1",
+                "m1",
                 Goal(id="task_g", objective="obj", predicates=[]),
             )
         )

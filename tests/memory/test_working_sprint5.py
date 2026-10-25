@@ -94,9 +94,7 @@ def test_retrieved_view_is_replaced_not_grown() -> None:
     m = make()
     assert m.set_retrieved("t", "cycle 1: 5 memories") is True
     assert m.set_retrieved("t", "cycle 2: 3 memories") is True
-    assert [i.text for i in m.snapshot("t") if i.section == "retrieved"] == [
-        "cycle 2: 3 memories"
-    ]
+    assert [i.text for i in m.snapshot("t") if i.section == "retrieved"] == ["cycle 2: 3 memories"]
     assert sum(1 for i in m.snapshot("t") if i.section == "retrieved") == 1
 
 

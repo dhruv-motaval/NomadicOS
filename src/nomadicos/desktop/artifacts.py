@@ -26,9 +26,7 @@ def encode_png(width: int, height: int, bgra: bytes) -> bytes:
         raise ValueError(f"capture buffer too small: {len(bgra)} < {expected}")
     rgba = bytearray(bgra[:expected])
     rgba[0::4], rgba[2::4] = bgra[2:expected:4], bgra[0:expected:4]
-    scanlines = b"".join(
-        b"\x00" + rgba[y * stride : (y + 1) * stride] for y in range(height)
-    )
+    scanlines = b"".join(b"\x00" + rgba[y * stride : (y + 1) * stride] for y in range(height))
     header = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
     return (
         b"\x89PNG\r\n\x1a\n"

@@ -81,9 +81,7 @@ def verified_record() -> MemoryRecord:
         id="mem_fix",
         kind=MemoryKind.SEMANTIC,
         content="auth module fixed with fastapi tokens",
-        provenance=MemoryProvenance(
-            source_task_id="task_prev", confidence=0.95, verified=True
-        ),
+        provenance=MemoryProvenance(source_task_id="task_prev", confidence=0.95, verified=True),
     )
 
 
@@ -305,10 +303,7 @@ def test_predictions_are_never_persisted_as_verified(tmp_path: Path) -> None:
         evidence=[EvidenceItem(claim="c", observed=True)],
         outcome=VerificationOutcome.PASS,
     )
-    assert (
-        record_verified_fact(st, task_id="task_p", fact="x", goal_verdict=fake_pass)
-        is None
-    )
+    assert record_verified_fact(st, task_id="task_p", fact="x", goal_verdict=fake_pass) is None
 
 
 def test_observations_preserve_provenance(tmp_path: Path) -> None:
@@ -330,7 +325,9 @@ def test_trajectory_steps_from_state_are_ref_backed_and_ordered() -> None:
             ],
             "observations": [
                 Observation(
-                    id="obs_1", task_id="task_g", kind=ObservationKind.STEP_RESULT,
+                    id="obs_1",
+                    task_id="task_g",
+                    kind=ObservationKind.STEP_RESULT,
                     summary="ran ok",
                 )
             ],
@@ -356,7 +353,9 @@ def test_full_trajectory_replay_from_state(tmp_path: Path) -> None:
             ],
             "observations": [
                 Observation(
-                    id="obs_1", task_id="task_g", kind=ObservationKind.STEP_RESULT,
+                    id="obs_1",
+                    task_id="task_g",
+                    kind=ObservationKind.STEP_RESULT,
                     summary="ran ok",
                 )
             ],
@@ -393,7 +392,10 @@ def test_historical_state_not_mutated_by_memory_writes(tmp_path: Path) -> None:
     st = store(tmp_path)
     st.write(verified_record())
     record_trajectory(
-        st, mission_id=s.mission_id, task_id=s.goal.id, goal_text="g",
+        st,
+        mission_id=s.mission_id,
+        task_id=s.goal.id,
+        goal_text="g",
         steps=trajectory_steps(s),
     )
     assert s.relevant_memories == []

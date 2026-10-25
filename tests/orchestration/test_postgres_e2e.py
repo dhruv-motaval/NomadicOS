@@ -31,14 +31,18 @@ pytestmark = pytest.mark.integration
 
 GOAL = "Create file pgflow.txt containing PG-DATA"
 PRED = [{"type": "file_exists", "path": "pgflow.txt"}]
+
+
 def write_json_helper(name: str, content: str) -> str:
     import json
 
-    return json.dumps({
-        "tool": "filesystem",
-        "operation": "write",
-        "args": {"path": name, "content": content},
-    })
+    return json.dumps(
+        {
+            "tool": "filesystem",
+            "operation": "write",
+            "args": {"path": name, "content": content},
+        }
+    )
 
 
 SCRIPT = [("pgflow.txt", write_json_helper("pgflow.txt", "PG-DATA"))]

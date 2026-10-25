@@ -25,8 +25,14 @@ def store_at(tmp_path: Path) -> JsonlMemoryStore:
     return JsonlMemoryStore(tmp_path / "memory.jsonl")
 
 
-def rec(rid: str, content: str, *, kind: MemoryKind = MemoryKind.SEMANTIC,
-        verified: bool = False, confidence: float = 0.6) -> MemoryRecord:
+def rec(
+    rid: str,
+    content: str,
+    *,
+    kind: MemoryKind = MemoryKind.SEMANTIC,
+    verified: bool = False,
+    confidence: float = 0.6,
+) -> MemoryRecord:
     return MemoryRecord(
         id=rid,
         kind=kind,

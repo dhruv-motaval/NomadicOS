@@ -66,11 +66,7 @@ def classify_episode(
         "",
         _LEGACY_VERIFIER,
     )
-    if (
-        real_verifier
-        and verdict is VerificationOutcome.PASS
-        and task_status is TaskStatus.SUCCESS
-    ):
+    if real_verifier and verdict is VerificationOutcome.PASS and task_status is TaskStatus.SUCCESS:
         return TAG_VERIFIED_SUCCESS, True
     if executions <= 0 and goal_verdict is None:
         return None  # model claim / critic ACCEPT / proposal only

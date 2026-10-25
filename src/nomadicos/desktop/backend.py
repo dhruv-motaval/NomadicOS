@@ -47,6 +47,9 @@ class DesktopBackend:
     def press_key(self, key: str) -> None:  # pragma: no cover - protocol
         raise NotImplementedError
 
+    def hotkey(self, keys: list[str]) -> None:  # pragma: no cover - protocol
+        raise NotImplementedError
+
     def list_windows(self, limit: int) -> list[dict[str, Any]]:  # pragma: no cover - protocol
         raise NotImplementedError
 
@@ -91,6 +94,9 @@ class UnavailableDesktopBackend(DesktopBackend):
     def press_key(self, key: str) -> None:
         self._refuse()
 
+    def hotkey(self, keys: list[str]) -> None:
+        self._refuse()
+
     def list_windows(self, limit: int) -> list[dict[str, Any]]:
         self._refuse()
 
@@ -125,6 +131,7 @@ class FakeDesktopBackend(DesktopBackend):
         self.cursor = (0, 0)
         self.typed: list[str] = []
         self.keys: list[str] = []
+        self.hotkeys: list[list[str]] = []
         self.scrolled: list[int] = []
         self.clicks: list[tuple[int, int, str, int]] = []
         self.moves: list[tuple[int, int]] = []
@@ -158,6 +165,9 @@ class FakeDesktopBackend(DesktopBackend):
 
     def press_key(self, key: str) -> None:
         self.keys.append(key)
+
+    def hotkey(self, keys: list[str]) -> None:
+        self.hotkeys.append(list(keys))
 
     def list_windows(self, limit: int) -> list[dict[str, Any]]:
         return self.windows[:limit]

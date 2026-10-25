@@ -53,9 +53,7 @@ def _verifier_passed(goal_verdict: VerificationResult | None) -> bool:
 
 
 def _norm_steps(steps) -> tuple[str, ...]:
-    return tuple(
-        " ".join(s.split())[:_STEP_CHARS] for s in steps if s and s.strip()
-    )[:_MAX_STEPS]
+    return tuple(" ".join(s.split())[:_STEP_CHARS] for s in steps if s and s.strip())[:_MAX_STEPS]
 
 
 def procedure_id(task_id: str, objective: str, steps) -> str:

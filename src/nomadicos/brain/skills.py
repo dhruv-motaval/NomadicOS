@@ -139,9 +139,7 @@ def parse_skill_options(
                 "skill option rejected",
                 detail=str(exc.errors()[:3]),
             ) from None
-    if options != sorted(
-        options, key=lambda o: (-o.score, o.skill_id, -o.version)
-    ):
+    if options != sorted(options, key=lambda o: (-o.score, o.skill_id, -o.version)):
         raise ModelOutputRejected(
             "skill options are not in deterministic selection order",
         )

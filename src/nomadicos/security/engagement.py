@@ -32,12 +32,8 @@ def validate_engagement(
         )
     if capability.value not in engagement.allowed_capabilities:
         reasons.append(
-            f"capability {capability.value} not granted by engagement "
-            f"{engagement.engagement_id}"
+            f"capability {capability.value} not granted by engagement {engagement.engagement_id}"
         )
     if target_id not in engagement.allowed_targets:
-        reasons.append(
-            f"target {target_id!r} outside engagement "
-            f"{engagement.engagement_id} scope"
-        )
+        reasons.append(f"target {target_id!r} outside engagement {engagement.engagement_id} scope")
     return (not reasons), reasons
