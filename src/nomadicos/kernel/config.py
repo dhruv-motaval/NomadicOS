@@ -330,6 +330,26 @@ def _persistence_env_overlay() -> dict[str, Any]:
     return overlay
 
 
+def _inference_env_overlay() -> dict[str, Any]:
+    """Overlay inference/model-layout variables onto inference configuration.
+
+    Returns InferenceConfig field values from the PROCESS environment
+    (process environment wins over `.env` and YAML; the same keys may be
+    set in the root `.env` for convenience). Keys:
+      NOMADICOS_LLAMA_SERVER_BIN -> inference.llama_server_bin
+      NOMADICOS_LLAMA_SERVER_URL -> llama_server_url
+      NOMADICOS_LLAMA_PORT       -> llama_port
+      NOMADICOS_MODELS_DIR       -> models_dir
+      NOMADICOS_OLLAMA_BASE_URL  -> ollama_base_url
+    """
+    overlay: dict[str, Any] = {}
+    for env_key, field in _INFERENCE_ENV_KEYS.items():
+        value = os.environ.get(env_key)
+        if value is not None:
+            overlay[field] = value
+    return overlay
+
+
 class PersistenceConfig(_Contract):
     persistence_backend: Literal["postgres", "file"] = "file"
     dsn: str | None = None
@@ -439,6 +459,18 @@ _PERSISTENCE_ENV_KEYS = {
     "NOMADICOS_TEST_DSN": "dsn",
 }
 
+# Inference/model layout overrides (SPEC §9-11: local-first, portable):
+# machine-independent defaults live in InferenceConfig; these variables let a
+# host point the runtime at its own llama.cpp build, model directory, or
+# Ollama endpoint without editing the committed config file.
+_INFERENCE_ENV_KEYS = {
+    "NOMADICOS_LLAMA_SERVER_BIN": "llama_server_bin",
+    "NOMADICOS_LLAMA_SERVER_URL": "llama_server_url",
+    "NOMADICOS_LLAMA_PORT": "llama_port",
+    "NOMADICOS_MODELS_DIR": "models_dir",
+    "NOMADICOS_OLLAMA_BASE_URL": "ollama_base_url",
+}
+
 
 def load_config(path: str | Path | None = None) -> AppConfig:
     """Load YAML config + root ``.env`` + process environment; fail closed on invalid configuration.
@@ -474,12 +506,20 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         for env_key, field in _PERSISTENCE_ENV_KEYS.items():
             if env_key in env_file_vals:
                 raw["persistence"][field] = env_file_vals[env_key]
+        for env_key, field in _INFERENCE_ENV_KEYS.items():
+            if env_key in env_file_vals:
+                raw.setdefault("inference", {})
+                raw["inference"].setdefault(field, env_file_vals[env_key])
 
     # Process environment variables override .env and YAML.
     env_overlay = _persistence_env_overlay()
     if env_overlay:
         raw.setdefault("persistence", {})
         raw["persistence"].update(env_overlay)
+    inference_overlay = _inference_env_overlay()
+    if inference_overlay:
+        raw.setdefault("inference", {})
+        raw["inference"].update(inference_overlay)
 
     try:
         return AppConfig.model_validate(raw)

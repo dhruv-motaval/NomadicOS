@@ -86,6 +86,8 @@ The owner remains the highest authority. A one-time `FULL_PC_AUTONOMY` grant can
 
 The Action IR rejects authority-shaped fields supplied by a model, including `authorized`, `approved`, `permission`, `capability`, and `bypass`. Execution consumes an `AuthorizedAction`, not raw model text.
 
+**Least-privilege default.** A fresh installation grants nothing: every action is denied until the owner runs an explicit `nomadicos permissions grant-full`. The capability patterns in `config/config.yaml` (`filesystem.*` only in the committed example) are the permission *ceiling* — they stay inert until the owner grant. Broader autonomy (terminal, git, process, desktop) requires deliberate opt-in: add the capability patterns you intend to allow to `config/config.yaml` **and** run `nomadicos permissions grant-full` (persistent, epoch-tracked, invalidated by `nomadicos permissions revoke-all`). Granting is never implied by configuration, model output, or tool output.
+
 ## Architecture
 
 Rather than a monolith, the codebase is organized around a few clear responsibilities:
@@ -122,6 +124,9 @@ flowchart TD
     class blocked,partial outcome
 ```
 
+    class blocked,partial outcome
+```
+
 Security authority and raw OS execution stay outside model reasoning. The executor does not choose models, grant permissions, change policy, or determine whether the overall goal succeeded.
 
 ## Local inference
@@ -133,6 +138,42 @@ NomadicOS does not require a cloud LLM API for its initial core.
 - **MockEngine** supports deterministic tests without a live model.
 
 The inference layer is deliberately replaceable. Model selection is separated from execution and uses task requirements, capability fit, health, and configured routing rather than binding the runtime to one provider.
+
+### Prerequisites and portable configuration
+
+- **llama.cpp**: install a `llama-server` build and either put it on `PATH` (the portable default) or point the runtime at it explicitly.
+- **Ollama**: install Ollama and pull the models you intend to use (for example `ollama pull nomic-embed-text` for semantic memory embeddings).
+- **Model files**: GGUF files live in a models directory. The committed example references `models/*.gguf` relative to the configured models directory.
+
+Model-server paths are machine-independent in the committed configuration; resolve them from your environment:
+
+| Setting | YAML (`config/config.yaml`) | Environment variable | Default |
+| --- | --- | --- | --- |
+| llama-server executable | `inference.llama_server_bin` | `NOMADICOS_LLAMA_SERVER_BIN` | `llama-server` (resolved from `PATH`) |
+| llama-server URL | `inference.llama_server_url` | `NOMADICOS_LLAMA_SERVER_URL` | `http://127.0.0.1:8080` |
+| llama-server port | `inference.llama_port` | `NOMADICOS_LLAMA_PORT` | `8080` |
+| models directory | `inference.models_dir` | `NOMADICOS_MODELS_DIR` | `models` |
+| Ollama endpoint | `inference.ollama_base_url` | `NOMADICOS_OLLAMA_BASE_URL` | `http://localhost:11434` |
+
+Precedence (later wins): built-in field defaults → root `.env` → `config/config.yaml` → process environment variables. An explicit, existing `llama_server_bin` path is always honored as configured; a bare name is resolved through `PATH` on every platform — an unintended executable is never silently substituted.
+
+If `llama-server` cannot be found, the llama.cpp engine reports `EngineUnavailable` (visible through `nomadicos health`) and the configured fallback engine (Ollama by default) is used according to the routing policy. A missing model file is reported by name. Engine selection stays fail-closed: an unavailable primary is reported, never silently swapped for an unintended executable.
+
+## Local PostgreSQL (development)
+
+Deterministic unit tests need no database. The optional durable persistence layer (SPEC §34) uses a local PostgreSQL for development:
+
+```bash
+# starts a local PostgreSQL 16 container, loopback-only (127.0.0.1:5433)
+docker compose -f docker-compose.dev.yml up -d
+docker compose -f docker-compose.dev.yml ps   # wait for (healthy)
+```
+
+- The binding is loopback-only (`127.0.0.1:5433 -> 5432`): the database is reachable from this host and not exposed to the network.
+- The named volume `postgres-data` persists across container recreation; adjusting the port mapping never recreates the database.
+- Credentials: copy `.env.example` to `.env` (never committed) and set a strong `POSTGRES_PASSWORD`. In the compose file `POSTGRES_PASSWORD` only initializes a **new** data volume — an already-initialized volume keeps its role password; change it separately with `ALTER ROLE nomadicos WITH PASSWORD '...'`. Real secrets belong in the OS credential store; development credentials live in `.env`, never in the committed configuration.
+- Integration tests read `NOMADICOS_TEST_DSN` (defaulting to this port) and use isolated test identifiers — cleanup never truncates unrelated development records.
+- Remote access requires a separately reviewed deployment configuration; do not broaden the loopback binding as a connectivity workaround.
 
 ## Install
 
@@ -195,6 +236,21 @@ uv run mypy src
 ```
 
 Tests marked `hardware` require local models and, where applicable, local GPU or desktop resources. The repository also includes security-oriented tests for authority, Action IR validation, prompt-injection resistance, duplicate execution prevention, and completion integrity.
+
+**Deterministic vs. live integration tests:**
+
+| Marker | Requires | What it proves |
+| --- | --- | --- |
+| *(none — deterministic)* | nothing external | scheduler, authority, action IR, memory (mocked embeddings), file-backed persistence |
+| `integration` | live PostgreSQL (`docker compose -f docker-compose.dev.yml up -d`) | durable task state, execution ledger, checkpoints, restart recovery |
+| `ollama` | live local Ollama with `nomic-embed-text` pulled | real embedding dimensions, paraphrase retrieval, index persistence, lexical fallback |
+
+Deterministic runs never claim live-service coverage; `integration`/`ollama` tests skip with an explicit reason when the service or model is unavailable. Live Ollama tests verify real embedding dimensions, semantic paraphrase retrieval, index reuse, and the lexical fallback on embedding failure — mocked embeddings or lexical fallback alone are never reported as live semantic retrieval.
+
+Development notes:
+
+- pytest scratch files go to the system temp directory (`tempfile.gettempdir()`, overridden by `--basetemp`), not the repository tree — repo-local temp dirs inside a OneDrive-synced checkout can hit file-sync locks (`PermissionError` on atomic replace/cleanup).
+- `pythonpath = ["src", "tests"]` is configured in `pyproject.toml`; no editable install is required to run the suite.
 
 ## Completion evidence
 

@@ -125,6 +125,16 @@ class VectorIndex:
 
     def _persist(self) -> None:
         """Atomically rewrite the store file with vectors + metadata."""
+        # The in-memory meta mirrors the file's vector_meta record: without
+        # this update `_stale()` would keep treating a freshly written index
+        # as stale (meta empty in memory) and `has_vector`/`search` would
+        # return False/empty even though the vectors were just stored — the
+        # live Ollama persistence test exposed exactly that.
+        self._meta = {
+            "model_id": self.model.model_id,
+            "embedding_dim": self.model.embedding_dim,
+            "vector_count": len(self._vectors),
+        }
         self.store_path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=self.store_path.parent, suffix=".tmp")
         try:
