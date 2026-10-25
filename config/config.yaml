@@ -1,6 +1,12 @@
 models:
-  # Relative to inference.models_dir; place GGUF files in the models/
-  # directory (or point NOMADICOS_MODELS_DIR at your own directory).
+  # Path-resolution contract: model-role values are resolved against the
+  # PROCESS WORKING DIRECTORY (the repository root in normal CLI use);
+  # absolute paths are honored as-is. They are NOT joined onto
+  # inference.models_dir. models_dir is the DISCOVERY directory scanned by
+  # the registry (ids register as models/<name>); relocating it via
+  # NOMADICOS_MODELS_DIR also relocates the actual model lookup for the
+  # configured role's file name. A configured role that resolves to a
+  # missing file is an honest absence — no other model file is substituted.
   reasoning: models/Spark-X2.5-4B-uncensored-Q4_K_M.gguf
   coding_worker: models/Spark-X2.5-4B-uncensored-Q4_K_M.gguf
   worker: models/Spark-X2.5-4B-uncensored-Q4_K_M.gguf

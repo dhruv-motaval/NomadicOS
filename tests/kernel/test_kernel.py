@@ -116,7 +116,11 @@ def test_config_defaults_select_local_bricks() -> None:
     assert cfg.inference.default_engine == "llamacpp"
     assert cfg.inference.fallback_engine == "ollama"
     assert cfg.inference.models_dir == "models"
-    assert cfg.autonomy.profile == "FULL_PC_AUTONOMY"
+    # Least-privilege default posture (post-release hardening): the default
+    # profile is descriptive, the capability ceiling is filesystem-only, and
+    # the code default matches the documented initial configuration.
+    assert cfg.autonomy.profile == "LIMITED"
+    assert cfg.autonomy.capabilities == ["filesystem.*"]
     assert cfg.orchestration.engine == "langgraph"
     assert cfg.verification.require_goal_proof is True
 

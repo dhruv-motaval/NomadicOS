@@ -78,6 +78,13 @@ def make_app(
         {
             "inference": {"default_engine": "mock", "fallback_engine": "ollama"},
             "persistence": {"state_dir": str(tmp_path / "state")},
+            # Deliberate configuration for benchmark tests (runtime defaults
+            # are least-privilege): the ceiling is configured here and the
+            # owner grant below activates it (the documented owner flow).
+            "autonomy": {
+                "profile": "FULL_PC_AUTONOMY",
+                "capabilities": ["filesystem.*", "terminal.*", "process.*"],
+            },
         }
     )
     app = NomadicApp(

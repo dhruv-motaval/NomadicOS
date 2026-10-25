@@ -124,9 +124,6 @@ flowchart TD
     class blocked,partial outcome
 ```
 
-    class blocked,partial outcome
-```
-
 Security authority and raw OS execution stay outside model reasoning. The executor does not choose models, grant permissions, change policy, or determine whether the overall goal succeeded.
 
 ## Local inference
@@ -158,6 +155,8 @@ Model-server paths are machine-independent in the committed configuration; resol
 Precedence (later wins): built-in field defaults → root `.env` → `config/config.yaml` → process environment variables. An explicit, existing `llama_server_bin` path is always honored as configured; a bare name is resolved through `PATH` on every platform — an unintended executable is never silently substituted.
 
 If `llama-server` cannot be found, the llama.cpp engine reports `EngineUnavailable` (visible through `nomadicos health`) and the configured fallback engine (Ollama by default) is used according to the routing policy. A missing model file is reported by name. Engine selection stays fail-closed: an unavailable primary is reported, never silently swapped for an unintended executable.
+
+**Model path-resolution contract.** A model-role value (`models.*`, e.g. `models/example.gguf`) is resolved against the process working directory (the repository root in normal CLI use); absolute paths are honored as-is and are never joined onto `models_dir`. `inference.models_dir` (default `models`, overridable with `NOMADICOS_MODELS_DIR`) is the discovery directory the registry scans for owner-placed model files (registered under `models/<name>` ids); relocating it also relocates the actual lookup for a configured role's file name. A configured role that resolves to a missing file is reported honestly — no other model file is silently substituted.
 
 ## Local PostgreSQL (development)
 

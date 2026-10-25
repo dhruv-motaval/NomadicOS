@@ -67,16 +67,20 @@ class ModelRoles(_Contract):
 
 
 class AutonomyConfig(_Contract):
-    profile: str = "FULL_PC_AUTONOMY"
-    capabilities: list[CapabilityPattern] = Field(
-        default_factory=lambda: [
-            "filesystem.*",
-            "terminal.*",
-            "git.*",
-            "process.*",
-            "desktop.*",
-        ]
-    )
+    #: Descriptive posture name. The committed/default posture is
+    #: least-privilege: nothing is authorized until the owner runs an
+    #: explicit grant (SPEC §5), and even then only actions inside the
+    #: configured capability ceiling are allowed. Deliberately enabling
+    #: broader autonomy requires BOTH listing the capability patterns here
+    #: (e.g. ``FULL_PC_AUTONOMY`` with terminal/git/process/desktop) AND the
+    #: owner grant. This field is descriptive; enforcement lives entirely in
+    #: CapabilityPolicy over these capability patterns + owner state.
+    profile: str = "LIMITED"
+    #: Least-privilege default ceiling: filesystem actions only. Absent or
+    #: unavailable configuration can never silently restore a broader
+    #: ceiling — a fresh install without YAML gets exactly this set, and
+    #: every action still requires the explicit owner grant.
+    capabilities: list[CapabilityPattern] = Field(default_factory=lambda: ["filesystem.*"])
     denied_resources: list[str] = Field(default_factory=list)
 
     @field_validator("capabilities")
