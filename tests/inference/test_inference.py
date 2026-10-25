@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 
 import httpx
@@ -18,6 +20,7 @@ from nomadicos.inference import (
     MockEngine,
     OllamaEngine,
 )
+from nomadicos.kernel.config import AppConfig, InferenceConfig
 from nomadicos.kernel.errors import EngineUnavailable, ModelError
 
 
@@ -226,6 +229,60 @@ def test_llama_launcher_validates_before_spawning(tmp_path: Path) -> None:
     gguf.write_bytes(b"x")
     with pytest.raises(EngineUnavailable):
         launcher.start(gguf)
+
+
+# ------------------------------------------- portable binary discovery ------
+#
+# Post-release hardening: llama-server must be configurable without a
+# machine-specific absolute path. The default resolves from PATH; an
+# explicit absolute path keeps working and wins over discovery.
+
+
+def test_llama_launcher_accepts_explicit_absolute_binary() -> None:
+    """An explicitly configured, existing executable is accepted as-is."""
+    # sys.executable is always an existing, executable absolute path.
+    assert LlamaServerLauncher.available(sys.executable)
+    launcher = LlamaServerLauncher(binary=sys.executable)
+    assert launcher.binary == sys.executable
+    assert launcher.is_running() is False
+
+
+def test_llama_launcher_discovers_binary_from_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bare binary name is discovered through PATH (portable default)."""
+    bin_dir = tmp_path / "llama-bin"
+    bin_dir.mkdir()
+    exe = bin_dir / ("fake-llama-server.cmd" if os.name == "nt" else "fake-llama-server")
+    exe.write_text("@echo off\r\n" if os.name == "nt" else "#!/bin/sh\n")
+    if os.name != "nt":
+        exe.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + os.environ.get("PATH", ""))
+    assert LlamaServerLauncher.available("fake-llama-server")
+    launcher = LlamaServerLauncher(binary="fake-llama-server")
+    assert not launcher.is_running()
+
+
+def test_llama_launcher_unavailable_binary_is_explicit(tmp_path: Path) -> None:
+    """A nonexistent binary reports unavailable instead of silently picking
+    an unintended executable; a missing model file is reported by name."""
+    launcher = LlamaServerLauncher(binary="definitely-not-llama-server-xyz")
+    assert not LlamaServerLauncher.available(launcher.binary)
+    gguf = tmp_path / "present.gguf"
+    gguf.write_bytes(b"x")
+    with pytest.raises(EngineUnavailable):
+        launcher.start(gguf)
+
+
+def test_config_fallback_engine_policy_preserved() -> None:
+    """llama.cpp stays the default engine with Ollama as the declared
+    fallback; the two engines must differ (fail closed, never a loop)."""
+    cfg = AppConfig()
+    assert cfg.inference.default_engine == "llamacpp"
+    assert cfg.inference.fallback_engine == "ollama"
+    assert cfg.inference.ollama_base_url == "http://localhost:11434"
+    with pytest.raises(Exception, match="default and fallback inference engines must differ"):
+        AppConfig(inference=InferenceConfig(default_engine="ollama", fallback_engine="ollama"))
 
 
 async def test_engines_are_interchangeable() -> None:

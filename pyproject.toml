@@ -43,7 +43,12 @@ packages = ["src/nomadicos"]
 testpaths = ["tests"]
 pythonpath = ["src", "tests"]
 asyncio_mode = "auto"
-addopts = "-q --basetemp=.tmp-pytest"
+# No hardcoded basetemp: pytest uses the per-user system temp directory.
+# A repo-local basetemp put pytest scratch files inside the (often
+# OneDrive-synced) working tree, where sync file locks surface as
+# PermissionError during atomic replaces; the system temp dir avoids that
+# on every platform. Override explicitly with --basetemp when needed.
+addopts = "-q"
 markers = [
     "hardware: requires real local models / GPU / desktop hardware (run from the owner's machine)",
     "security: authority and completion-integrity invariant tests",

@@ -19,6 +19,7 @@ from nomadicos.contracts.action import (
     AuthorizedAction,
     CapabilityRef,
 )
+from nomadicos.kernel.config import AppConfig, load_config
 from nomadicos.kernel.errors import AuthorizationDenied, ConfigInvalid
 from nomadicos.kernel.events import EventLogger, EventType
 
@@ -252,3 +253,200 @@ def test_authority_events_audited(tmp_path: Path) -> None:
         EventType.PERMISSION_REVOKED,
         EventType.AUTHORIZATION_DENIED,
     } <= types
+
+
+# ------------------------------------------- post-release hardening --------
+#
+# Least-privilege defaults: the committed example configuration narrows the
+# capability ceiling to filesystem.*; broad PC autonomy requires BOTH a
+# deliberate capability config AND the explicit owner grant (SPEC §5), and
+# revocation invalidates everything. These tests pin the fresh-install
+# behavior end to end.
+
+
+def _service_with_patterns(store: AuthorityStore, patterns: list[str]) -> AuthorizationService:
+    return AuthorizationService(
+        store, CapabilityPolicy(store, granted_patterns=list(patterns)), EventLogger()
+    )
+
+
+def test_fresh_installation_cannot_perform_sensitive_actions(
+    tmp_path: Path,
+) -> None:
+    """A fresh configuration with BROAD capability patterns still denies
+    every sensitive action until the owner explicitly grants authority —
+    broad config alone is never authorization."""
+    store = AuthorityStore(tmp_path / "absent.json")
+    svc = AuthorizationService(
+        store, CapabilityPolicy(store, granted_patterns=PATTERNS), EventLogger()
+    )
+    for namespace, op in (("terminal", "execute"), ("process", "kill"), ("desktop", "click")):
+        with pytest.raises(AuthorizationDenied, match="no owner grant"):
+            svc.authorize(proposal(), cap(namespace, op, resource="whatever"))
+
+
+def test_default_config_grants_nothing_without_owner_grant(tmp_path: Path) -> None:
+    """The code-default capability ceiling is inert on a fresh install:
+    config alone authorizes nothing (owner grant required, SPEC §5)."""
+    from nomadicos.kernel.config import AutonomyConfig
+
+    autonomy = AutonomyConfig()
+    store = AuthorityStore(tmp_path / "fresh" / "authority.json")
+    svc = AuthorizationService(
+        store,
+        CapabilityPolicy(
+            store,
+            granted_patterns=list(autonomy.capabilities),
+            hard_denied_resources=[],
+        ),
+        EventLogger(),
+    )
+    for namespace, op in (
+        ("filesystem", "write"),
+        ("terminal", "execute"),
+        ("git", "push"),
+        ("process", "spawn"),
+        ("desktop", "click"),
+    ):
+        with pytest.raises(AuthorizationDenied, match="no owner grant"):
+            svc.authorize(proposal(), cap(namespace, op, "anything"))
+
+
+def test_least_privilege_config_ceiling_after_explicit_grant(
+    tmp_path: Path,
+) -> None:
+    """The least-privilege example ceiling: even WITH the explicit owner
+    grant, a filesystem-only capability list cannot execute terminal,
+    process, or desktop actions — and the owner can still grant the
+    broader profile deliberately by extending the patterns."""
+    store = AuthorityStore(tmp_path / "least-privilege.json")
+    svc = AuthorizationService(
+        store,
+        CapabilityPolicy(store, granted_patterns=["filesystem.*"]),
+        EventLogger(),
+    )
+    # nothing is authorized before the explicit owner grant
+    with pytest.raises(AuthorizationDenied, match="no owner grant"):
+        svc.authorize(proposal(), cap("filesystem", "write", "a.txt"))
+    # explicit owner grant activates the configured ceiling only
+    svc.grant_full()
+    aa = svc.authorize(proposal(), cap("filesystem", "write", "a.txt"))
+    assert isinstance(aa, AuthorizedAction)
+    for tool, op in (("terminal", "execute"), ("process", "kill"), ("desktop", "click")):
+        with pytest.raises(AuthorizationDenied, match="not inside active profile"):
+            svc.authorize(proposal(tool=tool, operation=op), cap(tool, op, "x"))
+    # revocation invalidates even the previously allowed scope
+    store.revoke_all()
+    with pytest.raises(AuthorizationDenied, match="no owner grant"):
+        svc.authorize(proposal(), cap("filesystem", "write", "a.txt"))
+
+
+# ---------------------------------------------------- review finding 2 -----
+# Consistent least-privilege defaults: the CODE defaults now match the
+# documented least-privilege initial configuration (review finding 2).
+
+
+def test_fresh_appconfig_defaults_are_least_privilege() -> None:
+    """Fresh AppConfig() defaults: descriptive LIMITED profile with a
+    filesystem-only ceiling — no broad namespace is implicit anywhere."""
+    from nomadicos.kernel.config import AppConfig
+
+    cfg = AppConfig()
+    assert cfg.autonomy.profile == "LIMITED"
+    assert cfg.autonomy.capabilities == ["filesystem.*"]
+    assert cfg.autonomy.denied_resources == []
+
+
+def test_missing_yaml_configuration_stays_least_privilege(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When no YAML configuration exists, load_config() must not silently
+    restore a broader capability ceiling: a missing file yields exactly the
+    least-privilege code defaults."""
+    import os
+
+    cwd = os.getcwd()
+    os.chdir(tmp_path)  # no config/config.yaml here
+    try:
+        cfg = load_config()
+    finally:
+        os.chdir(cwd)
+    assert cfg.autonomy.profile == "LIMITED"
+    assert cfg.autonomy.capabilities == ["filesystem.*"]
+    assert AppConfig().autonomy.capabilities == ["filesystem.*"]
+
+
+def test_grant_cannot_exceed_capability_ceiling(tmp_path: Path) -> None:
+    """A persistent owner grant authorizes ONLY actions inside the effective
+    capability ceiling: fresh defaults allow filesystem writes, deny
+    terminal/process/desktop, and revocation invalidates the grant."""
+    from nomadicos.kernel.config import AutonomyConfig
+
+    autonomy = AutonomyConfig()  # fresh defaults: filesystem-only ceiling
+    store = AuthorityStore(tmp_path / "authority.json")
+    svc = AuthorizationService(
+        store,
+        CapabilityPolicy(
+            store,
+            granted_patterns=list(autonomy.capabilities),
+            hard_denied_resources=list(autonomy.denied_resources),
+        ),
+        EventLogger(),
+    )
+    # before the grant: nothing at all
+    with pytest.raises(AuthorizationDenied, match="no owner grant"):
+        svc.authorize(proposal(), cap("filesystem", "write", "a.txt"))
+    # explicit owner grant, then: inside the ceiling -> allowed
+    svc.grant_full()
+    assert isinstance(
+        svc.authorize(proposal(), cap("filesystem", "write", "a.txt")),
+        AuthorizedAction,
+    )
+    # the grant cannot elevate beyond the configured patterns
+    for tool, op in (("terminal", "execute"), ("process", "kill"), ("desktop", "click")):
+        with pytest.raises(AuthorizationDenied, match="not inside active profile"):
+            svc.authorize(proposal(tool=tool, operation=op), cap(tool, op, "x"))
+    # revocation invalidates previously granted authority
+    store.revoke_all()
+    with pytest.raises(AuthorizationDenied, match="no owner grant"):
+        svc.authorize(proposal(), cap("filesystem", "write", "a.txt"))
+
+
+def test_broad_capabilities_require_deliberate_config_and_grant(
+    tmp_path: Path,
+) -> None:
+    """Terminal autonomy needs BOTH deliberate capability configuration AND
+    the explicit owner grant; config alone grants nothing, and a grant
+    alone cannot exceed a narrow ceiling."""
+    broad = ["filesystem.*", "terminal.*", "git.*", "process.*", "desktop.*"]
+
+    # 1. Broad ceiling configured, NO owner grant: everything denied.
+    store = AuthorityStore(tmp_path / "no-grant.json")
+    svc = AuthorizationService(
+        store, CapabilityPolicy(store, granted_patterns=list(broad)), EventLogger()
+    )
+    with pytest.raises(AuthorizationDenied, match="no owner grant"):
+        svc.authorize(proposal(), cap("terminal", "execute", "pytest -q"))
+
+    # 2. Deliberate configuration of the broader ceiling + owner grant:
+    #    terminal actions become authorized (the documented opt-in flow).
+    store_broad = AuthorityStore(tmp_path / "deliberate.json")
+    svc_broad = AuthorizationService(
+        store_broad,
+        CapabilityPolicy(store_broad, granted_patterns=list(broad)),
+        EventLogger(),
+    )
+    svc_broad.grant_full()
+    assert isinstance(
+        svc_broad.authorize(
+            proposal(tool="terminal", operation="execute"),
+            cap("terminal", "execute", "pytest -q"),
+        ),
+        AuthorizedAction,
+    )
+    # revocation takes it away again
+    svc_broad.revoke_all()
+    with pytest.raises(AuthorizationDenied, match="no owner grant"):
+        svc_broad.authorize(
+            proposal(tool="terminal", operation="execute"), cap("terminal", "execute", "x")
+        )

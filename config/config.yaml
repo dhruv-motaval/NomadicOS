@@ -1,4 +1,12 @@
 models:
+  # Path-resolution contract: model-role values are resolved against the
+  # PROCESS WORKING DIRECTORY (the repository root in normal CLI use);
+  # absolute paths are honored as-is. They are NOT joined onto
+  # inference.models_dir. models_dir is the DISCOVERY directory scanned by
+  # the registry (ids register as models/<name>); relocating it via
+  # NOMADICOS_MODELS_DIR also relocates the actual model lookup for the
+  # configured role's file name. A configured role that resolves to a
+  # missing file is an honest absence — no other model file is substituted.
   reasoning: models/Spark-X2.5-4B-uncensored-Q4_K_M.gguf
   coding_worker: models/Spark-X2.5-4B-uncensored-Q4_K_M.gguf
   worker: models/Spark-X2.5-4B-uncensored-Q4_K_M.gguf
@@ -6,15 +14,23 @@ inference:
   default_engine: llamacpp
   fallback_engine: ollama
   ollama_base_url: http://localhost:11434
-  llama_server_bin: C:/Ai/llama.cpp/llama-server.exe
+  # Portable default: resolve `llama-server` from PATH. Set an explicit
+  # absolute path here or via NOMADICOS_LLAMA_SERVER_BIN when the binary
+  # is outside PATH (see .env.example).
+  # llama_server_bin: llama-server
   models_dir: models
 autonomy:
+  # Least-privilege development default: filesystem actions only. The
+  # capability patterns here are the permission CEILING — they are inert
+  # until the owner runs `nomadicos permissions grant-full` (SPEC §5:
+  # persistent owner grant; `permissions revoke-all` invalidates it).
+  # To deliberately enable full PC autonomy:
+  #   1. add terminal.*, git.*, process.*, desktop.* to capabilities
+  #   2. run `nomadicos permissions grant-full`
+  #   3. verify with `nomadicos permissions status`
   profile: FULL_PC_AUTONOMY
   capabilities:
     - filesystem.*
-    - terminal.*
-    - git.*
-    - process.*
-    - desktop.*
+  denied_resources: []
 routing:
   mode: BALANCED

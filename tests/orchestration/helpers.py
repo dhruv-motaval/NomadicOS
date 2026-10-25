@@ -74,6 +74,20 @@ def make_app(
         {
             "inference": {"default_engine": "mock", "fallback_engine": "ollama"},
             "persistence": {"state_dir": str(tmp_path / "state")},
+            # Tests DELIBERATELY configure the broad capability ceiling and
+            # then explicitly grant authority (the documented owner flow):
+            # the runtime defaults are least-privilege, so a test exercising
+            # terminal/process/desktop actions must opt in here.
+            "autonomy": {
+                "profile": "FULL_PC_AUTONOMY",
+                "capabilities": [
+                    "filesystem.*",
+                    "terminal.*",
+                    "git.*",
+                    "process.*",
+                    "desktop.*",
+                ],
+            },
             **(config_over or {}),
         }
     )

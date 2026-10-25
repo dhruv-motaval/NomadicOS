@@ -11,6 +11,7 @@ and skip cleanly when it is unavailable.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -232,3 +233,65 @@ def test_unavailable_postgres_raises_not_fallback() -> None:
     )
     with pytest.raises(PersistenceUnavailable):
         PostgresTaskStateStore(cfg.dsn, connect_timeout_s=1)
+
+
+# --------------------------------------------------------------------------- #
+# Portable model-server configuration (post-release hardening)
+# --------------------------------------------------------------------------- #
+
+
+def _write_tmp_config(tmp_path: Path) -> Path:
+    """Temporary YAML config with non-default inference settings."""
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "inference:\n  llama_server_bin: from-yaml/llama-server\n  models_dir: from-yaml-models\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_inference_yaml_config_explicit_path(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """An explicit llama_server_bin in a YAML config file is preserved."""
+    monkeypatch.delenv("NOMADICOS_LLAMA_SERVER_BIN", raising=False)
+    monkeypatch.delenv("NOMADICOS_MODELS_DIR", raising=False)
+    cfg = load_config(str(_write_tmp_config(tmp_path)))
+    assert cfg.inference.llama_server_bin == "from-yaml/llama-server"
+    assert cfg.inference.models_dir == "from-yaml-models"
+
+
+def test_inference_env_overrides_yaml(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """Process env (NOMADICOS_*) wins over the YAML config file."""
+    monkeypatch.setenv("NOMADICOS_LLAMA_SERVER_BIN", "from-env/llama-server")
+    monkeypatch.setenv("NOMADICOS_MODELS_DIR", "from-env-models")
+    cfg = load_config(str(_write_tmp_config(tmp_path)))
+    assert cfg.inference.llama_server_bin == "from-env/llama-server"
+    assert cfg.inference.models_dir == "from-env-models"
+
+
+def test_inference_defaults_are_portable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without any override the llama binary resolves from PATH by name, and
+    the models directory is a relative, machine-independent default."""
+    monkeypatch.delenv("NOMADICOS_LLAMA_SERVER_BIN", raising=False)
+    monkeypatch.delenv("NOMADICOS_MODELS_DIR", raising=False)
+    cfg = AppConfig()
+    assert cfg.inference.llama_server_bin == "llama-server"
+    assert cfg.inference.models_dir == "models"
+
+
+def test_inference_env_models_dir(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    """NOMADICOS_MODELS_DIR relocates the models directory (portable layout)."""
+    monkeypatch.setenv("NOMADICOS_MODELS_DIR", str(tmp_path / "my-models"))
+    cfg = load_config(str(_write_tmp_config(tmp_path)))
+    assert cfg.inference.models_dir == str(tmp_path / "my-models")
+
+
+def test_committed_config_has_no_machine_specific_paths() -> None:
+    """The committed default configuration must not contain personal
+    absolute paths (post-release portability invariant)."""
+    repo_root = Path(__file__).resolve().parents[2]
+    text = (repo_root / "config" / "config.yaml").read_text(encoding="utf-8")
+    for line in text.splitlines():
+        stripped = line.split("#")[0]
+        assert "C:/" not in stripped and "C:\\" not in stripped, (
+            f"machine-specific path in committed config: {line}"
+        )

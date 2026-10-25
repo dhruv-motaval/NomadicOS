@@ -454,17 +454,41 @@ class NomadicApp:
                 self.registry.register(record.model_copy(update={"context_window": context_size}))
 
     def _default_model_path(self) -> Path | None:
+        """Resolve the model file for auto-starting the default engine.
+
+        Path-resolution contract (single, explicit):
+
+        - A configured model-role value (``models.*``) is a path resolved
+          against the PROCESS WORKING DIRECTORY (the repository root in
+          normal CLI use); an absolute path is honored as-is. It is NOT
+          joined onto ``inference.models_dir`` — existing configurations
+          that write ``models/<file>.gguf`` keep working unchanged, and the
+          ``models/`` prefix in the role is never double-joined.
+        - ``inference.models_dir`` (``NOMADICOS_MODELS_DIR``) is the
+          DISCOVERY directory: the registry scans it for owner-placed model
+          files, and it supplies the fallback file when no model role is
+          configured at all.
+        - A configured role that resolves to a missing file is an honest
+          absence: no other model file is silently substituted (§12). The
+          relocated models directory IS honored: when the role's relative
+          path is missing, ``models_dir / <role file name>`` is tried so a
+          relocated layout (NOMADICOS_MODELS_DIR) affects the actual lookup,
+          not merely the parsed configuration value.
+        """
         root = Path(self.config.inference.models_dir)
-        if not root.exists():
-            return None
-        # the owner-configured role is already a path relative to the repo root
-        # (e.g. "models/Spark-X2.5-4B-uncensored-Q4_K_M.gguf"), so resolve it
-        # directly rather than appending ".gguf" to models/
         role = self.config.models.reasoning or self.config.models.coding_worker
         if role:
             candidate = Path(role)
             if candidate.exists():
                 return candidate
+            relocated = root / candidate.name
+            if relocated.exists():
+                return relocated
+            # a configured role that does not exist is an honest absence:
+            # never substitute a different model file (§12)
+            return None
+        if not root.exists():
+            return None
         ggufs = sorted(root.glob("*.gguf"))
         return ggufs[0] if ggufs else None
 
