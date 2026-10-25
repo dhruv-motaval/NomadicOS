@@ -7,7 +7,10 @@ services:
       POSTGRES_PASSWORD: nomadicos
       POSTGRES_DB: nomadicos
     ports:
-      - "5432:5432"
+      # 5432 is occupied by the owner's local PostgreSQL/pgAdmin; the
+      # NomadicOS dev database uses 5433 (integration tests read
+      # NOMADICOS_TEST_DSN, defaulting to this port)
+      - "5433:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:

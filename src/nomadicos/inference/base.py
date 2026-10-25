@@ -29,6 +29,8 @@ class GenerationRequest(Contract):
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     max_tokens: int | None = Field(default=None, gt=0)
     timeout_s: float | None = Field(default=None, gt=0)
+    #: optional base64-encoded images for vision/multimodal models
+    images: list[str] = Field(default_factory=list)
 
 
 class GenerationResponse(Contract):

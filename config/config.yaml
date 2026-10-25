@@ -1,0 +1,20 @@
+models:
+  reasoning: models/Spark-X2.5-4B-uncensored-Q4_K_M.gguf
+  coding_worker: models/Spark-X2.5-4B-uncensored-Q4_K_M.gguf
+  worker: models/Spark-X2.5-4B-uncensored-Q4_K_M.gguf
+inference:
+  default_engine: llamacpp
+  fallback_engine: ollama
+  ollama_base_url: http://localhost:11434
+  llama_server_bin: C:/Ai/llama.cpp/llama-server.exe
+  models_dir: models
+autonomy:
+  profile: FULL_PC_AUTONOMY
+  capabilities:
+    - filesystem.*
+    - terminal.*
+    - git.*
+    - process.*
+    - desktop.*
+routing:
+  mode: BALANCED

@@ -59,6 +59,18 @@ class TaskRuntime:
     context_builder: ContextBuilder | None = None
     #: optional Critic (SPEC §10): evaluator only - no authority, no execution
     critic: Any = None
+    #: optional memory service (Phase 11G): DATA-only context + read seams;
+    #: it can never authorize, execute, or route (memory is not authority)
+    memory: Any = None
+    #: Phase 1 brain integration: when True the propose node runs the
+    #: NomadicBrain Actor<->Monitor pipeline for non-chat steps and routes
+    #: accepted candidates through the SAME untrusted parse/validate/
+    #: authorize path as raw model output (see brain_adapter).
+    brain_actor: bool = False
+    #: Phase 4A: when True NomadicBrain proposes the mission task graph and
+    #: the runtime schedules eligible tasks one at a time. Legacy planner
+    #: path unchanged when False.
+    brain_planner_enabled: bool = False
     _issued: dict[str, AuthorizedAction] = field(default_factory=dict, repr=False)
 
     # ------------------------------------------- issued-artifact table ---

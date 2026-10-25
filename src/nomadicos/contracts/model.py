@@ -56,6 +56,11 @@ class ModelRecord(Contract):
     #: path/file name for models_dir-sourced entries; engine name otherwise.
     location: str = ""
     params: dict[str, Any] = Field(default_factory=dict)
+    #: KNOWN serving resource requirements (Phase 14C-G) — evidence-backed
+    #: when the owner/runtime provides them; None = unknown (never guessed;
+    #: static size_hint_b is a ranking proxy, NOT VRAM/RAM usage)
+    vram_bytes: int | None = Field(default=None, gt=0)
+    ram_bytes: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def _unique_roles(self) -> ModelRecord:

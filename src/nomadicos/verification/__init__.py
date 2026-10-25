@@ -16,11 +16,19 @@ from nomadicos.verification.evidence import EvidenceContext
 from nomadicos.verification.goal import PredicateGoalVerifier
 from nomadicos.verification.predicates import MAX_DEPTH, evaluate_goal_predicate
 from nomadicos.verification.step import PredicateStepVerifier
+from nomadicos.verification.vision import (
+    UnavailableVisionVerifier,
+    VisionGoalVerifier,
+    vision_verifier,
+)
 
 __all__ = [
-    "MAX_DEPTH",
     "EvidenceContext",
+    "MAX_DEPTH",
     "PredicateGoalVerifier",
     "PredicateStepVerifier",
+    "UnavailableVisionVerifier",
+    "VisionGoalVerifier",
     "evaluate_goal_predicate",
+    "vision_verifier",
 ]

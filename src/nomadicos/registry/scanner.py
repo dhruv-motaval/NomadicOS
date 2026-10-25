@@ -19,7 +19,15 @@ MODEL_FILE_EXTENSIONS = {".gguf", ".safetensors"}
 _ROLE_CAPS: dict[str, list[CapabilityTag]] = {
     "tiny": [CapabilityTag.TEXT],
     "worker": [CapabilityTag.TEXT, CapabilityTag.TOOL_USE],
-    "coding": [CapabilityTag.TEXT, CapabilityTag.TOOL_USE, CapabilityTag.CODING],
+    # Coding workers are the executable test-capable role.  The analyzer
+    # adds TESTING for a real test request, so omitting it here made healthy
+    # coding models unroutable for the very work they are meant to perform.
+    "coding": [
+        CapabilityTag.TEXT,
+        CapabilityTag.TOOL_USE,
+        CapabilityTag.CODING,
+        CapabilityTag.TESTING,
+    ],
     "reasoning": [CapabilityTag.TEXT, CapabilityTag.REASONING, CapabilityTag.TOOL_USE],
     "critic": [CapabilityTag.TEXT, CapabilityTag.REASONING, CapabilityTag.CODING],
     "evaluator": [CapabilityTag.TEXT, CapabilityTag.REASONING, CapabilityTag.TESTING],
@@ -113,24 +121,41 @@ class RegistryBuilder:
             for record in scan_models_dir(models_dir, engine=default_dir_engine):
                 configured = self._role_for(record.model_id)
                 enriched = record.model_copy(update={"roles": configured})
-                registry.register(enriched)
+                # the dir scan is a FALLBACK: it must never downgrade a record
+                # whose live engine health is already known. An owner-placed
+                # file is not proof of serving availability (§12), so a
+                # HEALTHY engine record stays authoritative.
+                registry.register_dir(enriched)
         return registry
 
     async def sync_from_engine(
         self, registry: ModelRegistry, engine: InferenceEngine
     ) -> ModelRegistry:
-        """Register models an engine reports, enriched by config roles."""
+        """Register models an engine reports, enriched by config roles.
+
+        Live engines list model names only; a context window is not reported
+        there, so it is derived from the name the same way ``scan_models_dir``
+        derives it for owner-placed files (a size proxy, never a measured
+        serving claim). A bare name with no size hint falls back to the
+        contract default (8192) rather than being guessed.
+
+        Model ids are normalised to forward slashes so an engine-reported path
+        (e.g. ``models\\file.gguf`` on Windows) matches the owner-configured
+        role and the models-dir scan record under one identity.
+        """
         health = await engine.health()
         for model in health.models:
-            roles = self._role_for(model)
+            model_id = model.replace("\\", "/")
+            roles = self._role_for(model_id)
             registry.register(
                 ModelRecord(
-                    model_id=model,
+                    model_id=model_id,
                     engine=engine.engine_id,  # type: ignore[arg-type]
                     roles=roles,  # type: ignore[arg-type]
                     capabilities=caps_for_roles(roles),
                     health=health.status,
                     source=engine.engine_id,  # type: ignore[arg-type]
+                    context_window=int((estimate_size_b(model_id) or 4) * 2048),
                 )
             )
         return registry

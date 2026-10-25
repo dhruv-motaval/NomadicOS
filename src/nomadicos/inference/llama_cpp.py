@@ -41,11 +41,16 @@ class LlamaServerLauncher:
         *,
         host: str = "127.0.0.1",
         port: int = 8080,
+        context_size: int = 8192,
         extra_args: list[str] | None = None,
     ) -> None:
         self.binary = binary
         self.host = host
         self.port = port
+        # The context size the server is actually configured with. This is the
+        # runtime's configured context setting (§14D-1): it is authoritative
+        # for the registry record, unlike the name-derived size proxy.
+        self.context_size = context_size
         self.extra_args = list(extra_args or [])
         self._proc: subprocess.Popen[bytes] | None = None
 
@@ -57,25 +62,39 @@ class LlamaServerLauncher:
     def base_url(self) -> str:
         return f"http://{self.host}:{self.port}"
 
-    def start(self, model_path: str | Path, context_size: int = 8192) -> None:
+    def start(self, model_path: str | Path, context_size: int | None = None) -> None:
         if self._proc is not None and self._proc.poll() is None:
             raise ModelError("llama-server already running")
         path = Path(model_path)
+        # resolve a relative path against the CWD so the server can find the
+        # file regardless of where the launcher process was started from
+        if not path.is_absolute() and not path.exists():
+            alt = Path.cwd() / path
+            if alt.exists():
+                path = alt
         if not path.exists():
             raise ModelError(f"model file not found: {path}")
         if not self.available(self.binary):
             raise EngineUnavailable(f"{self.binary!r} not on PATH")
+        if context_size is not None:
+            self.context_size = context_size
+        # report the model under the owner-configured id (forward slashes) so
+        # the registry identity matches the role, even on Windows
+        if path.is_relative_to(Path.cwd()):
+            reported = path.relative_to(Path.cwd()).as_posix()
+        else:
+            reported = str(path).replace("\\", "/")
         self._proc = subprocess.Popen(  # noqa: S603
             [
                 self.binary,
                 "-m",
-                str(path),
+                reported,
                 "--host",
                 self.host,
                 "--port",
                 str(self.port),
                 "--ctx-size",
-                str(context_size),
+                str(self.context_size),
                 *self.extra_args,
             ],
             stdout=subprocess.DEVNULL,

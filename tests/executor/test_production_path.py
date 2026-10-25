@@ -140,8 +140,16 @@ async def test_e2e_list_move_delete(granted: Chain, tmp_path: Path) -> None:
     r = await granted.drive(fs_json("delete", {"path": "b.txt"}), ctx)
     assert r.status is ExecutionStatus.SUCCEEDED and r.evidence["exists_after"] is False
     again = await granted.drive(fs_json("delete", {"path": "b.txt"}), ctx)
-    assert again.status is ExecutionStatus.FAILED
-    assert again.failure is Failure.ACTION_FAILED
+    # Phase 13D: the identical proposal is the SAME action identity - the
+    # durable ledger blocks re-execution instead of repeating the side effect.
+    assert again.evidence["duplicate_blocked"] is True
+    # a genuinely fresh action (different task identity) still executes and
+    # honestly fails on the missing file
+    fresh = await granted.drive(
+        fs_json("delete", {"path": "b.txt"}), granted.ctx(tmp_path, "task_alpha2")
+    )
+    assert fresh.status is ExecutionStatus.FAILED
+    assert fresh.failure is Failure.ACTION_FAILED
 
 
 # ------------------------------------------------------ real terminal -----

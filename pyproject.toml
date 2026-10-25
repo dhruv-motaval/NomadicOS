@@ -49,6 +49,7 @@ markers = [
     "security: authority and completion-integrity invariant tests",
     "slow: long-running tests",
     "integration: requires external services such as PostgreSQL",
+    "ollama: requires a live local Ollama embedding service (skipped when unavailable)",
 ]
 
 [tool.ruff]
@@ -67,5 +68,5 @@ no_implicit_optional = true
 check_untyped_defs = true
 
 [[tool.mypy.overrides]]
-module = ["pyautogui", "PIL", "PIL.*", "psutil"]
+module = ["pyautogui", "PIL", "PIL.*", "psutil", "docker", "docker.*"]
 ignore_missing_imports = true

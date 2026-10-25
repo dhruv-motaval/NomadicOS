@@ -7,7 +7,9 @@ configuration, exposes run/resume, and never touches authority directly
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -18,24 +20,39 @@ from nomadicos.action_ir.validation import ProposalValidator
 from nomadicos.authority.authorization import AuthorizationService
 from nomadicos.authority.policy import CapabilityPolicy
 from nomadicos.authority.store import AuthorityStore
+from nomadicos.contracts.benchmark import BenchmarkRecord, BenchmarkTask
 from nomadicos.contracts.core import Goal, TaskStatus
+from nomadicos.contracts.execution import ExecutionStatus
+from nomadicos.contracts.model import ModelHealth
 from nomadicos.contracts.verification import VerificationLevel
+from nomadicos.evaluation.benchmarking import BenchmarkRunner, TaskRunOutcome
+from nomadicos.evaluation.suite import BENCHMARK_VERSION
 from nomadicos.executor.dispatch import Executor
 from nomadicos.inference.base import InferenceEngine
-from nomadicos.inference.llama_cpp import LlamaCppEngine
+from nomadicos.inference.llama_cpp import LlamaCppEngine, LlamaServerLauncher
 from nomadicos.inference.mock import MockEngine
 from nomadicos.inference.ollama import OllamaEngine
 from nomadicos.kernel.config import AppConfig
-from nomadicos.kernel.events import EventLogger
-from nomadicos.orchestration.checkpointing import make_saver as _make_saver
+from nomadicos.kernel.events import EventLogger, EventType
+from nomadicos.memory.runtime import build_runtime_memory
+from nomadicos.orchestration import memory_hooks
+from nomadicos.orchestration.checkpointing import make_durable_saver
 from nomadicos.orchestration.graph import build_graph
 from nomadicos.orchestration.planner import Planner, StructuralPlanner
+from nomadicos.orchestration.reconciliation import reconcile_resume
 from nomadicos.orchestration.runtime import TaskRuntime
-from nomadicos.registry.model_registry import ModelRegistry
+from nomadicos.persistence import TaskRecord, make_task_store
+from nomadicos.persistence.contracts import AuthorizedActionRef, new_record, now_iso
+from nomadicos.persistence.errors import PersistenceCorrupt, PersistenceError
+from nomadicos.persistence.ledger import make_execution_ledger
+from nomadicos.persistence.metrics import ModelMetricStore, PostgresModelMetricStore
+from nomadicos.registry.model_registry import ModelRegistry, ProductionSample
 from nomadicos.registry.scanner import RegistryBuilder
 from nomadicos.router.escalation import EscalationPolicy
 from nomadicos.router.selection import ModelSelector
 from nomadicos.tools.base import ToolRegistry
+from nomadicos.tools.desktop import DesktopTool
+from nomadicos.tools.docker import docker_tool
 from nomadicos.tools.filesystem import FilesystemTool
 from nomadicos.tools.terminal import ProcessSupervisor, TerminalTool
 
@@ -57,6 +74,9 @@ class RunSummary:
     critic_feedback_present: bool = False
     last_observations: list[str] = field(default_factory=list)
     failures: list[dict[str, Any]] = field(default_factory=list)
+    #: Phase 11G observability: episodic/working memory result metadata only;
+    #: it never changes task success semantics
+    memory_note: str = ""
 
     def waiting_owner(self) -> bool:
         return self.status is TaskStatus.WAITING_OWNER
@@ -72,6 +92,9 @@ class NomadicApp:
         planner: Planner | None = None,
         workspace_root: str | Path | None = None,
         state_dir: str | Path | None = None,
+        brain_actor: bool = False,
+        brain_planner: bool = False,
+        workspace_per_task: bool = True,
     ) -> None:
         self.config = config or AppConfig()
         cfg = self.config
@@ -81,6 +104,11 @@ class NomadicApp:
             "llamacpp": LlamaCppEngine(
                 base_url=cfg.inference.llama_server_url,
                 default_timeout_s=cfg.inference.request_timeout_s,
+                launcher=LlamaServerLauncher(
+                    binary=cfg.inference.llama_server_bin,
+                    host="127.0.0.1",
+                    port=cfg.inference.llama_port,
+                ),
             ),
             "ollama": OllamaEngine(
                 base_url=cfg.inference.ollama_base_url,
@@ -91,11 +119,39 @@ class NomadicApp:
         if extra_engines:
             engines.update(extra_engines)
         self.engines = engines
-        self.registry = registry or ModelRegistry(self.log)
+        self._metric_store: ModelMetricStore | None = None
+        if registry is not None:
+            self.registry = registry
+            # Phase 14B: benchmark records must persist through the same
+            # engine-scoped MetricStore regardless of how the registry was
+            # built; dsn set ⇒ database required (14A availability semantics)
+            if cfg.persistence.dsn and registry.metric_store is None:
+                self._metric_store = PostgresModelMetricStore(cfg.persistence.dsn)
+                registry.wire_metric_store(self._metric_store)
+        else:
+            if cfg.persistence.dsn:
+                # Phase 14A: durable model metrics when PostgreSQL is the
+                # configured durable store (same availability semantics as
+                # the task-state store: dsn set ⇒ database required)
+                self._metric_store = PostgresModelMetricStore(cfg.persistence.dsn)
+            self.registry = ModelRegistry(
+                self.log,
+                metric_store=self._metric_store,
+                metric_ttl_s=cfg.routing.metric_ttl_s,
+            )
         self.tools = ToolRegistry()
         self.supervisor = ProcessSupervisor()
         self.tools.register(FilesystemTool())
         self.tools.register(TerminalTool(self.supervisor))
+        # Phase 12A: desktop capability behind the same executor boundary;
+        # platform adapter selected by backend.default_backend() (win32 here,
+        # honest-unavailable elsewhere). Registration only — the tool gains
+        # no authority and runs only on AuthorizedAction artifacts.
+        self.tools.register(DesktopTool())
+        # Docker tool (SPEC §22-23): container operations via Docker Engine API.
+        # Platform adapter selected by docker_tool() (real client or honest
+        # unavailability). Runs only on AuthorizedAction artifacts.
+        self.tools.register(docker_tool())
         self.validator = ProposalValidator(self.tools, self.log)
         self.policy = CapabilityPolicy(
             self.store,
@@ -103,7 +159,11 @@ class NomadicApp:
             hard_denied_resources=list(cfg.autonomy.denied_resources),
         )
         self.authz = AuthorizationService(self.store, self.policy, self.log)
-        self.executor = Executor(self.tools, self.store, self.log)
+        # Phase 13D: durable single-use execution ledger (replay protection
+        # across restarts); DATA only - it never authorizes or decides.
+        self.executor = Executor(
+            self.tools, self.store, self.log, ledger=make_execution_ledger(cfg.persistence)
+        )
         self.selector = ModelSelector(cfg.routing)
         runtime_workspace = Path(workspace_root or cfg.persistence.task_workspace)
         # Phase 8: production verifiers are the DEFAULT, injected through the
@@ -126,13 +186,198 @@ class NomadicApp:
             engines=engines,
             workspace_root=runtime_workspace,
             default_engine=cfg.inference.default_engine,
-            step_verifier=PredicateStepVerifier(runtime_workspace),
-            goal_verifier=PredicateGoalVerifier(runtime_workspace),
+            step_verifier=PredicateStepVerifier(runtime_workspace, per_task=workspace_per_task),
+            goal_verifier=PredicateGoalVerifier(runtime_workspace, per_task=workspace_per_task),
             full_pc=self.store.has_full_autonomy,
+            brain_actor=brain_actor,
+            brain_planner_enabled=brain_planner,
+            workspace_per_task=workspace_per_task,
         )
-        self.checkpointer = _make_saver()
+        self.memory_runtime = build_runtime_memory(
+            Path(state_dir or cfg.persistence.state_dir), cfg.memory, logger=self.log
+        )
+        self.runtime.memory = self.memory_runtime
+        # Phase 13B: durable graph checkpoints behind the existing seam.
+        # Orchestration state is DATA: restore re-enters the normal
+        # validate -> authorize -> execute -> verify pipeline; nothing here
+        # creates SUCCESS or authority (SPEC §34, §47).
+        self.checkpointer = make_durable_saver(cfg.persistence)
         self.graph = build_graph(self.runtime, checkpointer=self.checkpointer)
+        # Phase 13C: durable task truth (SPEC §34) separate from the
+        # orchestration checkpoint; status stored as DATA only.
+        self.task_store = make_task_store(cfg.persistence)
         self._run_dir = Path(state_dir or cfg.persistence.state_dir) / "runs"
+        self._bench_counter = 0
+
+    # ------------------------------------------------------- restart ------
+    def _record_durable_task(self, summary: RunSummary, final: dict[str, Any]) -> None:
+        """Upsert durable task truth (SPEC §34, §35 auditability, Phase 13C/G).
+
+        TaskRecord.status is DATA copied from the task state the graph
+        produced - persistence never generates SUCCESS. Best-effort: a
+        durable-store failure never changes the task outcome. The record
+        carries the §35 audit evidence: proposals (references), issued
+        authorized actions (non-executable refs), executions,
+        verifications, and the correlated event log."""
+        try:
+            existing = self.task_store.load_task(summary.task_id)
+            if existing is None:
+                record = new_record(
+                    summary.task_id, str(final.get("goal_text", summary.task_id))[:2000]
+                )
+            else:
+                record = existing
+            task_id = summary.task_id
+            proposals = list(final.get("proposals") or [])[-100:]
+            executed_fps = {str(e.action_fingerprint) for e in (final.get("executions") or [])}
+            action_refs = []
+            for proposal in proposals:
+                action_refs.append(
+                    AuthorizedActionRef(
+                        action_id="",
+                        proposal_id=str(proposal.id),
+                        fingerprint=str(proposal.fingerprint())[:64],
+                        capability=f"{proposal.tool}.{proposal.operation}",
+                        authority_epoch=0,
+                        # lifecycle label from the state alone (not an
+                        # authority statement): the proposal was executed
+                        # under a real grant, or is still only proposed
+                        granted_by=(
+                            "authorized"
+                            if str(proposal.fingerprint()) in executed_fps
+                            else "proposed"
+                        ),
+                    )
+                )
+            audit_events = []
+            for event in self.log.events(task_id)[-500:]:
+                raw = getattr(event, "to_dict", None)
+                payload = dict(raw()) if callable(raw) else {"raw": str(event)[:200]}
+                if not payload.get("timestamp"):
+                    payload["timestamp"] = now_iso()
+                audit_events.append(payload)
+            update = record.model_copy(
+                update={
+                    "status": summary.status,
+                    "outcome_note": (summary.outcome_note or "")[:400],
+                    "executions": list(final.get("executions") or [])[-200:],
+                    "verifications": list(final.get("verifications") or [])[-100:],
+                    "authorized_actions": action_refs[-100:],
+                    "audit_events": audit_events,
+                    "created_at": existing.created_at if existing else record.created_at,
+                    "updated_at": now_iso(),
+                }
+            )
+            self.task_store.save_task(update)
+        except PersistenceError:
+            pass  # durable task truth is best-effort; the checkpoint remains
+
+    def list_durable_tasks(self) -> list[dict[str, Any]]:
+        """Durable task discovery: task-state records + persisted checkpoint
+        threads. No second task registry - these ARE the durable stores."""
+        tasks: dict[str, dict[str, Any]] = {}
+        for record_id in self.task_store.task_ids(limit=200):
+            try:
+                record = self.task_store.load_task(record_id)
+            except PersistenceError:
+                record = None
+            if record is not None:
+                tasks[record.task_id] = {
+                    "task_id": record.task_id,
+                    "status": record.status.value,
+                    "source": "task-state",
+                }
+        for thread in self.checkpointer.thread_ids():
+            if not thread.startswith("nomadic:"):
+                continue
+            task_id = thread.split(":", 1)[-1]
+            if task_id in tasks:
+                continue
+            values = self.graph.get_state({"configurable": {"thread_id": thread}}).values or {}
+            status = values.get("task_status")
+            if status is not None:
+                tasks[task_id] = {
+                    "task_id": task_id,
+                    "status": str(status),
+                    "source": "checkpoint",
+                }
+        return [tasks[key] for key in sorted(tasks)]
+
+    async def resume_task(self, task_id: str, *, thread_prefix: str = "nomadic") -> RunSummary:
+        """Safe restart lifecycle (SPEC §47): restore DATA, then continue
+        through the normal validate -> authorize -> execute -> verify
+        pipeline. Never replays a serialized action; terminal tasks are
+        returned as completed DATA without re-invoking the graph."""
+        config = {"configurable": {"thread_id": f"{thread_prefix}:{task_id}"}}
+        values = dict(self.graph.get_state(config).values or {})
+        record = None
+        try:
+            record = self.task_store.load_task(task_id)
+        except PersistenceError:
+            record = None
+        terminal = {"SUCCESS", "FAILED", "BLOCKED", "PARTIAL"}
+        if record is not None and record.status.value in terminal:
+            return self._restored_summary(record)
+        if values.get("task_status") is not None:
+            summary = self._summarize(values)
+            if summary.status.value in ("SUCCESS", "FAILED", "BLOCKED", "PARTIAL"):
+                self._persist(summary)
+                return summary
+            if summary.status is TaskStatus.WAITING_OWNER:
+                return summary  # owner decision pending; never auto-answered
+        if not values and record is None:
+            raise PersistenceCorrupt(f"no durable task {task_id!r} to resume")
+        if not values:
+            if record is None:
+                raise PersistenceCorrupt(f"no durable task {task_id!r} to resume")
+            return self._restored_summary(record)
+        self.log.log(EventType.RECOVERY_STARTED, task_id=task_id, result="RESUME")
+
+        # Phase 3: crash-safe recovery reconciliation before resuming the
+        # graph. Classifies the restart situation from durable/observable
+        # evidence (checkpoint state + durable ledger) and applies state
+        # patches or blocks the resume. Never replays a serialized action.
+        reconciliation = reconcile_resume(values, self.runtime, record)
+        if reconciliation.should_block:
+            block_patches = dict(reconciliation.patches)
+            block_patches["task_status"] = TaskStatus.BLOCKED
+            block_patches["outcome_note"] = reconciliation.outcome_note
+            self.graph.update_state(config, block_patches)
+            final_values = dict(self.graph.get_state(config).values or {})
+            summary = self._summarize(final_values)
+            self._persist(summary)
+            return summary
+
+        # Apply reconciliation patches (REAUTHORIZE_ACTION, RESTORE_RECORDED_RESULT,
+        # RESUME_PLANNING) to the durable checkpoint before continuing.
+        if reconciliation.patches:
+            self.graph.update_state(config, reconciliation.patches)
+
+        final = await self.graph.ainvoke(None, config)
+        summary = self._summarize(final)
+        self._memory_after_task(summary, final)
+        self._record_durable_task(summary, final)
+        self._persist(summary)
+        return summary
+
+    def _restored_summary(self, record: TaskRecord) -> RunSummary:
+        """Completed task restored as DATA: historical outcome only, no
+        re-execution, no new SUCCESS event."""
+        return RunSummary(
+            task_id=record.task_id,
+            status=record.status,
+            outcome_note=record.outcome_note or "restored completed task",
+        )
+
+    # ------------------------------------------------- memory accessors ---
+    @property
+    def memory_store(self) -> Any:
+        """The durable memory store (DATA boundary) for hosts/tests."""
+        return self.memory_runtime.store
+
+    @property
+    def working_memory(self) -> Any:
+        return self.memory_runtime.working
 
     # ------------------------------------------------------- discovery ----
     async def sync_models(self) -> None:
@@ -148,7 +393,82 @@ class NomadicApp:
             except Exception:
                 continue  # engine down: honest absence, not an error
         builder.build(self.registry, models_dir=self.config.inference.models_dir)
+        # Best-effort auto-start of the DEFAULT engine: if the owner has the
+        # binary and a model file, NomadicOS starts the server itself so the
+        # first task does not wait on a hand-started process. A launcher that
+        # fails (binary missing, port taken, model incompatible) is an honest
+        # absence — the router falls back by configuration.
+        await self._ensure_default_engine()
 
+    async def _ensure_default_engine(self) -> None:
+        default = self.config.inference.default_engine
+        engine = self.engines.get(default)
+        if engine is None:
+            return
+        launcher = getattr(engine, "_launcher", None)
+        try:
+            health = await engine.health()
+        except Exception:
+            health = None
+        if health is not None and health.status is ModelHealth.HEALTHY:
+            # server already up: record its configured context size (§14D-1)
+            if launcher is not None:
+                self._record_context(default, launcher.context_size)
+            return
+        if launcher is None:
+            return
+        model_path = self._default_model_path()
+        if model_path is None:
+            return
+        # pass a forward-slash relative path so the server reports the model under
+        # the owner-configured id (models/<file>.gguf) rather than a
+        # backslash path; the launcher resolves it against the CWD at start
+        # time and the registry normalises ids to forward slashes
+        try:
+            rel = model_path.relative_to(Path.cwd()).as_posix()
+            model_arg = str(rel)
+        except ValueError:
+            model_arg = str(model_path).replace("\\", "/")
+        try:
+            launcher.start(model_arg, context_size=8192)
+            # give the server a moment to bind before reporting health
+            await asyncio.sleep(1.0)
+        except Exception:
+            return
+        # the launcher's configured context size is the runtime's actual
+        # context setting (§14D-1): it is authoritative for the registry
+        # record, unlike the name-derived size proxy used before the engine
+        # was known to serve the model
+        self._record_context(default, launcher.context_size)
+
+    def _record_context(self, engine: str, context_size: int) -> None:
+        """Record the runtime's configured context size for an engine.
+
+        The launcher's ``--ctx-size`` is the runtime's ACTUAL context setting
+        (§14D-1). It is authoritative for the registry record, unlike the
+        name-derived size proxy used before the engine was known to serve the
+        model — advertised context length is not the same as configured.
+        """
+        for record in self.registry.enabled():
+            if record.engine == engine and record.context_window != context_size:
+                self.registry.register(record.model_copy(update={"context_window": context_size}))
+
+    def _default_model_path(self) -> Path | None:
+        root = Path(self.config.inference.models_dir)
+        if not root.exists():
+            return None
+        # the owner-configured role is already a path relative to the repo root
+        # (e.g. "models/Spark-X2.5-4B-uncensored-Q4_K_M.gguf"), so resolve it
+        # directly rather than appending ".gguf" to models/
+        role = self.config.models.reasoning or self.config.models.coding_worker
+        if role:
+            candidate = Path(role)
+            if candidate.exists():
+                return candidate
+        ggufs = sorted(root.glob("*.gguf"))
+        return ggufs[0] if ggufs else None
+
+    # ------------------------------------------------------------ runs ----
     # ------------------------------------------------------------ runs ----
     async def run_goal(
         self,
@@ -158,17 +478,25 @@ class NomadicApp:
         constraints: list[str] | None = None,
         predicates: list[dict[str, Any]] | None = None,
         thread_prefix: str = "nomadic",
+        record_production: bool = True,
     ) -> RunSummary:
         goal = Goal(objective=goal_text, constraints=constraints or [])
+        task = task_id or goal.id
         initial: dict[str, Any] = {
             "goal_text": goal_text,
             "goal_constraints": constraints or [],
             "goal_predicates": predicates or [],
-            "task_id": task_id or goal.id,
+            "task_id": task,
         }
-        graph_config = {"configurable": {"thread_id": f"{thread_prefix}:{task_id or goal.id}"}}
+        started = time.monotonic()
+        graph_config = {"configurable": {"thread_id": f"{thread_prefix}:{task}"}}
+        memory_hooks.seed_working(self.memory_runtime, task, goal_text)
         final = await self.graph.ainvoke(initial, graph_config)
         summary = self._summarize(final)
+        if record_production:
+            self._record_production(final, summary, started)
+        self._memory_after_task(summary, final)
+        self._record_durable_task(summary, final)
         self._persist(summary)
         return summary
 
@@ -180,6 +508,7 @@ class NomadicApp:
         graph_config = {"configurable": {"thread_id": f"{thread_prefix}:{task_id}"}}
         final = await self.graph.ainvoke(Command(resume=decision), graph_config)
         summary = self._summarize(final)
+        self._record_durable_task(summary, final)
         self._persist(summary)
         return summary
 
@@ -203,6 +532,8 @@ class NomadicApp:
 
     async def aclose(self) -> None:
         self.supervisor.kill_all()
+        if self._metric_store is not None:
+            self._metric_store.close()
         for engine in self.engines.values():
             await engine.aclose()
 
@@ -326,6 +657,139 @@ class NomadicApp:
                 r.critic,
             ) = saved
 
+    # --------------------------------------------------------- benchmark ---
+    async def run_benchmark(self, model_id: str, task: BenchmarkTask) -> BenchmarkRecord:
+        """One deterministic benchmark through the SAME production lifecycle
+        as a normal task (Phase 14B): analyze -> route -> model -> Action IR
+        -> validate -> authorize -> execute -> observe -> StepVerifier ->
+        GoalVerifier. The benchmark never bypasses authorization or
+        verification, never invokes tools directly, and never declares
+        success itself: success is the GoalVerifier verdict ONLY.
+
+        Isolation: a dedicated temporary benchmark workspace with
+        benchmark-owned memory and benchmark-owned task truth; the user's
+        real workspace, repository source files, normal persistent memory,
+        authority state, and unrelated user task state are never touched.
+        Cleanup is deterministic (temp workspace removed in finally).
+
+        The outcome is recorded through the existing BenchmarkRunner seam
+        into the engine-scoped MetricStore (Phase 14A): never merged across
+        engines, never invented."""
+        import shutil
+        import tempfile
+        import time
+
+        from nomadicos.verification.goal import PredicateGoalVerifier
+        from nomadicos.verification.step import PredicateStepVerifier
+
+        model = self.registry.get(model_id)
+        runner = BenchmarkRunner(
+            self.registry, self.runtime.engine_for(model_id), BENCHMARK_VERSION
+        )
+        bench_root = Path(tempfile.mkdtemp(prefix="nomadic-bench-"))
+        for rel_path, content in task.workspace_files.items():
+            target = bench_root / rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+        bench_memory = build_runtime_memory(
+            bench_root / "memory", self.config.memory, logger=self.log
+        )
+        bench_persistence = self.config.persistence.model_copy(
+            update={"state_dir": str(bench_root / "state")}
+        )
+        self._bench_counter += 1
+        task_id = f"{task.id}-{self._bench_counter:04d}"
+        r = self.runtime
+        saved = (
+            r.workspace_root,
+            r.workspace_per_task,
+            r.step_verifier,
+            r.goal_verifier,
+            r.memory,
+            self.memory_runtime,
+            self._run_dir,
+            self.task_store,
+        )
+        try:
+            r.workspace_root = bench_root
+            r.workspace_per_task = False
+            r.step_verifier = PredicateStepVerifier(bench_root, per_task=False)
+            r.goal_verifier = PredicateGoalVerifier(bench_root, per_task=False)
+            r.memory = bench_memory
+            self.memory_runtime = bench_memory
+            self._run_dir = Path(str(bench_root / "state")) / "runs"
+            self.task_store = make_task_store(bench_persistence)
+            started = time.monotonic()
+            summary = await self.run_goal(
+                task.objective,
+                task_id=task_id,
+                constraints=[],
+                predicates=task.goal_predicates
+                or [{"type": "tests_pass", "command": task.test_command}],
+                thread_prefix="bench",
+                # benchmarks feed BENCHMARK history, never production routing
+                # history (SPEC §33, §52C): the two evidence streams stay apart
+                record_production=False,
+            )
+            elapsed = time.monotonic() - started
+            final = self.graph.get_state({"configurable": {"thread_id": f"bench:{task_id}"}}).values
+            executions = list(final.get("executions") or [])
+            # action success != step success != goal success != benchmark
+            # success: the benchmark succeeds ONLY on GoalVerifier PASS
+            goal_verified = summary.goal_verdict == "PASS"
+            tool_success = (
+                all(e.status is ExecutionStatus.SUCCEEDED for e in executions)
+                if executions
+                else None
+            )
+            failure_type = None
+            if not goal_verified:
+                if summary.waiting_owner():
+                    failure_type = "OWNER_CONFLICT"
+                elif executions:
+                    failure_type = "GOAL_NOT_VERIFIED"
+                else:
+                    failure_type = "NO_ACTION_AUTHORIZED"
+            outcome = TaskRunOutcome(
+                success=goal_verified,
+                goal_verified=goal_verified,
+                tool_success=tool_success,
+                steps=summary.steps_used,
+                retries=summary.recoveries,
+                failure_type=failure_type,
+                total_latency_s=elapsed,
+            )
+            return runner.run_workspace_task(model, task, outcome)
+        finally:
+            (
+                r.workspace_root,
+                r.workspace_per_task,
+                r.step_verifier,
+                r.goal_verifier,
+                r.memory,
+                self.memory_runtime,
+                self._run_dir,
+                self.task_store,
+            ) = saved
+            shutil.rmtree(bench_root, ignore_errors=True)
+
+    # ------------------------------------------------------ memory seam ---
+    def _memory_after_task(self, summary: RunSummary, final: dict[str, Any]) -> None:
+        """End-of-task memory boundary (Phase 11G, DATA only): episodic
+        write from REAL verification artifacts + working-memory refresh.
+        A memory problem is isolated HERE: it can never change status,
+        verification, routing, or authority — it is observable only via
+        summary.memory_note (and the MEMORY_UPDATED event on success)."""
+        memory = self.runtime.memory
+        if memory is None:
+            summary.memory_note = "memory: not wired"
+            return
+        try:
+            summary.memory_note = memory_hooks.episodic_hook(memory, summary.task_id, final)
+            memory_hooks.update_working_from_state(memory, summary.task_id, final)
+        except Exception:  # noqa: BLE001 - memory boundary isolation
+            summary.memory_note = "memory: hook failed"
+
     # ---------------------------------------------------------- summary ---
     def _summarize(self, state: dict[str, Any]) -> RunSummary:
         executions = list(state.get("executions") or [])
@@ -355,6 +819,56 @@ class NomadicApp:
             last_observations=[o.summary for o in (state.get("observations") or [])[-3:]],
             failures=[f.model_dump(mode="json") for f in (state.get("failures") or [])][-3:],
         )
+
+    # ------------------------------------------------- production evidence --
+    def _record_production(
+        self, final: dict[str, Any], summary: RunSummary, started: float
+    ) -> None:
+        """Feed a finished task's REAL outcome back to the registry as a
+        production sample (Phase 14D-5).
+
+        This is DATA only (SPEC §33, §52C): it never authorizes, executes,
+        routes, or decides verification. The sample carries the model that
+        actually ran, the task bucket, whether the GOAL verifier passed, and
+        the end-to-end latency — including queueing, generation and
+        verification — so the router's reliability estimate is measured on
+        real task performance, not on generation-only timing.
+        """
+        model_id = summary.model_id
+        if not model_id:
+            return
+        try:
+            from nomadicos.router.analyzer import analyze_goal
+            from nomadicos.router.selection import task_bucket
+
+            goal = Goal(
+                objective=str(final.get("goal_text", summary.task_id)),
+                constraints=list(final.get("goal_constraints") or []),
+            )
+            reqs = analyze_goal(goal, base_latency=self.config.routing.mode)
+            bucket = task_bucket(reqs)
+            goal_verified = summary.goal_verdict == "PASS"
+            tool_success = (
+                all(e.status is ExecutionStatus.SUCCEEDED for e in (final.get("executions") or []))
+                if final.get("executions")
+                else None
+            )
+            self.registry.record_production(
+                ProductionSample(
+                    model_id=model_id,
+                    engine=self.registry.get(model_id).engine,
+                    task_class=bucket,
+                    success=goal_verified,
+                    goal_verified=goal_verified,
+                    tool_success=tool_success,
+                    steps=summary.steps_used,
+                    retries=summary.recoveries,
+                    latency_s=round(time.monotonic() - started, 3),
+                )
+            )
+        except Exception:
+            # a telemetry write must never change a task outcome
+            return
 
     def _persist(self, summary: RunSummary) -> None:
         try:

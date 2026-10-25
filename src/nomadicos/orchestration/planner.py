@@ -61,6 +61,8 @@ def _step_expectation(pred: GoalPredicate):
 
 class StructuralPlanner:
     def plan(self, goal: Goal, requirements: TaskRequirements) -> Plan:
+        from nomadicos.contracts.model import TaskType
+
         steps: list[PlanStep] = []
         for pred in goal.predicates:
             for leaf in _leaves(pred):
@@ -74,13 +76,37 @@ class StructuralPlanner:
                     )
                 )
         if not steps:
-            steps.append(
-                PlanStep(
-                    description=(
-                        f"Investigate and perform the actions needed for: "
-                        f"{goal.objective!r}. Then submit a completion claim."
+            if requirements.task_type is TaskType.CHAT:
+                steps.append(
+                    PlanStep(
+                        description=(
+                            f"Answer the user's question directly: {goal.objective!r}. "
+                            f"Then submit a completion claim with the answer."
+                        )
                     )
                 )
-            )
+            else:
+                # actionable goal without predicates: ONE generic step would
+                # end the task after a single proposal, so multi-phase work
+                # ("find X, then open it") structurally cannot complete. Give
+                # a bounded investigate -> act scaffold (SPEC §14: the plan
+                # ceiling stays independent of model output).
+                steps.append(
+                    PlanStep(
+                        description=(
+                            f"Investigate: gather the information needed for "
+                            f"{goal.objective!r} using the registered tools."
+                        )
+                    )
+                )
+                steps.append(
+                    PlanStep(
+                        description=(
+                            f"Act: perform the actions needed to complete "
+                            f"{goal.objective!r} using the registered tools. "
+                            f"Then submit a completion claim."
+                        )
+                    )
+                )
         # bounded plan (SPEC §14): hard ceiling independent of model output
         return Plan(task_id=goal.id, steps=steps[:24])

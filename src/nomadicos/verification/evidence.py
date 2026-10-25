@@ -77,9 +77,18 @@ class EvidenceContext:
 
     # --------------------------------------------------- execution match --
     def find_execution(
-        self, *, command: str | None = None, step_id: str | None = None
+        self,
+        *,
+        command: str | None = None,
+        step_id: str | None = None,
+        tool: str | None = None,
+        operation: str | None = None,
     ) -> list[ExecutionResult]:
         execs = self.task_executions(step_id=step_id)
+        if tool is not None:
+            execs = [e for e in execs if e.tool == tool]
+        if operation is not None:
+            execs = [e for e in execs if e.operation == operation]
         if command is not None:
             execs = [
                 e
