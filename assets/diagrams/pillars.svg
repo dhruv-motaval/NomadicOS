@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 430" width="1200" height="430" role="img" aria-label="Six guarantees: authority you control, proof not claims, local-first, replaceable bricks, bounded recovery, auditable by design">
+<rect x="1" y="1" width="1198" height="428" rx="22" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="2"/>
+<text x="600" y="58" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="28" font-weight="800" fill="#0A0A0A" text-anchor="middle" >Six guarantees, one runtime</text>
+<rect x="45" y="100" width="365" height="125" rx="14" fill="#F8FAFC" stroke="#E5E7EB" stroke-width="1.5"/>
+<rect x="45" y="118" width="5" height="89" rx="2.5" fill="#FF2E7E"/>
+<text x="73" y="140" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="19" font-weight="800" fill="#FF2E7E" text-anchor="start" >01</text>
+<text x="109" y="140" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="19" font-weight="700" fill="#0A0A0A" text-anchor="start" >Authority you control</text>
+<text x="73" y="172" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" font-weight="400" fill="#6B7280" text-anchor="start" >Models can't grant themselves access.</text>
+<text x="73" y="196" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" font-weight="400" fill="#6B7280" text-anchor="start" >Needs an owner grant inside a ceiling.</text>
+<rect x="430" y="100" width="365" height="125" rx="14" fill="#F8FAFC" stroke="#E5E7EB" stroke-width="1.5"/>
+<rect x="430" y="118" width="5" height="89" rx="2.5" fill="#2A52BE"/>
+<text x="458" y="140" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="19" font-weight="800" fill="#2A52BE" text-anchor="start" >02</text>
+<text x="494" y="140" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="19" font-weight="700" fill="#0A0A0A" text-anchor="start" >Proof, not claims</text>
+<text x="458" y="172" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" font-weight="400" fill="#6B7280" text-anchor="start" >"Done" is not success. Goals pass only</text>
+<text x="458" y="196" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" font-weight="400" fill="#6B7280" text-anchor="start" >against evidence, else NOT_VERIFIED.</text>
+<rect x="815" y="100" width="365" height="125" rx="14" fill="#F8FAFC" stroke="#E5E7EB" stroke-width="1.5"/>
+<rect x="815" y="118" width="5" height="89" rx="2.5" fill="#0A0A0A"/>
+<text x="843" y="140" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="19" font-weight="800" fill="#0A0A0A" text-anchor="start" >03</text>
+<text x="879" y="140" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="19" font-weight="700" fill="#0A0A0A" text-anchor="start" >Local-first</text>
+<text x="843" y="172" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" font-weight="400" fill="#6B7280" text-anchor="start" >llama.cpp or Ollama with your own</text>
+<text x="843" y="196" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" font-weight="400" fill="#6B7280" text-anchor="start" >GGUF models. No cloud LLM required.</text>
+<rect x="45" y="250" width="365" height="125" rx="14" fill="#F8FAFC" stroke="#E5E7EB" stroke-width="1.5"/>
+<rect x="45" y="268" width="5" height="89" rx="2.5" fill="#2A52BE"/>
+<text x="73" y="290" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="19" font-weight="800" fill="#2A52BE" text-anchor="start" >04</text>
+<text x="109" y="290" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="19" font-weight="700" fill="#0A0A0A" text-anchor="start" >Replaceable bricks</text>
+<text x="73" y="322" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" font-weight="400" fill="#6B7280" text-anchor="start" >Inference, routing, workers, authority,</text>
+<text x="73" y="346" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" font-weight="400" fill="#6B7280" text-anchor="start" >executor, verifier: separate contracts.</text>
+<rect x="430" y="250" width="365" height="125" rx="14" fill="#F8FAFC" stroke="#E5E7EB" stroke-width="1.5"/>
+<rect x="430" y="268" width="5" height="89" rx="2.5" fill="#0A0A0A"/>
+<text x="458" y="290" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="19" font-weight="800" fill="#0A0A0A" text-anchor="start" >05</text>
+<text x="494" y="290" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="19" font-weight="700" fill="#0A0A0A" text-anchor="start" >Bounded recovery</text>
+<text x="458" y="322" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" font-weight="400" fill="#6B7280" text-anchor="start" >Repair and escalation paths are explicit</text>
+<text x="458" y="346" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" font-weight="400" fill="#6B7280" text-anchor="start" >and always terminate. No retry loops.</text>
+<rect x="815" y="250" width="365" height="125" rx="14" fill="#F8FAFC" stroke="#E5E7EB" stroke-width="1.5"/>
+<rect x="815" y="268" width="5" height="89" rx="2.5" fill="#FF2E7E"/>
+<text x="843" y="290" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="19" font-weight="800" fill="#FF2E7E" text-anchor="start" >06</text>
+<text x="879" y="290" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="19" font-weight="700" fill="#0A0A0A" text-anchor="start" >Auditable by design</text>
+<text x="843" y="322" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" font-weight="400" fill="#6B7280" text-anchor="start" >Task, model, proposal, authorization,</text>
+<text x="843" y="346" font-family="'Segoe UI', Helvetica, Arial, sans-serif" font-size="14.5" font-weight="400" fill="#6B7280" text-anchor="start" >execution, evidence, verification: traced.</text>
+</svg>
