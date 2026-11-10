@@ -31,6 +31,11 @@ OPS = {
     "list_windows",
     "foreground_window",
     "focus_window",
+    "ui_tree",
+    "ui_find",
+    "ui_invoke",
+    "ui_set_value",
+    "ui_focus",
 }
 
 

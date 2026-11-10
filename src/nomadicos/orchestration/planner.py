@@ -43,6 +43,7 @@ _STEP_VERIFIABLE_TYPES = frozenset(
         "tests_pass",
         "exit_code_equals",
         "stdout_contains",
+        "ui_element_present",
     }
 )
 

@@ -396,6 +396,78 @@ def _process_started(p: Predicate, ctx: EvidenceContext) -> LeafResult:
     )
 
 
+def _observed_controls(execs: list[ExecutionResult]) -> list[tuple[str, dict[str, Any]]]:
+    """(window title, control) pairs that THIS task's UI Automation reads
+    and actions observed, oldest first. Controls are untrusted DATA."""
+    seen: list[tuple[str, dict[str, Any]]] = []
+    for e in execs:
+        title = str(e.evidence.get("title") or "")
+        listed = e.evidence.get("elements")
+        if isinstance(listed, list):
+            seen.extend((title, c) for c in listed if isinstance(c, dict))
+        single = e.evidence.get("element")
+        if isinstance(single, dict):
+            seen.append((title, single))
+    return seen
+
+
+def _ui_element_present(p: Predicate, ctx: EvidenceContext) -> LeafResult:
+    """Goal evidence: a UI control matching the description was OBSERVED by
+    a task-correlated UI Automation read (desktop.ui_tree / ui_find, or the
+    re-read after ui_invoke / ui_set_value / ui_focus). With ``value`` or
+    ``value_contains``, the most recent observation of that control decides,
+    since values change. Invoking a control is not proof by itself."""
+    window = p.field("window")
+    name = p.field("name")
+    automation_id = p.field("automation_id")
+    control_type = p.field("control_type")
+    if not (name or automation_id or control_type):
+        return _unverifiable("ui_element_present: give name, automation_id or control_type")
+    _command, step = _exec_filter(p)
+    execs = [e for e in ctx.find_execution(tool="desktop", step_id=step) if e.succeeded]
+    observed = _observed_controls(execs)
+    if not observed:
+        return _unverifiable("ui_element_present: no task-correlated UI Automation evidence")
+
+    def matches(title: str, c: dict[str, Any]) -> bool:
+        return (
+            (window is None or str(window).casefold() in title.casefold())
+            and (name is None or str(c.get("name", "")).casefold() == str(name).casefold())
+            and (automation_id is None or c.get("automation_id") == automation_id)
+            and (control_type is None or c.get("control_type") == str(control_type).lower())
+        )
+
+    hits = [c for title, c in observed if matches(title, c)]
+    expected = p.field("value")
+    contains = p.field("value_contains")
+    ok = bool(hits)
+    latest_value = None
+    if ok and (expected is not None or contains is not None):
+        latest_value = hits[-1].get("value")
+        if not isinstance(latest_value, str):
+            ok = False
+        elif expected is not None:
+            ok = latest_value == str(expected)
+        else:
+            ok = str(contains) in latest_value
+    label = name or automation_id or control_type
+    return LeafResult(
+        VerificationOutcome.PASS if ok else VerificationOutcome.NOT_PASS,
+        [
+            EvidenceItem(
+                claim=f"ui control present: {str(label)[:60]!r}",
+                observed=ok,
+                detail={
+                    "observed_controls": len(observed),
+                    "matches": len(hits),
+                    "latest_value": (latest_value or "")[:80] if latest_value else None,
+                    "task": ctx.task_id,
+                },
+            )
+        ],
+    )
+
+
 LEAVES: dict[str, Callable[[Predicate, EvidenceContext], LeafResult]] = {
     "file_exists": _file_exists,
     "directory_exists": _dir_exists,
@@ -410,6 +482,7 @@ LEAVES: dict[str, Callable[[Predicate, EvidenceContext], LeafResult]] = {
     "tests_pass": _tests_pass,
     "process_started": _process_started,
     "window_present": _window_present,
+    "ui_element_present": _ui_element_present,
     "api_response_valid": lambda p, ctx: _unverifiable(
         "api_response_valid: unsupported predicate (no evidence contract)"
     ),

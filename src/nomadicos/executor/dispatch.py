@@ -34,6 +34,7 @@ from nomadicos.contracts.execution import (
 )
 from nomadicos.kernel.errors import (
     ActionFailed,
+    AuthorizationDenied,
     Failure,
     InvalidProposal,
     RevokedAuthority,
@@ -208,9 +209,11 @@ class Executor:
             ctx = dataclasses.replace(ctx, protected=(*ctx.protected, *self._protected))
         try:
             outcome = await tool.run(proposal.operation, typed, ctx)
-        except PathDenied as exc:
-            # a confinement refusal is an authorization fact, not a tool crash
-            self._log.log(EventType.ACTION_REJECTED, result=f"PATH_DENIED: {exc}", **base)
+        except AuthorizationDenied as exc:
+            # a confinement refusal (or a tool's own hard refusal, e.g. a
+            # protected process) is an authorization fact, not a tool crash
+            kind = "PATH_DENIED" if isinstance(exc, PathDenied) else "DENIED"
+            self._log.log(EventType.ACTION_REJECTED, result=f"{kind}: {exc}", **base)
             raise
         except Exception as exc:  # tool crash: structured failure, no re-raise
             outcome = ToolOutcome(

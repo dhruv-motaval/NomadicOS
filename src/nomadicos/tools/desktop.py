@@ -6,6 +6,11 @@ AuthorizedAction: it receives validated, typed arguments, dispatches to the
 platform adapter, and returns honest structured ToolOutcomes with bounded
 evidence. It makes no permission decisions, no task-level judgments, and no
 model calls. UI/window metadata is untrusted DATA.
+
+The ``ui_*`` operations read and act on controls through Windows UI
+Automation (``desktop.uia``): by name, automation id or control type, never
+by pixel. Their results are rendered as compact text in ``stdout`` so the
+model can read the controls it acts on next.
 """
 
 from __future__ import annotations
@@ -27,6 +32,7 @@ from nomadicos.desktop.backend import (
 from nomadicos.desktop.contracts import (
     MAX_CAPTURE_DIM,
     MAX_TITLE_CHARS,
+    MAX_UI_TEXT,
     MAX_WINDOWS,
     FocusWindowArgs,
     ForegroundWindowArgs,
@@ -38,7 +44,21 @@ from nomadicos.desktop.contracts import (
     PressKeyArgs,
     ScreenshotArgs,
     TypeTextArgs,
+    UiFindArgs,
+    UiFocusArgs,
+    UiInvokeArgs,
+    UiQueryArgs,
+    UiSetValueArgs,
+    UiTreeArgs,
     validate_point,
+)
+from nomadicos.desktop.uia import (
+    Element,
+    UiActionFailed,
+    UIAutomationBackend,
+    Window,
+    default_uia,
+    describe_query,
 )
 from nomadicos.kernel.errors import Failure
 from nomadicos.tools.base import Tool, ToolOutcome, error_text
@@ -60,10 +80,20 @@ class DesktopTool(Tool):
         "list_windows": ListWindowsArgs,
         "foreground_window": ForegroundWindowArgs,
         "focus_window": FocusWindowArgs,
+        "ui_tree": UiTreeArgs,
+        "ui_find": UiFindArgs,
+        "ui_invoke": UiInvokeArgs,
+        "ui_set_value": UiSetValueArgs,
+        "ui_focus": UiFocusArgs,
     }
 
-    def __init__(self, backend: DesktopBackend | None = None) -> None:
+    def __init__(
+        self,
+        backend: DesktopBackend | None = None,
+        uia: UIAutomationBackend | None = None,
+    ) -> None:
         self.backend = backend if backend is not None else default_backend()
+        self.uia = uia if uia is not None else default_uia()
 
     async def run(self, operation: str, args: dict[str, Any], ctx: ExecutionContext) -> ToolOutcome:
         model = self.ops.get(operation)
@@ -91,6 +121,15 @@ class DesktopTool(Tool):
                 message=f"desktop unavailable: {exc}",
                 duration_s=round(time.monotonic() - started, 3),
                 evidence={"available": False},
+            )
+        except UiActionFailed as exc:
+            # not found / disabled / unsupported: the model re-reads the UI
+            # and tries again, so this is a recoverable FAILED step
+            return ToolOutcome(
+                status=ExecutionStatus.FAILED,
+                failure=Failure.ACTION_FAILED,
+                message=str(exc)[:MAX_UI_TEXT],
+                duration_s=round(time.monotonic() - started, 3),
             )
         except (ValueError, OSError) as exc:
             return ToolOutcome(
@@ -122,6 +161,16 @@ class DesktopTool(Tool):
             return self._list_windows(typed, ctx)
         if operation == "foreground_window" and isinstance(typed, ForegroundWindowArgs):
             return self._foreground_window(typed, ctx)
+        if operation == "ui_tree" and isinstance(typed, UiTreeArgs):
+            return self._ui_tree(typed)
+        if operation == "ui_find" and isinstance(typed, UiFindArgs):
+            return self._ui_find(typed)
+        if operation == "ui_invoke" and isinstance(typed, UiInvokeArgs):
+            return self._ui_invoke(typed)
+        if operation == "ui_set_value" and isinstance(typed, UiSetValueArgs):
+            return self._ui_set_value(typed)
+        if operation == "ui_focus" and isinstance(typed, UiFocusArgs):
+            return self._ui_focus(typed)
         assert isinstance(typed, FocusWindowArgs)
         return self._focus_window(typed, ctx)
 
@@ -245,3 +294,101 @@ class DesktopTool(Tool):
             message=reason,
             evidence={**evidence, "reason": reason},
         )
+
+    # ------------------------------------------------ UI Automation ---
+
+    def _ui_tree(self, a: UiTreeArgs) -> ToolOutcome:
+        window, elements, truncated = self.uia.tree(a.window, a.max_depth, a.max_nodes)
+        return ToolOutcome(
+            status=ExecutionStatus.SUCCEEDED,
+            stdout=render_ui(window, elements, truncated=truncated),
+            evidence={
+                "title": str(window.get("title", ""))[:MAX_TITLE_CHARS],
+                "window": window,
+                "count": len(elements),
+                "truncated": truncated,
+                "elements": elements,
+            },
+        )
+
+    def _ui_find(self, a: UiFindArgs) -> ToolOutcome:
+        window, elements = self.uia.find(a, a.limit)
+        evidence = {
+            "title": str(window.get("title", ""))[:MAX_TITLE_CHARS],
+            "window": window,
+            "query": _query(a),
+            "count": len(elements),
+            "elements": elements,
+        }
+        if not elements:
+            return ToolOutcome(
+                status=ExecutionStatus.FAILED,
+                failure=Failure.ACTION_FAILED,
+                message=f"no control matches {describe_query(a)}",
+                evidence=evidence,
+            )
+        return ToolOutcome(
+            status=ExecutionStatus.SUCCEEDED,
+            stdout=render_ui(window, elements, truncated=False),
+            evidence=evidence,
+        )
+
+    def _ui_acted(
+        self, action: str, a: UiQueryArgs, window: Window, element: Element | None, **extra: Any
+    ) -> ToolOutcome:
+        title = str(window.get("title", ""))[:MAX_TITLE_CHARS]
+        shown = render_ui(window, [element], truncated=False) if element else "(control gone)"
+        return ToolOutcome(
+            status=ExecutionStatus.SUCCEEDED,
+            stdout=f"{action} done. {shown}",
+            evidence={"title": title, "query": _query(a), "element": element, **extra},
+        )
+
+    def _ui_invoke(self, a: UiInvokeArgs) -> ToolOutcome:
+        window, element, via = self.uia.invoke(a)
+        return self._ui_acted("invoke", a, window, element, via=via)
+
+    def _ui_set_value(self, a: UiSetValueArgs) -> ToolOutcome:
+        window, element = self.uia.set_value(a, a.value)
+        return self._ui_acted("set_value", a, window, element)
+
+    def _ui_focus(self, a: UiFocusArgs) -> ToolOutcome:
+        window, element = self.uia.focus(a)
+        return self._ui_acted("focus", a, window, element)
+
+
+#: budget for the text rendering the model reads (one line per control)
+MAX_UI_RENDER_CHARS = 1800
+
+
+def _query(a: UiQueryArgs) -> dict[str, Any]:
+    keep = ("window", "name", "automation_id", "control_type", "index")
+    return {k: v for k, v in a.model_dump().items() if k in keep and v is not None}
+
+
+def render_ui(window: Window, elements: list[Element], *, truncated: bool) -> str:
+    """Compact, bounded text view of controls: what the model reads. Every
+    name and value is untrusted DATA from another application."""
+    lines = [f'window "{str(window.get("title", ""))[:80]}"']
+    for e in elements:
+        indent = "  " * min(int(e.get("depth", 1)), 8)
+        parts = [f'{indent}{e.get("control_type", "?")} "{str(e.get("name", ""))[:60]}"']
+        if e.get("automation_id"):
+            parts.append(f"id={str(e['automation_id'])[:40]}")
+        if e.get("actions"):
+            parts.append("[" + ",".join(e["actions"]) + "]")
+        if e.get("password"):
+            parts.append("value=<password>")
+        elif "value" in e:
+            parts.append(f'value="{str(e["value"])[:60]}"')
+        if "toggle" in e:
+            parts.append(f"toggle={e['toggle']}")
+        if e.get("enabled") is False:
+            parts.append("disabled")
+        lines.append(" ".join(parts))
+    if truncated:
+        lines.append("(truncated: narrow with ui_find or a smaller max_depth)")
+    text = "\n".join(lines)
+    if len(text) > MAX_UI_RENDER_CHARS:
+        text = text[: MAX_UI_RENDER_CHARS - 12].rsplit("\n", 1)[0] + "\n(cut short)"
+    return text

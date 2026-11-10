@@ -100,7 +100,20 @@ class ProposalValidator:
 
 
 def _resource_hint(args: dict) -> str:
-    for key in ("path", "source", "directory", "command", "target", "url", "title"):
+    # "executable" (process.launch) and "window" (desktop ui_* operations)
+    # name what an action touches, so owner rules like "do not touch
+    # Project B" apply to launches and UI actions too
+    for key in (
+        "path",
+        "source",
+        "directory",
+        "command",
+        "target",
+        "url",
+        "title",
+        "executable",
+        "window",
+    ):
         value = args.get(key)
         if isinstance(value, str) and value:
             return value

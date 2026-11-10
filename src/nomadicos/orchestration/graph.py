@@ -103,6 +103,16 @@ from nomadicos.router.analyzer import analyze_goal
 from nomadicos.tools.context import ExecutionContext
 
 _OBS_TEXT_CHARS = 500
+#: observation summary the next prompt shows; a UI Automation read is the
+#: model's view of the screen, so it gets room for its control list
+_OBS_SUMMARY_CHARS = 300
+_UI_OBS_SUMMARY_CHARS = 2000
+
+
+def _summary_budget(tool: str, operation: str) -> int:
+    if tool == "desktop" and operation.startswith("ui_"):
+        return _UI_OBS_SUMMARY_CHARS
+    return _OBS_SUMMARY_CHARS
 
 
 def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
@@ -1452,7 +1462,7 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
         obs = Observation(
             task_id=state["task_id"],
             kind=kind,
-            summary=summary[:300],
+            summary=summary[: _summary_budget(execution.tool, execution.operation)],
             data={
                 "status": execution.status.value,
                 "exit_code": execution.exit_code,

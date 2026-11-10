@@ -21,7 +21,11 @@ nomadicos = "nomadicos.cli.app:main_entry"
 
 [project.optional-dependencies]
 postgres = ["psycopg[binary]>=3.2"]
-desktop = ["pyautogui>=0.9.54", "pillow>=10.3"]
+desktop = [
+    "pyautogui>=0.9.54",
+    "pillow>=10.3",
+    "comtypes>=1.4",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

@@ -452,7 +452,7 @@ class TerminalTool(Tool):
             *([spec.stdin] if spec.stdin else []),
             *(spec.env or {}).values(),
         )
-        _deny_owner_surfaces(screened, cwd, ctx)
+        deny_owner_surfaces(screened, cwd, ctx)
         try:
             plan = resolve_command(spec.command, spec.args)
         except CommandProblem as exc:
@@ -473,7 +473,7 @@ class TerminalTool(Tool):
             process = await asyncio.create_subprocess_exec(
                 *plan.argv,
                 cwd=str(cwd),
-                env=_merge_env(spec.env),
+                env=tool_process_env(spec.env),
                 stdin=asyncio.subprocess.PIPE
                 if spec.stdin is not None
                 else asyncio.subprocess.DEVNULL,
@@ -556,7 +556,7 @@ class TerminalTool(Tool):
         )
 
 
-def _deny_owner_surfaces(argv: tuple[str, ...], cwd: Path, ctx: ExecutionContext) -> None:
+def deny_owner_surfaces(argv: tuple[str, ...], cwd: Path, ctx: ExecutionContext) -> None:
     """Refuse a command that drives an owner surface or references protected
     owner state (SPEC §4, §56.5).
 
@@ -595,7 +595,7 @@ def _deny_path_token(part: str, cwd: Path, ctx: ExecutionContext) -> None:
     deny_protected(resolved, ctx)
 
 
-def _merge_env(extra: dict[str, str] | None) -> dict[str, str]:
+def tool_process_env(extra: dict[str, str] | None) -> dict[str, str]:
     """Inherited environment plus the requested entries (SPEC §24). The
     tool-process marker is applied last so a proposal cannot clear it."""
     return {**os.environ, **(extra or {}), TOOL_PROCESS_ENV: "1"}

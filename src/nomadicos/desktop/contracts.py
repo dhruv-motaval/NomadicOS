@@ -14,7 +14,7 @@ desktop capability. Constants here are the security bounds:
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 MAX_TYPE_TEXT = 2000
 MAX_HOTKEY_PARTS = 4
@@ -128,6 +128,120 @@ class ForegroundWindowArgs(_Args):
 
 class FocusWindowArgs(_Args):
     title: str = Field(min_length=1, max_length=MAX_TITLE_CHARS)
+
+
+# ------------------------------------------------- UI Automation (UIA) ----
+
+MAX_UI_NODES = 200
+MAX_UI_DEPTH = 12
+MAX_UI_MATCHES = 25
+MAX_UI_TEXT = 200
+MAX_UI_VALUE = 2000
+
+#: UIA control types by name (UIA_*ControlTypeId): a closed vocabulary, so a
+#: proposal names "button", never a raw numeric id
+CONTROL_TYPES: dict[str, int] = {
+    "button": 50000,
+    "calendar": 50001,
+    "checkbox": 50002,
+    "combobox": 50003,
+    "edit": 50004,
+    "hyperlink": 50005,
+    "image": 50006,
+    "listitem": 50007,
+    "list": 50008,
+    "menu": 50009,
+    "menubar": 50010,
+    "menuitem": 50011,
+    "progressbar": 50012,
+    "radiobutton": 50013,
+    "scrollbar": 50014,
+    "slider": 50015,
+    "spinner": 50016,
+    "statusbar": 50017,
+    "tab": 50018,
+    "tabitem": 50019,
+    "text": 50020,
+    "toolbar": 50021,
+    "tooltip": 50022,
+    "tree": 50023,
+    "treeitem": 50024,
+    "custom": 50025,
+    "group": 50026,
+    "thumb": 50027,
+    "datagrid": 50028,
+    "dataitem": 50029,
+    "document": 50030,
+    "splitbutton": 50031,
+    "window": 50032,
+    "pane": 50033,
+    "header": 50034,
+    "headeritem": 50035,
+    "table": 50036,
+    "titlebar": 50037,
+    "separator": 50038,
+    "semanticzoom": 50039,
+    "appbar": 50040,
+}
+CONTROL_TYPE_NAMES: dict[int, str] = {v: k for k, v in CONTROL_TYPES.items()}
+
+
+class UiTreeArgs(_Args):
+    """Read a window's controls as data. ``window`` is a title substring;
+    omitted means the foreground window."""
+
+    window: str | None = Field(default=None, min_length=1, max_length=MAX_TITLE_CHARS)
+    max_depth: int = Field(default=6, ge=1, le=MAX_UI_DEPTH)
+    max_nodes: int = Field(default=120, ge=1, le=MAX_UI_NODES)
+
+
+class UiQueryArgs(_Args):
+    """Find controls by exact name (case-insensitive), automation id and/or
+    control type inside one window. At least one criterion is required, so a
+    query can never mean "everything"."""
+
+    window: str | None = Field(default=None, min_length=1, max_length=MAX_TITLE_CHARS)
+    name: str | None = Field(default=None, min_length=1, max_length=MAX_UI_TEXT)
+    automation_id: str | None = Field(default=None, min_length=1, max_length=MAX_UI_TEXT)
+    control_type: str | None = None
+
+    @field_validator("control_type")
+    @classmethod
+    def _known_type(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        low = v.lower()
+        if low not in CONTROL_TYPES:
+            raise ValueError(f"unknown control type {v!r}")
+        return low
+
+    @model_validator(mode="after")
+    def _has_criterion(self) -> UiQueryArgs:
+        if not (self.name or self.automation_id or self.control_type):
+            raise ValueError("give at least one of name, automation_id, control_type")
+        return self
+
+
+class UiFindArgs(UiQueryArgs):
+    limit: int = Field(default=10, ge=1, le=MAX_UI_MATCHES)
+
+
+class UiTargetArgs(UiQueryArgs):
+    """One control: the ``index``-th match of the query (default the first)."""
+
+    index: int = Field(default=0, ge=0, lt=MAX_UI_MATCHES)
+
+
+class UiInvokeArgs(UiTargetArgs):
+    pass
+
+
+class UiFocusArgs(UiTargetArgs):
+    pass
+
+
+class UiSetValueArgs(UiTargetArgs):
+    value: str = Field(max_length=MAX_TYPE_TEXT)
 
 
 def validate_key(key: str) -> str:

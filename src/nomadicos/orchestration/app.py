@@ -54,6 +54,7 @@ from nomadicos.tools.base import ToolRegistry
 from nomadicos.tools.desktop import DesktopTool
 from nomadicos.tools.docker import docker_tool
 from nomadicos.tools.filesystem import FilesystemTool
+from nomadicos.tools.process import ProcessTool
 from nomadicos.tools.terminal import ProcessSupervisor, TerminalTool
 
 
@@ -148,6 +149,9 @@ class NomadicApp:
         # honest-unavailable elsewhere). Registration only — the tool gains
         # no authority and runs only on AuthorizedAction artifacts.
         self.tools.register(DesktopTool())
+        # Phase 12: list/launch/stop processes behind the same boundary;
+        # launches get the terminal's owner-surface screen and marker
+        self.tools.register(ProcessTool())
         # Docker tool (SPEC §22-23): container operations via Docker Engine API.
         # Platform adapter selected by docker_tool() (real client or honest
         # unavailability). Runs only on AuthorizedAction artifacts.
