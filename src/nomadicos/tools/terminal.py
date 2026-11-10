@@ -30,7 +30,7 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any, ClassVar
 
 import psutil
@@ -40,7 +40,16 @@ from nomadicos.contracts.execution import ExecutionStatus
 from nomadicos.kernel.errors import Failure
 from nomadicos.tools.base import Tool, ToolOutcome, error_text
 from nomadicos.tools.context import ExecutionContext
-from nomadicos.tools.paths import resolve_scoped
+from nomadicos.tools.paths import PathDenied, deny_protected, resolve_scoped
+
+#: marks every process this brick spawns; owner surfaces (authority CLI,
+#: owner API) refuse to act for a process carrying it (SPEC §4, §56.5)
+TOOL_PROCESS_ENV = "NOMADICOS_TOOL_PROCESS"
+#: owner-only code a task process must never drive: the authority CLI, the
+#: owner API and the authority internals themselves (SPEC §4, §56.5)
+_OWNER_MODULES = ("nomadicos.cli", "nomadicos.api", "nomadicos.authority")
+#: owner-state file names, refused even when only mentioned inside code
+_OWNER_STATE_NAMES = ("authority.json",)
 
 #: default per-command wall clock before the tree is killed
 DEFAULT_TIMEOUT_S = 120.0
@@ -433,6 +442,17 @@ class TerminalTool(Tool):
         cwd = resolve_scoped(spec.cwd, ctx) if spec.cwd is not None else ctx.workspace.resolve()
         if not cwd.is_dir():
             return _failed(f"cwd does not exist: {cwd}", started)
+        # like a cwd escape, reaching for owner authority is a refusal that
+        # propagates, never a tool failure the replan layer retries around;
+        # screened before executable lookup so PATH cannot decide it
+        # (stdin and env values carry code and paths too, so they are read)
+        screened = (
+            *_tokenize(spec.command),
+            *spec.args,
+            *([spec.stdin] if spec.stdin else []),
+            *(spec.env or {}).values(),
+        )
+        _deny_owner_surfaces(screened, cwd, ctx)
         try:
             plan = resolve_command(spec.command, spec.args)
         except CommandProblem as exc:
@@ -536,11 +556,49 @@ class TerminalTool(Tool):
         )
 
 
+def _deny_owner_surfaces(argv: tuple[str, ...], cwd: Path, ctx: ExecutionContext) -> None:
+    """Refuse a command that drives an owner surface or references protected
+    owner state (SPEC §4, §56.5).
+
+    Argv screening closes the direct routes (the permissions CLI, the owner
+    API, a path into the authority store). It is not a sandbox: arbitrary
+    code can still build such a path at runtime, which only OS-level
+    isolation of tool processes can stop.
+    """
+    lowered = [token.casefold().replace("\\", "/") for token in argv]
+    for token in lowered:
+        if any(module in token for module in _OWNER_MODULES):
+            raise PathDenied(f"command drives an owner-only NomadicOS surface: {token[:80]!r}")
+        if any(name in token for name in _OWNER_STATE_NAMES):
+            raise PathDenied(f"command references NomadicOS owner state: {token[:80]!r}")
+    if "permissions" in lowered and any(PurePath(t).stem == "nomadicos" for t in lowered):
+        raise PathDenied("the owner permissions command cannot run inside a task")
+    roots = [str(root).casefold().replace("\\", "/") for root in ctx.protected]
+    for raw, token in zip(argv, lowered, strict=True):
+        if any(root in token for root in roots):
+            raise PathDenied(f"command references NomadicOS owner state: {token[:80]!r}")
+        for part in (raw, raw.partition("=")[2]):
+            if part:
+                _deny_path_token(part, cwd, ctx)
+
+
+def _deny_path_token(part: str, cwd: Path, ctx: ExecutionContext) -> None:
+    """A token read as a path, resolved against the command's cwd, must not
+    land in protected owner state; tokens that are not paths are ignored."""
+    try:
+        candidate = Path(part)
+        if not candidate.is_absolute():
+            candidate = cwd / candidate
+        resolved = Path(os.path.normcase(str(candidate.resolve(strict=False))))
+    except (OSError, ValueError):
+        return
+    deny_protected(resolved, ctx)
+
+
 def _merge_env(extra: dict[str, str] | None) -> dict[str, str]:
-    """Inherited environment plus the requested entries (SPEC §24)."""
-    if not extra:
-        return dict(os.environ)
-    return {**os.environ, **extra}
+    """Inherited environment plus the requested entries (SPEC §24). The
+    tool-process marker is applied last so a proposal cannot clear it."""
+    return {**os.environ, **(extra or {}), TOOL_PROCESS_ENV: "1"}
 
 
 def _elapsed(started: float) -> float:

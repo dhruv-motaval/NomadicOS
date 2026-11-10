@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 import typer
@@ -14,6 +15,35 @@ def _config():
     from nomadicos.kernel.config import load_config
 
     return load_config()
+
+
+def _owner_presence(cfg):
+    from nomadicos.authority.presence import presence_from_config
+
+    return presence_from_config(cfg.autonomy.owner_presence)
+
+
+def _confirm_or_refuse(cfg, purpose: str) -> bool:
+    """Widening owner decisions need the owner in person (SPEC §56.5)."""
+    from nomadicos.authority.presence import OwnerPresenceNotConfirmed, require_owner_presence
+
+    try:
+        require_owner_presence(_owner_presence(cfg), purpose)
+    except OwnerPresenceNotConfirmed as exc:
+        typer.echo(f"refused: {exc.message}", err=True)
+        return False
+    return True
+
+
+def _prompt_owner_decision(cfg, purpose: str) -> str:
+    """ALLOW counts only once the owner is confirmed in person; DENY needs
+    no proof. Anything else asks again."""
+    while True:
+        answer = typer.prompt("OWNER DECISION", default="", show_default=False).strip().upper()
+        if answer == "DENY":
+            return answer
+        if answer == "ALLOW" and _confirm_or_refuse(cfg, purpose):
+            return answer
 
 
 async def _engines(cfg):
@@ -110,6 +140,14 @@ def permissions(
     """Owner authority surface. Model/automation code must not call this."""
     from nomadicos.authority import AuthorityStore, AuthorizationService, CapabilityPolicy
     from nomadicos.kernel.events import EventLogger
+    from nomadicos.tools.terminal import TOOL_PROCESS_ENV
+
+    # Actions that WIDEN authority are refused for a process the terminal
+    # brick spawned (SPEC §4, §56.5); restricting ones (revoke, add a rule)
+    # stay available to anyone.
+    if action in ("grant-full", "answer") and os.environ.get(TOOL_PROCESS_ENV):
+        typer.echo("refused: a NomadicOS task process cannot change owner authority", err=True)
+        raise typer.Exit(3)
 
     cfg = _config()
     store = AuthorityStore(Path(cfg.persistence.state_dir) / "authority.json")
@@ -129,6 +167,8 @@ def permissions(
             typer.echo(f"instruction: [{ins.id}] {ins.rule!r} resource={ins.resource!r}")
         return
     if action == "grant-full":
+        if not _confirm_or_refuse(cfg, "grant FULL_PC_AUTONOMY"):
+            raise typer.Exit(3)
         svc.grant_full(source="owner_cli")
         typer.echo("FULL_PC_AUTONOMY granted (persistent).")
         return
@@ -147,6 +187,8 @@ def permissions(
             typer.echo(f"{req.id}: {req.ask()}")
         return
     if action == "answer":
+        if arg2.upper() == "ALLOW" and not _confirm_or_refuse(cfg, f"ALLOW conflict {arg1[:40]}"):
+            raise typer.Exit(3)
         svc.answer_conflict(arg1, arg2.upper(), resolver="owner")
         typer.echo(f"conflict {arg1}: {arg2.upper()} recorded")
         return
@@ -216,7 +258,7 @@ async def _drive_goal(app, goal: str, constraints: list[str]) -> None:
             f"REQUEST: {conflict.get('capability')} on {conflict.get('resource')!r} "
             f"(reason: {conflict.get('model_reason') or 'n/a'})"
         )
-        answer = typer.prompt("OWNER DECISION", default="", show_default=False)
+        answer = _prompt_owner_decision(app.config, f"ALLOW a blocked action ({summary.task_id})")
         summary = await app.resume_owner(summary.task_id, answer)
     _render_run(summary)
     if summary.status in (TaskStatus.FAILED, TaskStatus.BLOCKED):
@@ -261,10 +303,7 @@ def code(
             f"REQUEST: {conflict.get('capability')} on {conflict.get('resource')!r} "
             f"-> {conflict.get('conflicting_rule')}"
         )
-        while True:
-            answer = typer.prompt("OWNER DECISION", default="", show_default=False).upper()
-            if answer in {"ALLOW", "DENY"}:
-                return answer
+        return _prompt_owner_decision(app.config, "ALLOW editing a protected test file")
 
     async def drive() -> None:
         from nomadicos.contracts.core import TaskStatus

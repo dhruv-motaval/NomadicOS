@@ -16,6 +16,11 @@ class ExecutionContext:
     #: owner-granted FULL_PC_AUTONOMY broadens filesystem scope beyond the
     #: task workspace; paths are still resolved and attributed.
     full_pc: bool = False
+    #: owner-authority state (authority store, ledger, config) that no task
+    #: may touch, FULL_PC included (SPEC §4, §56.5): a model must never be
+    #: able to rewrite the authority it acts under. Stamped by the executor,
+    #: already resolved and case-normalized (``paths.normalize_root``).
+    protected: tuple[Path, ...] = ()
 
     @staticmethod
     def for_task(task_id: str, root: str | Path, *, full_pc: bool = False) -> ExecutionContext:

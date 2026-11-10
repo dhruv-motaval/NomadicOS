@@ -78,6 +78,10 @@ class AutonomyConfig(_Contract):
         ]
     )
     denied_resources: list[str] = Field(default_factory=list)
+    #: how owner surfaces prove the owner is present before WIDENING
+    #: authority (grant, ALLOW, removing a rule): "windows_hello" asks the
+    #: OS for PIN/biometric; "none" trusts whoever drives the surface
+    owner_presence: Literal["windows_hello", "none"] = "windows_hello"
 
     @field_validator("capabilities")
     @classmethod
@@ -244,6 +248,18 @@ class OrchestrationConfig(_Contract):
 def _repo_root() -> Path:
     """Repository root, resolved from this file's location -- never CWD."""
     return Path(__file__).resolve().parents[3]  # src/nomadicos/kernel/config.py
+
+
+def owner_state_paths(config: AppConfig) -> tuple[Path, ...]:
+    """Everything that defines owner authority on disk: the state directory
+    (authority store, execution ledger, checkpoints), the default YAML
+    config (capability ceiling) and the root ``.env``. No task may touch
+    these (SPEC §4, §56.5); the executor refuses them for every scope."""
+    return (
+        Path(config.persistence.state_dir).resolve(),
+        Path("config/config.yaml").resolve(),
+        _repo_root() / ".env",
+    )
 
 
 def _load_env_file(env_path: Path) -> dict[str, str]:

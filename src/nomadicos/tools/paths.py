@@ -30,11 +30,42 @@ def _reject_invalid(pure: PurePath) -> None:
                 raise PathDenied(f"invalid characters in path component {part!r}")
 
 
+def normalize_root(path: str | Path) -> Path:
+    """Resolved, case-normalized form used for every containment check."""
+    return Path(os.path.normcase(str(Path(path).resolve(strict=False))))
+
+
+def is_within(root: Path, path: Path) -> bool:
+    """Segment containment of two normalized paths (False across drives)."""
+    try:
+        return os.path.commonpath([str(root), str(path)]) == str(root)
+    except ValueError:  # different drives on Windows
+        return False
+
+
+def deny_protected(resolved: Path, ctx: ExecutionContext) -> None:
+    """Refuse owner-authority state for EVERY scope, FULL_PC included
+    (SPEC §4, §56.5): no task may rewrite the grant it acts under."""
+    for root in ctx.protected:
+        if is_within(root, resolved):
+            raise PathDenied(f"{resolved} is protected NomadicOS owner state")
+
+
+def _confine(resolved: Path, ctx: ExecutionContext) -> Path:
+    if not ctx.full_pc:
+        root = Path(os.path.normcase(str(ctx.workspace.resolve(strict=False))))
+        if os.path.commonpath([str(root), str(resolved)]) != str(root):
+            raise PathDenied(f"{resolved} escapes task workspace {root}")
+    deny_protected(resolved, ctx)
+    return resolved
+
+
 def resolve_scoped(raw: str, ctx: ExecutionContext) -> Path:
     """Resolve a model-supplied path against the task scope.
 
     Raises PathDenied when the RESOLVED location escapes the workspace and
-    the context is not FULL_PC. Absolute paths are allowed under FULL_PC.
+    the context is not FULL_PC, or lands in protected owner state (any
+    scope). Absolute paths are allowed under FULL_PC.
     """
     if not isinstance(raw, str) or not raw.strip():
         raise PathDenied("empty path")
@@ -51,8 +82,4 @@ def resolve_scoped(raw: str, ctx: ExecutionContext) -> Path:
         resolved = candidate.resolve(strict=False)
     except OSError as exc:  # e.g. symlink loops
         raise PathDenied(f"unresolvable path: {exc}") from exc
-    if not ctx.full_pc:
-        root = Path(os.path.normcase(str(ctx.workspace.resolve(strict=False))))
-        if os.path.commonpath([str(root), str(resolved)]) != str(root):
-            raise PathDenied(f"{resolved} escapes task workspace {root}")
-    return resolved
+    return _confine(resolved, ctx)

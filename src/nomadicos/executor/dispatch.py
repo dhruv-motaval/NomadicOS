@@ -17,8 +17,11 @@ task success, or call the LLM — enforced structurally (see import-guard test)
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
+from collections.abc import Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Protocol
 
 from nomadicos.authority.store import AuthorityStore
@@ -39,7 +42,7 @@ from nomadicos.kernel.events import EventLogger, EventType
 from nomadicos.persistence.errors import PersistenceError
 from nomadicos.tools.base import ToolOutcome, ToolRegistry
 from nomadicos.tools.context import ExecutionContext
-from nomadicos.tools.paths import PathDenied
+from nomadicos.tools.paths import PathDenied, normalize_root
 from nomadicos.tools.terminal import TerminalTool
 
 
@@ -108,11 +111,15 @@ class Executor:
         store: AuthorityStore,
         logger: EventLogger,
         ledger: ExecutionLedger | None = None,
+        protected_roots: Sequence[str | Path] = (),
     ) -> None:
         self._tools = tools
         self._store = store
         self._log = logger
         self._ledger = ledger or InMemoryLedger()
+        #: owner state stamped onto EVERY context at this one boundary, so no
+        #: caller can forget it (SPEC §4, §56.5)
+        self._protected = tuple(normalize_root(root) for root in protected_roots)
 
     async def execute(self, authorized: AuthorizedAction, ctx: ExecutionContext) -> ExecutionResult:
         proposal = authorized.proposal
@@ -197,6 +204,8 @@ class Executor:
             raise
 
         self._log.log(EventType.TOOL_STARTED, **base)
+        if self._protected:
+            ctx = dataclasses.replace(ctx, protected=(*ctx.protected, *self._protected))
         try:
             outcome = await tool.run(proposal.operation, typed, ctx)
         except PathDenied as exc:

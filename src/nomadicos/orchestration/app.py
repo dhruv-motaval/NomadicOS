@@ -32,7 +32,7 @@ from nomadicos.inference.base import InferenceEngine
 from nomadicos.inference.llama_cpp import LlamaCppEngine, LlamaServerLauncher
 from nomadicos.inference.mock import MockEngine
 from nomadicos.inference.ollama import OllamaEngine
-from nomadicos.kernel.config import AppConfig
+from nomadicos.kernel.config import AppConfig, owner_state_paths
 from nomadicos.kernel.events import EventLogger, EventType
 from nomadicos.memory.runtime import build_runtime_memory
 from nomadicos.orchestration import memory_hooks
@@ -161,8 +161,15 @@ class NomadicApp:
         self.authz = AuthorizationService(self.store, self.policy, self.log)
         # Phase 13D: durable single-use execution ledger (replay protection
         # across restarts); DATA only - it never authorizes or decides.
+        # Owner state (authority store, ledger, config) is out of reach of
+        # every tool, FULL_PC included: a model must never be able to rewrite
+        # the authority it acts under (SPEC §4, §56.5).
         self.executor = Executor(
-            self.tools, self.store, self.log, ledger=make_execution_ledger(cfg.persistence)
+            self.tools,
+            self.store,
+            self.log,
+            ledger=make_execution_ledger(cfg.persistence),
+            protected_roots=(*owner_state_paths(cfg), self.store.path.parent),
         )
         self.selector = ModelSelector(cfg.routing)
         runtime_workspace = Path(workspace_root or cfg.persistence.task_workspace)
