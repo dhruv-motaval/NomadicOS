@@ -24,6 +24,16 @@ from nomadicos.inference.base import (
 from nomadicos.kernel.errors import EngineUnavailable, ModelError
 
 
+def is_cloud_model_name(name: str) -> bool:
+    """Ollama's naming for models it proxies to ollama.com: a ``cloud`` tag
+    (``glm-5.3-flash:cloud``) or a ``-cloud`` tag suffix
+    (``gpt-oss:120b-cloud``). A name check backs up the API's remote fields,
+    which older Ollama builds do not report."""
+    _, _, tag = name.rpartition(":")
+    tag = tag.casefold()
+    return tag == "cloud" or tag.endswith("-cloud")
+
+
 class OllamaEngine(InferenceEngine):
     engine_id = "ollama"
 
@@ -109,7 +119,18 @@ class OllamaEngine(InferenceEngine):
             resp.raise_for_status()
         except httpx.HTTPError as exc:
             raise EngineUnavailable(f"ollama list_models failed: {exc}") from exc
-        return [m["name"] for m in resp.json().get("models", []) if "name" in m]
+        # Ollama also lists CLOUD models (served by ollama.com, e.g.
+        # "glm-5.3-flash:cloud"). Prompting one sends task context off the
+        # machine, so they are never reported as models this engine serves
+        # (SPEC §9-10: local inference only).
+        return [
+            m["name"]
+            for m in resp.json().get("models", [])
+            if "name" in m
+            and not m.get("remote_host")
+            and not m.get("remote_model")
+            and not is_cloud_model_name(m["name"])
+        ]
 
     async def health(self) -> EngineHealth:
         try:

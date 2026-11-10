@@ -11,8 +11,10 @@ from pathlib import Path
 
 from nomadicos.contracts.model import CapabilityTag, ModelHealth, ModelRecord
 from nomadicos.inference.base import InferenceEngine
+from nomadicos.inference.ollama import is_cloud_model_name
 from nomadicos.kernel.config import ModelRoles
 from nomadicos.registry.model_registry import ModelRegistry
+from nomadicos.registry.ollama_store import inventory_filename
 
 MODEL_FILE_EXTENSIONS = {".gguf", ".safetensors"}
 
@@ -128,10 +130,31 @@ class RegistryBuilder:
                 registry.register_dir(enriched)
         return registry
 
+    def _configured(self, model_id: str) -> bool:
+        return model_id in {
+            self._roles.tiny,
+            self._roles.worker,
+            self._roles.coding_worker,
+            self._roles.coding_escalation,
+            self._roles.reasoning,
+            self._roles.critic,
+        }
+
     async def sync_from_engine(
-        self, registry: ModelRegistry, engine: InferenceEngine
+        self,
+        registry: ModelRegistry,
+        engine: InferenceEngine,
+        *,
+        models_dir: str | Path | None = None,
     ) -> ModelRegistry:
         """Register models an engine reports, enriched by config roles.
+
+        ``models/`` is the owner's model inventory. With ``models_dir`` given,
+        an Ollama model is registered only when its file is there (the
+        ``sync-ollama`` name mapping) or a config role names it, so a model
+        the owner removed from ``models/`` cannot return through Ollama's
+        own store. Cloud models are never registered, from any engine
+        (SPEC §9-10: local inference only).
 
         Live engines list model names only; a context window is not reported
         there, so it is derived from the name the same way ``scan_models_dir``
@@ -144,8 +167,24 @@ class RegistryBuilder:
         role and the models-dir scan record under one identity.
         """
         health = await engine.health()
+        owned: set[str] | None = None
+        if models_dir is not None and engine.engine_id == "ollama":
+            root = Path(models_dir)
+            owned = (
+                {p.name.casefold() for p in root.iterdir() if p.is_file()}
+                if root.is_dir()
+                else set()
+            )
         for model in health.models:
             model_id = model.replace("\\", "/")
+            if is_cloud_model_name(model_id):
+                continue
+            if (
+                owned is not None
+                and inventory_filename(model_id).casefold() not in owned
+                and not self._configured(model_id)
+            ):
+                continue
             roles = self._role_for(model_id)
             registry.register(
                 ModelRecord(

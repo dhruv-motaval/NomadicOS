@@ -396,7 +396,11 @@ class NomadicApp:
             if engine is None:
                 continue
             try:
-                await builder.sync_from_engine(self.registry, engine)
+                # models/ is the owner's inventory: Ollama's own store cannot
+                # bring back a model the owner removed from it
+                await builder.sync_from_engine(
+                    self.registry, engine, models_dir=self.config.inference.models_dir
+                )
             except Exception:
                 continue  # engine down: honest absence, not an error
         builder.build(self.registry, models_dir=self.config.inference.models_dir)

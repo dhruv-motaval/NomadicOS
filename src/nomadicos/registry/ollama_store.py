@@ -104,9 +104,15 @@ def discover(store: str | Path | None = None) -> list[OllamaModelInfo]:
     return sorted(found.values(), key=lambda i: i.name)
 
 
+def inventory_filename(name: str) -> str:
+    """The ``models/`` file an Ollama model name maps to
+    (``ornith:latest`` -> ``ornith-latest.gguf``)."""
+    safe = name.replace("/", "_").replace(":", "-")
+    return f"{safe}.gguf"
+
+
 def dest_path(models_dir: str | Path, info: OllamaModelInfo) -> Path:
-    safe = info.name.replace("/", "_").replace(":", "-")
-    return Path(models_dir) / f"{safe}.gguf"
+    return Path(models_dir) / inventory_filename(info.name)
 
 
 def migrate(
