@@ -59,6 +59,10 @@ MAX_STREAM_CHARS = 60_000
 READ_CHUNK = 65_536
 #: grace a terminated tree gets to die before it is killed outright
 KILL_GRACE_S = 5.0
+#: after the command exits, how long its output pipes may stay open before a
+#: program it launched is assumed to hold them (shortcut: output that program
+#: writes later is dropped; use process.launch for apps)
+DRAIN_GRACE_S = 2.0
 
 #: Windows script suffixes: files the OS cannot spawn directly
 _SCRIPT_SUFFIXES = frozenset({".cmd", ".bat"})
@@ -377,6 +381,15 @@ class ProcessSupervisor:
         return [pid for task_id in list(self._owned) for pid in self.kill_owned(task_id)]
 
 
+async def _exited(process: asyncio.subprocess.Process, timeout: float) -> bool:
+    """True once the OS process has ended. ``process.wait()`` on Windows also
+    waits for the pipes to close, which a launched program can hold open."""
+    deadline = time.monotonic() + timeout
+    while process.returncode is None and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    return process.returncode is not None
+
+
 async def _capture(stream: asyncio.StreamReader | None, char_limit: int) -> tuple[str, int]:
     """Drain one pipe to EOF while keeping a bounded prefix as evidence.
 
@@ -389,14 +402,17 @@ async def _capture(stream: asyncio.StreamReader | None, char_limit: int) -> tupl
     kept: list[bytes] = []
     kept_bytes = 0
     total_bytes = 0
-    while True:
-        chunk = await stream.read(READ_CHUNK)
-        if not chunk:
-            break
-        total_bytes += len(chunk)
-        if kept_bytes < byte_ceiling:
-            kept.append(chunk)
-            kept_bytes += len(chunk)
+    try:
+        while True:
+            chunk = await stream.read(READ_CHUNK)
+            if not chunk:
+                break
+            total_bytes += len(chunk)
+            if kept_bytes < byte_ceiling:
+                kept.append(chunk)
+                kept_bytes += len(chunk)
+    except asyncio.CancelledError:
+        pass  # a launched program still holds the pipe: keep what was read
     text = b"".join(kept).decode("utf-8", errors="replace")
     if total_bytes > kept_bytes:
         hidden = total_bytes - kept_bytes
@@ -492,15 +508,21 @@ class TerminalTool(Tool):
             out_task = asyncio.create_task(_capture(process.stdout, MAX_STREAM_CHARS))
             err_task = asyncio.create_task(_capture(process.stderr, MAX_STREAM_CHARS))
             wait_task = asyncio.create_task(process.wait())
-            pending: set[asyncio.Task[Any]] = (
-                await asyncio.wait({out_task, err_task, wait_task}, timeout=timeout)
-            )[1]
-            if pending:
+            if await _exited(process, timeout):
+                # The command exited. A program it launched (``start notepad``)
+                # may still hold the inherited pipes, so EOF can be hours away:
+                # read what is buffered, then stop waiting for that program.
+                pending: set[asyncio.Task[Any]] = (
+                    await asyncio.wait({out_task, err_task, wait_task}, timeout=DRAIN_GRACE_S)
+                )[1]
+            else:
                 # Timeout: the tree dies, which closes the pipes and finishes
                 # the reads and the wait.
                 timed_out = True
                 kill_tree(process.pid)
-                pending = (await asyncio.wait(pending, timeout=KILL_GRACE_S))[1]
+                pending = (
+                    await asyncio.wait({out_task, err_task, wait_task}, timeout=KILL_GRACE_S)
+                )[1]
         except asyncio.CancelledError:
             # Cancellation must not leave a running process behind either.
             kill_tree(process.pid)
@@ -510,6 +532,8 @@ class TerminalTool(Tool):
 
         for stray in pending:
             stray.cancel()
+        if pending:
+            await asyncio.wait(pending)  # let cancelled reads hand back their text
         stdout, stdout_bytes = (
             out_task.result() if out_task.done() and not out_task.cancelled() else ("", 0)
         )
@@ -526,6 +550,8 @@ class TerminalTool(Tool):
             "via_interpreter": plan.via_interpreter,
             "cwd": str(cwd),
             "killed_by_timeout": timed_out,
+            # a launched program kept the output pipes open after exit
+            "pipes_left_open": bool(pending) and not timed_out,
             "stdout_bytes": stdout_bytes,
             "stderr_bytes": stderr_bytes,
         }

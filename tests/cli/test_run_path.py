@@ -48,6 +48,7 @@ class _FakeApp:
 
     async def run_goal(self, goal: str, *, constraints: list[str] | None = None, **kw: Any):
         _FakeApp.calls.append(f"run_goal:{goal}")
+        _FakeApp.predicates = kw.get("predicates")
         return _FakeSummary()
 
     async def resume_owner(self, task_id: str, answer: str):
@@ -82,3 +83,18 @@ def test_run_path_closes_app_after_drive(fake_app) -> None:
     assert result.exit_code == 0, result.output
     # the app closes after the drive (resource hygiene preserved)
     assert fake_app.calls[-1] == "aclose"
+
+
+def test_run_passes_owner_predicates_through(fake_app) -> None:
+    check = '{"type": "file_exists", "path": "a.txt"}'
+    result = runner.invoke(cli_typer_app, ["run", "make a.txt", "--predicate", check])
+    assert result.exit_code == 0, result.output
+    assert fake_app.predicates == [{"type": "file_exists", "path": "a.txt"}]
+
+
+def test_run_rejects_malformed_predicates_before_starting(fake_app) -> None:
+    for bad in ("not json", '{"type": "x", "all": []}'):
+        fake_app.calls = []  # class-level log; no app is built on this path
+        result = runner.invoke(cli_typer_app, ["run", "goal", "--predicate", bad])
+        assert result.exit_code == 2
+        assert fake_app.calls == []

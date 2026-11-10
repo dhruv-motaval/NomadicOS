@@ -427,7 +427,8 @@ def _ui_element_present(p: Predicate, ctx: EvidenceContext) -> LeafResult:
     execs = [e for e in ctx.find_execution(tool="desktop", step_id=step) if e.succeeded]
     observed = _observed_controls(execs)
     if not observed:
-        return _unverifiable("ui_element_present: no task-correlated UI Automation evidence")
+        # short and actionable: the model reads this (cut to ~120 chars) to replan
+        return _unverifiable("ui_element_present: no desktop.ui_find/ui_tree read yet")
 
     def matches(title: str, c: dict[str, Any]) -> bool:
         return (

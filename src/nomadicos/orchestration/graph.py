@@ -1515,8 +1515,23 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
                 update["failed_fingerprints"] = failed_fingerprints
             return update
         if result.verdict is VerificationOutcome.NOT_VERIFIED:
-            # honest placeholder: NOT_EVALUATED — bookkeeping advances steps,
-            # nothing claims this step was VERIFIED (SPEC §7.15).
+            if step.expected is None:
+                # honest placeholder: NOT_EVALUATED — bookkeeping advances steps,
+                # nothing claims this step was VERIFIED (SPEC §7.15).
+                return update
+            # an explicit expectation nothing has shown yet (e.g. a UI value
+            # before any UI read): the step is not done. Intermediate actions
+            # (launch, read) are progress, not failures, so keep acting on this
+            # step without spending a recovery - up to max_attempts_per_step
+            # such verdicts in a row, then the bounded recovery loop takes over.
+            f = make_failure(
+                state,
+                Failure.VERIFICATION_FAILED,
+                "step expectation not observed yet: " + ", ".join(result.why(2)),
+            )
+            update["failures"] = [f]  # the model reads this hint when it proposes again
+            if _pending_streak(state, step.id) >= cfg.budget.max_attempts_per_step:
+                update["last_failure"] = f.model_dump(mode="json")
             return update
         if not result.passed:
             f = make_failure(
@@ -2136,6 +2151,9 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
     def route_verify_step(state: TaskState) -> str:
         if state.get("last_failure"):
             return "recovery"
+        step = current_mission_step(state)
+        if step is not None and step.expected is not None and _pending_streak(state, step.id):
+            return "continue"  # same step, next action; verify_step bounds the streak
         if state.get("brain_planner_enabled"):
             return "advance"  # advance_task handles status + next task
         steps = state.get("plan") or []
@@ -2354,6 +2372,7 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
         route_verify_step,
         {
             "advance": "advance",
+            "continue": "select_model",
             "verify_goal": "verify_goal",
             "recovery": "recovery",
         },
@@ -2631,6 +2650,21 @@ def _build_chat_request(
         max_tokens=512,
         timeout_s=cfg.budget.generation_timeout_s,
     )
+
+
+def _pending_streak(state: TaskState, step_id: str) -> int:
+    """Trailing STEP verdicts for ``step_id`` that were NOT_VERIFIED (an
+    explicit expectation no evidence has shown yet)."""
+    streak = 0
+    for v in reversed(state.get("verifications") or []):
+        if (
+            v.level is not VerificationLevel.STEP
+            or v.step_id != step_id
+            or v.verdict is not VerificationOutcome.NOT_VERIFIED
+        ):
+            break
+        streak += 1
+    return streak
 
 
 def _same_failure_streak(state: TaskState) -> int:

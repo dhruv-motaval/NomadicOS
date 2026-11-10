@@ -159,3 +159,34 @@ async def test_engine_down_fails_closed(tmp_path: Path) -> None:
     summary = await app.run_goal(GOAL_W, predicates=PRED_W, task_id="edown")
     assert summary.status in {TaskStatus.FAILED, TaskStatus.BLOCKED}
     assert summary.executions == 0
+
+
+# command-scoped, so the note write is no evidence either way (NOT_VERIFIED)
+PRED_OUT = [{"type": "stdout_contains", "text": "DONE-MARK", "command": "cmd"}]
+GOAL_OUT = "Make a note, then print DONE-MARK in the terminal"
+
+
+async def test_progress_actions_before_step_expectation_cost_no_recovery(
+    tmp_path: Path,
+) -> None:
+    """A step whose explicit expectation has no evidence yet (NOT_VERIFIED)
+    keeps acting on the same step: intermediate actions are progress, not
+    failures, so they never spend the recovery budget."""
+    from helpers import term_json
+
+    actions = [write_json("note.txt", "x"), term_json("cmd", "/c", "echo", "DONE-MARK")]
+    app = make_app(tmp_path, scripts=[("DONE-MARK", actions)])
+    summary = await app.run_goal(GOAL_OUT, predicates=PRED_OUT)
+    assert summary.status is TaskStatus.SUCCESS, summary.outcome_note
+    assert summary.executions == 2
+    assert summary.recoveries == 0
+
+
+async def test_unobserved_step_expectation_stays_bounded(tmp_path: Path) -> None:
+    """A model that never produces the expected evidence still ends within
+    budget and never claims success."""
+    app = make_app(tmp_path, scripts=[("DONE-MARK", write_json("note.txt", "x"))])
+    summary = await app.run_goal(GOAL_OUT, predicates=PRED_OUT)
+    assert summary.status is not TaskStatus.SUCCESS
+    assert summary.executions <= app.config.budget.max_total_steps
+    assert summary.recoveries <= app.config.budget.max_recoveries

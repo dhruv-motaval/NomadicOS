@@ -254,6 +254,33 @@ async def test_timeout_kills_the_tree_and_leaves_no_orphans(
     assert wait_gone(child_pid, outcome.process_id), "orphaned process left behind"
 
 
+async def test_command_that_launches_a_program_returns_when_it_exits(
+    tool: TerminalTool, tmp_path: Path
+) -> None:
+    """``start notepad``-style commands: the command exits at once, but the
+    program it launched keeps the inherited output pipes open. That must not
+    hold the step until the timeout."""
+    context = ctx(tmp_path)
+    launcher = (
+        "import subprocess, sys, pathlib\n"
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],"
+        " stdout=sys.stdout, stderr=sys.stderr)\n"
+        "pathlib.Path('launched.pid').write_text(str(p.pid))\n"
+        "print('launched', flush=True)\n"
+    )
+    began = time.monotonic()
+    outcome = await execute(tool, context, PY, "-c", launcher, timeout_s=30)
+    elapsed = time.monotonic() - began
+    launched = int((context.workspace / "launched.pid").read_text())
+    try:
+        assert outcome.status is ExecutionStatus.SUCCEEDED, outcome.message
+        assert elapsed < 15, f"waited {elapsed:.1f}s for a launched program"
+        assert outcome.evidence["pipes_left_open"] is True
+        assert outcome.stdout.strip() == "launched"  # output before exit is kept
+    finally:
+        psutil.Process(launched).kill()
+
+
 async def test_cancellation_kills_the_tree(tool: TerminalTool, tmp_path: Path) -> None:
     context = ctx(tmp_path)
     running = asyncio.create_task(

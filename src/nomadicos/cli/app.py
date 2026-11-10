@@ -202,16 +202,35 @@ def run(
     constraint: list[str] = typer.Option(  # noqa: B008 - typer idiom
         None, "--constraint", help="Explicit owner instruction/rule (repeatable)"
     ),
+    predicate: list[str] = typer.Option(  # noqa: B008 - typer idiom
+        None,
+        "--predicate",
+        help='Completion check as JSON, e.g. \'{"type":"file_exists","path":"a.txt"}\' '
+        "(repeatable; all must hold for SUCCESS)",
+    ),
 ) -> None:
     """Run a goal through LangGraph: intake -> ... -> execute -> verify."""
+    import json
+
+    from nomadicos.contracts.core import parse_predicate
     from nomadicos.orchestration.app import NomadicApp
+
+    predicates = []
+    for raw in predicate or []:
+        try:
+            parsed = json.loads(raw)
+            parse_predicate(parsed)  # fail here, before any engine starts
+        except ValueError as exc:
+            typer.echo(f"invalid --predicate {raw!r}: {exc}", err=True)
+            raise typer.Exit(2) from exc
+        predicates.append(parsed)
 
     app = NomadicApp(_config())
 
     async def drive() -> None:
         try:
             await app.sync_models()  # live engine models + models/ files (SPEC §12)
-            await _drive_goal(app, goal, list(constraint or []))
+            await _drive_goal(app, goal, list(constraint or []), predicates)
         finally:
             await app.aclose()
 
@@ -245,11 +264,13 @@ def _render_run(summary) -> None:
         typer.echo(f"FAIL:   {fail.get('category')}: {str(fail.get('message'))[:120]}")
 
 
-async def _drive_goal(app, goal: str, constraints: list[str]) -> None:
+async def _drive_goal(
+    app, goal: str, constraints: list[str], predicates: list | None = None
+) -> None:
     """Shared driver: prompts the OWNER on WAITING_OWNER via authority resume."""
     from nomadicos.contracts.core import TaskStatus
 
-    summary = await app.run_goal(goal, constraints=constraints)
+    summary = await app.run_goal(goal, constraints=constraints, predicates=predicates or None)
     while summary.waiting_owner():
         typer.echo("\nSTATUS: WAITING_OWNER (your decision is required)")
         conflict = summary.conflict or {}
