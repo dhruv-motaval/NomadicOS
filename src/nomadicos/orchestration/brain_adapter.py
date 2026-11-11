@@ -45,6 +45,7 @@ from nomadicos.contracts.execution import Observation
 from nomadicos.inference.base import InferenceEngine
 from nomadicos.inference.structured import EngineStructuredGenerator
 from nomadicos.kernel.errors import InvalidProposal
+from nomadicos.tools.base import ToolRegistry
 
 #: bounded feedback kept in the BrainState mirror (bounded memory, §14)
 MAX_FED_OBSERVATIONS = 32
@@ -128,6 +129,26 @@ def feed_observation(brain: BrainState, observation: Observation) -> BrainState:
     return brain.model_copy(update={"observations": kept, "state_version": brain.state_version + 1})
 
 
+def without_empty_optional_args(candidate: ActionCandidate, tools: ToolRegistry) -> ActionCandidate:
+    """Drop optional arguments the model filled with an empty string or null.
+
+    Small models fill every key they are shown; an empty optional means "unset".
+    Required keys are never touched (an empty ``content`` is a real value), and the
+    tool's own argument validation still decides everything afterwards.
+    """
+    tool_name, _, operation = (candidate.capability or candidate.tool).partition(".")
+    impl = tools.find(tool_name)
+    model = impl.ops.get(operation) if impl is not None else None
+    if model is None:
+        return candidate
+    kept = {
+        k: v
+        for k, v in candidate.arguments.items()
+        if v not in ("", None) or (k in model.model_fields and model.model_fields[k].is_required())
+    }
+    return candidate.model_copy(update={"arguments": kept})
+
+
 def candidate_to_model_output(candidate: ActionCandidate) -> str:
     """Deterministically serialize an accepted candidate into the SAME
     untrusted text surface raw model output takes (SPEC §19).
@@ -140,7 +161,8 @@ def candidate_to_model_output(candidate: ActionCandidate) -> str:
     """
     if candidate.kind is CandidateKind.WAIT:
         raise InvalidProposal("WAIT candidates are claims, not proposals")
-    tool = candidate.tool or candidate.capability
+    # the actor prompt makes `tool` the part before the dot; `capability` is "<tool>.<operation>"
+    tool = candidate.tool if "." in candidate.tool else (candidate.capability or candidate.tool)
     if not tool or "." not in tool:
         raise InvalidProposal(
             f"brain candidate {candidate.id!r} tool {tool!r} carries no operation segment"
@@ -244,6 +266,7 @@ __all__ = [
     "brain_propose_for_step",
     "brain_state_for",
     "candidate_to_parsed",
+    "without_empty_optional_args",
     "candidate_to_model_output",
     "dump_brain_state",
     "feed_observation",

@@ -226,3 +226,10 @@ def test_task_status_success_is_not_default() -> None:
     assert TaskStatus.SUCCESS != "CREATED"
     plan_step = PlanStep(description="edit parser")
     assert plan_step.expected is None
+
+
+def test_predicate_parse_unwraps_schema_shaped_fields() -> None:
+    nested = parse_predicate({"type": "file_exists", "fields": {"path": "a.txt"}})
+    flat = parse_predicate({"type": "file_exists", "path": "a.txt"})
+    assert nested.predicate is not None and flat.predicate is not None
+    assert nested.predicate.fields == flat.predicate.fields == {"path": "a.txt"}

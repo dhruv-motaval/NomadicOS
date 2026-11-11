@@ -256,7 +256,7 @@ def prediction_request_payload(
             for key, fact in list(state.world.facts.items())[:16]
         },
         "candidate": candidate.model_dump(mode="json"),
-        "capabilities": [c.name for c in state.capabilities[:16]],
+        "capabilities": [c.name for c in state.capabilities[:48]],
         "constraints": list(state.constraints.items),
     }
 

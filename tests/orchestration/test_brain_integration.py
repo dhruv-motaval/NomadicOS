@@ -275,3 +275,70 @@ async def test_legacy_path_unchanged_when_brain_disabled(tmp_path: Path) -> None
     ).values
     assert values.get("brain_state") is None
     assert "BRAIN_PROPOSED" not in [e.type for e in app.log.events(summary.task_id)]
+
+
+def test_candidate_with_bare_tool_uses_capability_for_the_operation() -> None:
+    from nomadicos.brain.schemas import ActionCandidate
+    from nomadicos.orchestration.brain_adapter import candidate_to_model_output
+
+    out = candidate_to_model_output(
+        ActionCandidate(
+            tool="filesystem",
+            capability="filesystem.write",
+            arguments={"path": "a.txt", "content": "x"},
+        )
+    )
+    assert json.loads(out)["tool"] == "filesystem"
+    assert json.loads(out)["operation"] == "write"
+
+
+def test_empty_optional_args_are_dropped_but_required_ones_kept(tmp_path: Path) -> None:
+    from nomadicos.brain.schemas import ActionCandidate
+    from nomadicos.orchestration.brain_adapter import without_empty_optional_args
+
+    tools = make_app(tmp_path).runtime.tools
+    launch = ActionCandidate(
+        capability="process.launch",
+        tool="process",
+        arguments={"executable": "notepad.exe", "args": "", "cwd": ""},
+    )
+    assert without_empty_optional_args(launch, tools).arguments == {"executable": "notepad.exe"}
+    write = ActionCandidate(
+        capability="filesystem.write",
+        tool="filesystem",
+        arguments={"path": "a.txt", "content": ""},
+    )
+    assert without_empty_optional_args(write, tools).arguments == {"path": "a.txt", "content": ""}
+
+
+def test_actor_sees_required_arg_marks_and_recent_observations(tmp_path: Path) -> None:
+    from nomadicos.brain.actor import candidate_request_payload
+    from nomadicos.brain.schemas import Capability
+    from nomadicos.contracts.core import Goal, PlanStep
+    from nomadicos.contracts.execution import Observation, ObservationKind
+    from nomadicos.orchestration.brain_adapter import brain_state_for
+
+    args = make_app(tmp_path).runtime.tools.capability_args()
+    assert args["filesystem.write"].split(",")[:2] == ["path*", "content*"]
+    goal = Goal(objective="g")
+    obs = Observation(task_id="t", kind=ObservationKind.PROCESS, summary="notepad.exe started")
+    brain = brain_state_for(goal, [PlanStep(description="s")], task_id="t", observations=[obs])
+    brain = brain.model_copy(update={"capabilities": [Capability(name="a.b", description="x*")]})
+    payload = candidate_request_payload(brain, brain.task_graph.subgoals[0])
+    assert payload["recent_observations"] == ["notepad.exe started"]
+    assert payload["capability_args"] == {"a.b": "x*"}
+
+
+async def test_task_only_decomposition_still_gives_the_actor_a_subgoal(tmp_path: Path) -> None:
+    """Small models often return tasks without subgoals; the brain mirror is
+    then rebuilt from the real plan instead of failing every proposal."""
+    tasks_only = json.dumps(
+        {"tasks": [{"id": "t0", "description": "write report.txt", "depends_on": []}]}
+    )
+    scripts = brain_scripts([tasks_only, candidate_json()])
+    app = make_app(tmp_path, brain_planner=True, brain_actor=True, scripts=scripts)
+    summary = await app.run_goal(
+        "Create file report.txt containing HELLO-GRAPH",
+        predicates=[{"type": "file_contains", "path": "report.txt", "text": "HELLO-GRAPH"}],
+    )
+    assert summary.status is TaskStatus.SUCCESS, summary.outcome_note

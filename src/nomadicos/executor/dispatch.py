@@ -154,7 +154,10 @@ class Executor:
             duplicate = previous.model_copy(
                 update={
                     "evidence": {**previous.evidence, "duplicate_blocked": True},
-                    "message": "action already executed; re-execution refused (SPEC §6.2)",
+                    "message": (
+                        f"action already executed ({proposal.tool}.{proposal.operation}); "
+                        "re-execution refused - choose a different action (SPEC §6.2)"
+                    ),
                 }
             )
             self._log.log(EventType.TOOL_EXECUTED, result="DUPLICATE_BLOCKED", **base)
@@ -179,7 +182,10 @@ class Executor:
                 duplicate = prior_result.model_copy(
                     update={
                         "evidence": {**prior_result.evidence, "duplicate_blocked": True},
-                        "message": "action already executed; re-execution refused (SPEC §6.2)",
+                        "message": (
+                            f"action already executed ({proposal.tool}.{proposal.operation}); "
+                            "re-execution refused - choose a different action (SPEC §6.2)"
+                        ),
                     }
                 )
                 self._log.log(EventType.TOOL_EXECUTED, result="DUPLICATE_BLOCKED", **base)

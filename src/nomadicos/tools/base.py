@@ -96,6 +96,18 @@ class ToolRegistry:
     def check_args(self, tool: str, operation: str, args: dict[str, Any]) -> dict[str, Any]:
         return self.get(tool).check_args(operation, args)
 
+    def capability_args(self) -> dict[str, str]:
+        """Every registered "<tool>.<operation>" -> its argument keys, required ones
+        marked with ``*`` (data, not authority)."""
+        return {
+            f"{n}.{op}": ",".join(
+                k + ("*" if f.is_required() else "")
+                for k, f in self._tools[n].ops[op].model_fields.items()
+            )
+            for n in sorted(self._tools)
+            for op in sorted(self._tools[n].ops)
+        }
+
     def catalog_lines(self) -> list[str]:
         """Human/model-readable listing of what EXISTS (data, not authority)."""
         lines: list[str] = []

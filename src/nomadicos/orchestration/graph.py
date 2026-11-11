@@ -43,7 +43,7 @@ from nomadicos.authority.conflicts import OwnerConflictRequest
 from nomadicos.brain.decomposer import apply_decomposition
 from nomadicos.brain.loop import PlanningStatus
 from nomadicos.brain.planner.task_graph import TaskNodeStatus
-from nomadicos.brain.schemas import ActionCandidate, CandidateKind
+from nomadicos.brain.schemas import ActionCandidate, CandidateKind, Capability
 from nomadicos.brain.state import BrainState
 from nomadicos.contracts.action import ActionProposal, CapabilityRef, CompletionClaim, ProposalKind
 from nomadicos.contracts.adaptive_decision import Decision
@@ -85,6 +85,7 @@ from nomadicos.orchestration.brain_adapter import (
     feed_observation,
     first_accepted_candidate,
     load_brain_state,
+    without_empty_optional_args,
 )
 from nomadicos.orchestration.brain_planner import (
     BrainMissionPlanner,
@@ -964,7 +965,8 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
             steps = state.get("plan") or []
         idx = state.get("current_step", 0)
         brain = load_brain_state(state.get("brain_state"))
-        if brain is None or brain.mission_id != task_id:
+        if brain is None or brain.mission_id != task_id or not brain.task_graph.subgoals:
+            # (no subgoals: a decomposition of tasks only leaves the actor nothing to act on)
             # initialize or re-construct: the plan + prior observations are
             # authoritative runtime data; the brain mirror is cognition only
             brain = brain_state_for(
@@ -973,6 +975,23 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
                 task_id=task_id,
                 observations=list(state.get("observations") or []),
             )
+        if not brain.capabilities:  # the actor can only name tools it is told exist
+            brain = brain.model_copy(
+                update={
+                    "capabilities": [
+                        Capability(name=n, description=args)
+                        for n, args in runtime.tools.capability_args().items()
+                    ]
+                }
+            )
+        rejected = (state.get("last_failure") or {}).get("message")
+        if rejected:  # let the actor see why the last try failed
+            note = Observation(
+                task_id=task_id,
+                kind=ObservationKind.NOTE,
+                summary=f"previous attempt failed: {rejected}"[:200],
+            )
+            brain = feed_observation(brain, note)
         subgoals = brain.task_graph.subgoals
         if idx >= len(subgoals):
             f = make_failure(
@@ -1022,6 +1041,8 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
                 "attempt": state.get("attempt", 1) + 1,
             }
         candidate = first_accepted_candidate(new_brain, outcome)
+        if candidate is not None:
+            candidate = without_empty_optional_args(candidate, runtime.tools)
         if candidate is None:
             f = make_failure(state, Failure.MODEL_ERROR, "brain outcome accepted no candidate")
             return {
@@ -1538,6 +1559,12 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
                 state, Failure.VERIFICATION_FAILED, "step verifier: " + ", ".join(result.missing)
             )
             update.update({"failures": [f], "last_failure": f.model_dump(mode="json")})
+            brain = load_brain_state(state.get("brain_state"))
+            if brain is not None:  # ... and the brain actor sees what is still unmet
+                note = Observation(
+                    task_id=state["task_id"], kind=ObservationKind.NOTE, summary=f.message[:200]
+                )
+                update["brain_state"] = dump_brain_state(feed_observation(brain, note))
         return update
 
     async def verify_goal(state: TaskState) -> dict[str, Any]:

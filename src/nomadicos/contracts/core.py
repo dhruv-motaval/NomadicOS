@@ -89,6 +89,8 @@ def parse_predicate(expr: Any) -> GoalPredicate:
             if set(expr) & {"all", "any", "not"}:
                 raise ValueError("predicate cannot mix a type with logical operators")
             fields = {k: v for k, v in expr.items() if k != "type"}
+            if set(fields) == {"fields"} and isinstance(fields["fields"], dict):
+                fields = fields["fields"]  # the Predicate schema shape, as small models emit it
             return GoalPredicate(predicate=Predicate(type=str(expr["type"]), fields=fields))
         if len(expr) != 1:
             raise ValueError("predicate group must have exactly one operator key")
