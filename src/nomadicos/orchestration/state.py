@@ -164,16 +164,7 @@ class TaskState(TypedDict, total=False):
     last_adaptive_decision: str | None
     last_adaptive_decision_category: str | None
 
-
-STATE_FIELDS: tuple[str, ...] = tuple(TaskState.__annotations__)
-
 #: state must never contain these — authority is an artifact, not a bool
 FORBIDDEN_STATE_KEYS = frozenset(
     {"authorized", "allowed", "approved", "permission", "grant", "bypass"}
 )
-
-
-def assert_no_authority_keys(update: dict[str, Any]) -> None:  # pragma: no cover - defensive
-    leak = FORBIDDEN_STATE_KEYS & {k.lower() for k in update}
-    if leak:
-        raise AssertionError(f"authority-shaped state key attempted: {sorted(leak)}")

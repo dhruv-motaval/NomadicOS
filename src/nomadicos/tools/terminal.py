@@ -38,6 +38,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from nomadicos.contracts.execution import ExecutionStatus
 from nomadicos.kernel.errors import Failure
+from nomadicos.kernel.interpreter import runtime_python_argv_replacement
 from nomadicos.tools.base import Tool, ToolOutcome, error_text
 from nomadicos.tools.context import ExecutionContext
 from nomadicos.tools.paths import PathDenied, deny_protected, resolve_scoped
@@ -63,6 +64,25 @@ KILL_GRACE_S = 5.0
 #: program it launched is assumed to hold them (shortcut: output that program
 #: writes later is dropped; use process.launch for apps)
 DRAIN_GRACE_S = 2.0
+
+#: valid Windows replacements for common Unix shell commands. The executor
+#: spawns PROCESSES, not shell text: a Unix command that does not exist on
+#: Windows ("touch", "cat", "pwd") is a vocabulary mismatch, not an
+#: authorization issue. When the model proposes one, treat it as a FAILED
+#: execution (not an error) carrying the correct Windows spelling, so the
+#: recovery/replan layer can self-correct on the next attempt instead of
+#: the task dying on a tool-level error. No silent rewriting: the command
+#: that runs is the one the model proposed, or nothing runs at all (SPEC
+#: §19: unsafe output is never "fixed" into an executable action).
+_WINDOWS_EQUIVALENTS: dict[str, str] = {
+    "touch": "type nul > <file> (or use filesystem.create)",
+    "cat": "type",
+    "pwd": "cd",
+    "ls": "dir",
+    "cp": "copy",
+    "mv": "move",
+    "rm": "del",
+}
 
 #: Windows script suffixes: files the OS cannot spawn directly
 _SCRIPT_SUFFIXES = frozenset({".cmd", ".bat"})
@@ -169,6 +189,14 @@ class ExecuteArgs(BaseModel):
 class CommandProblem(Exception):
     """A requested command cannot be started as a real process."""
 
+    def __init__(self, message: str, equivalent: str | None = None) -> None:
+        super().__init__(message)
+        #: Windows spelling for a Unix command that has none on this host.
+        #: Carried so TerminalTool can return a recoverable FAILED (with the
+        #: equivalent in the message) instead of a terminal ERRORED — the
+        #: vocabulary mismatch is the model's to fix, not a tool breakage.
+        self.equivalent = equivalent
+
 
 @dataclass(frozen=True, slots=True)
 class CommandPlan:
@@ -270,6 +298,10 @@ def resolve_command(command: str, args: list[str]) -> CommandPlan:
     tokens = _tokenize(command)
     if not tokens:
         raise CommandProblem("empty command")
+    # a bare "python" means the PROJECT's interpreter (the runtime's own
+    # venv, where the owner's dependencies live); PATH resolution can pick
+    # a base interpreter without the project's tooling (kernel.interpreter)
+    tokens = runtime_python_argv_replacement(tokens)
     argv = [*tokens, *args]
     found = _find_executable(tokens[0])
     if found is None:
@@ -277,7 +309,12 @@ def resolve_command(command: str, args: list[str]) -> CommandPlan:
             interpreter = _interpreter()
             _reject_shell_metacharacters(argv)
             return CommandPlan((interpreter, "/d", "/c", *argv), interpreter, True)
-        raise CommandProblem(f"process creation failed: executable not found: {tokens[0]}")
+        equivalent = _WINDOWS_EQUIVALENTS.get(tokens[0].lower()) if os.name == "nt" else None
+        hint = f"; on Windows use: {equivalent}" if equivalent else ""
+        raise CommandProblem(
+            f"process creation failed: executable not found: {tokens[0]}{hint}",
+            equivalent=equivalent,
+        )
     if os.name == "nt" and Path(found).suffix.lower() in _SCRIPT_SUFFIXES:
         interpreter = _interpreter()
         _reject_shell_metacharacters(argv)
@@ -440,6 +477,22 @@ class TerminalTool(Tool):
 
     name = "terminal"
     ops: ClassVar[dict[str, type[BaseModel]]] = {"execute": ExecuteArgs}
+    #: Models that get the Windows-spelling grounding auto-injected into
+    #: their proposal prompt. Currently only LFM3: it repeatedly proposes
+    #: Unix commands (touch/cat/pwd) on Windows. Any future model with the
+    #: same vocabulary gap is added here — one line, no other change.
+    grounding_models: ClassVar[frozenset[str]] = frozenset(
+        {"models/LFM3-Uncensored-AD-Q4_K_M.gguf"}
+    )
+    #: tell the model the WINDOWS spellings, so the next proposal uses them.
+    #: This is guidance in a rejection, never a silent rewrite.
+    syntax_hint = (
+        "On Windows, use these spellings: 'echo' (not a Unix probe path), "
+        "'type' to read a file, 'cd' for the working directory, 'dir' for "
+        "listing, 'copy'/'move'/'del' for file ops, 'type nul > file' to "
+        "create an empty file. 'touch', 'cat', 'pwd', 'ls', 'cp', 'mv', 'rm' "
+        "do not exist on Windows. A bare 'python' runs the project venv."
+    )
 
     def __init__(self, supervisor: ProcessSupervisor | None = None) -> None:
         self.supervisor = supervisor or ProcessSupervisor()
@@ -472,6 +525,11 @@ class TerminalTool(Tool):
         try:
             plan = resolve_command(spec.command, spec.args)
         except CommandProblem as exc:
+            if exc.equivalent:
+                # vocabulary gap (e.g. Unix touch/cat/pwd on Windows):
+                # recoverable FAILED carrying the Windows spelling, so the
+                # replan layer self-corrects instead of dying on ERRORED
+                return _failed(str(exc), started, evidence={"cwd": str(cwd)})
             return _errored(str(exc), started, evidence={"cwd": str(cwd)})
         timeout = spec.timeout_s if spec.timeout_s is not None else DEFAULT_TIMEOUT_S
         return await self._execute(spec, plan, cwd, timeout, started, ctx)

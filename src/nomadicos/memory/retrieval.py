@@ -67,11 +67,6 @@ GRAPH_BONUS = 0.05
 SUPERSEDED_PENALTY = 0.5
 
 
-def tokenize(text: str) -> frozenset[str]:
-    """Deterministic lowercase token set: ``\\w+`` runs, length >= 2."""
-    return frozenset(t for t in _TOKEN_RE.findall(text.lower()) if len(t) >= 2)
-
-
 def record_tokens(record: MemoryRecord) -> frozenset[str]:
     """Indexed text of one record: content plus tags (tags are data)."""
     return frozenset(

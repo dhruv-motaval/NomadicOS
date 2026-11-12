@@ -79,6 +79,12 @@ def aggregate_benchmarks(records: list[BenchmarkRecord]) -> MetricsBundle:
     if not records:
         return MetricsBundle()
     latencies = [r.total_latency_ms / 1000.0 for r in records if r.total_latency_ms is not None]
+    ttft = [
+        r.time_to_first_token_ms / 1000.0
+        for r in records
+        if r.time_to_first_token_ms is not None
+    ]
+    throughput = [r.tokens_per_second for r in records if r.tokens_per_second is not None]
     return MetricsBundle(
         samples=len(records),
         success_rate=_rate([r.success for r in records]),
@@ -87,6 +93,10 @@ def aggregate_benchmarks(records: list[BenchmarkRecord]) -> MetricsBundle:
         repair_success_rate=_rate([r.repair_success for r in records]),
         median_latency_s=_quantile(latencies, 0.5),
         p95_latency_s=_quantile(latencies, 0.95),
+        median_ttft_s=_quantile(ttft, 0.5),
+        p95_ttft_s=_quantile(ttft, 0.95),
+        median_tokens_per_second=_quantile(throughput, 0.5),
+        p95_tokens_per_second=_quantile(throughput, 0.95),
         avg_steps=_avg([r.steps for r in records if r.steps is not None]),
         avg_retries=_avg([r.retries for r in records if r.retries is not None]),
     )
@@ -341,6 +351,45 @@ class ModelRegistry:
             and (task_class is None or key[2] == task_class)
         }
         return sorted(versions, key=_version_order)
+
+    def benchmark_identities(self) -> list[tuple[str, str]]:
+        """Distinct (model_id, engine) identities with stored benchmark
+        records, deterministic ascending order.
+
+        This serves evidence-only consumers (e.g. the host auto-start
+        choosing what to serve) BEFORE any model record discovery exists in
+        a fresh process: metrics rehydrate from the durable store, model
+        records do not appear until the dir/engine scan runs.
+        """
+        return sorted({(key[0], key[1]) for key in self._benchmark_records})
+
+    def capability_bundle(
+        self,
+        model_id: str,
+        engine: str,
+        capability: str,
+        *,
+        benchmark_version: str | None = None,
+    ) -> MetricsBundle:
+        """Return explicit capability evidence only.
+
+        Capability probes are deliberately separate from task-category
+        aggregates: a ``feature_implementation`` result is not silently
+        treated as proof of every capability. Legacy records without the
+        explicit field are excluded.
+        """
+        records: list[BenchmarkRecord] = []
+        for (mid, eng, _category, version), samples in self._benchmark_records.items():
+            if mid != model_id or eng != engine:
+                continue
+            if benchmark_version is not None and version != benchmark_version:
+                continue
+            records.extend(
+                sample
+                for sample in samples
+                if sample.capability == capability
+            )
+        return aggregate_benchmarks(self._fresh(records, self._clock(), "timestamp"))
 
     def bundle_for(
         self,

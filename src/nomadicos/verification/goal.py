@@ -9,6 +9,7 @@ source from which the graph may conclude SUCCESS.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from nomadicos.contracts.core import Goal
@@ -26,9 +27,20 @@ VERIFIER_ID = "nomadic-goal-verifier-v1"
 
 
 class PredicateGoalVerifier:
-    def __init__(self, workspace_root: str | Path | None = None, *, per_task: bool = True) -> None:
+    def __init__(
+        self,
+        workspace_root: str | Path | None = None,
+        *,
+        per_task: bool = True,
+        run_command: Callable[[str, str, Path | None], ExecutionResult] | None = None,
+    ) -> None:
         self.workspace_root = Path(workspace_root) if workspace_root else None
         self.per_task = per_task
+        #: TRUSTED fresh-evidence hook (§27): owner-authored predicate
+        #: commands may be executed by the verifier itself when no newer
+        #: executor evidence exists (never required; default off wired by
+        #: the composition root)
+        self.run_command = run_command
 
     def verify(self, goal: Goal) -> VerificationResult:
         return self.verify_task(goal, [])
@@ -41,6 +53,7 @@ class PredicateGoalVerifier:
             task_id=goal.id,
             workspace=workspace,
             executions=list(executions),
+            run_command=self.run_command,
         )
         if not goal.predicates:
             # a goal without testable completion conditions can never be

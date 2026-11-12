@@ -178,31 +178,3 @@ class RealityOutcome(Contract):
             self.verification_result.outcome is not None
             and self.verification_result.outcome.value == "PASS"
         )
-
-
-def classify_failure(
-    status: ExecutionAttemptStatus,
-    execution_result: ExecutionResult | None,
-    verification_result: VerificationResult | None,
-) -> FailureCategory:
-    """Deterministic failure classification — NEVER model-driven.
-
-    Returns the first matching category in priority order.
-    """
-    if execution_result is None:
-        if status in (ExecutionAttemptStatus.TIMEOUT,):
-            return FailureCategory.TIMEOUT
-        return FailureCategory.UNKNOWN
-
-    if status is ExecutionAttemptStatus.TIMEOUT:
-        return FailureCategory.TIMEOUT
-
-    if status is ExecutionAttemptStatus.ERRORED:
-        return FailureCategory.EXECUTION_FAILURE
-
-    if status is ExecutionAttemptStatus.COMPLETED:
-        if verification_result is not None and not verification_result.passed:
-            return FailureCategory.VERIFICATION_FAILURE
-        return FailureCategory.EXECUTION_FAILURE
-
-    return FailureCategory.UNKNOWN

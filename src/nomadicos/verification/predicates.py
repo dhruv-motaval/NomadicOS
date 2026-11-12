@@ -297,18 +297,54 @@ def _tests_pass(p: Predicate, ctx: EvidenceContext) -> LeafResult:
     if not command:
         return _unverifiable("tests_pass: missing 'command'")
     matches = ctx.find_execution(command=str(command))
-    if not matches:
+    # proof-of-REALITY requires FRESH evidence (§8.19/8.20): a test run
+    # captured BEFORE this task's last filesystem mutation proves nothing
+    # about the current state — code written AFTER a failed run would make
+    # that failure stale, and never-current evidence must not satisfy the
+    # goal predicate. Terminal commands are not tracked as mutations (a
+    # stated, bounded limitation); filesystem tool mutations are.
+    mutations = [
+        e
+        for e in ctx.task_executions()
+        if e.tool == "filesystem" and e.operation in {"write", "create", "delete", "move"}
+    ]
+    last_mutation = max((e.finished_at for e in mutations), default=None)
+    fresh = [e for e in matches if last_mutation is None or e.finished_at > last_mutation]
+    if not fresh and ctx.run_command is not None and ctx.charge():
+        # no capture evidence newer than the last mutation (or no captured
+        # evidence at all): the verifier independently executes the
+        # OWNER-authored completion command in the verified workspace
+        # (§27 independent proof)
+        fresh = [ctx.run_command(str(command), ctx.task_id, ctx.workspace)]
+        ctx.executions.extend(fresh)
+    if not matches and not fresh:
         return _unverifiable(
             f"tests_pass: command {str(command)[:60]!r} has no captured execution evidence"
         )
-    ok = any(e.status.value == "SUCCEEDED" and e.exit_code == 0 for e in matches)
+    if not fresh:
+        return LeafResult(
+            VerificationOutcome.NOT_VERIFIED,
+            [
+                EvidenceItem(
+                    claim=(
+                        f"tests not re-run after the task's last file mutation: {str(command)[:60]}"
+                    ),
+                    observed=False,
+                    detail={
+                        "stale_exit_codes": [e.exit_code for e in matches][:5],
+                        "last_mutation": last_mutation.isoformat() if last_mutation else None,
+                    },
+                )
+            ],
+        )
+    ok = any(e.status.value == "SUCCEEDED" and e.exit_code == 0 for e in fresh)
     return LeafResult(
         VerificationOutcome.PASS if ok else VerificationOutcome.NOT_PASS,
         [
             EvidenceItem(
                 claim=f"tests passed: {str(command)[:60]}",
                 observed=ok,
-                detail={"exit_codes": [e.exit_code for e in matches][:5]},
+                detail={"exit_codes": [e.exit_code for e in fresh][:5]},
             )
         ],
     )

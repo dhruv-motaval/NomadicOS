@@ -26,7 +26,10 @@ vector-data/
 *.safetensors
 *.bin
 *.onnx
-node_modules/
+
+# --- Frontend (React + Vite SPA) ---
+frontend/node_modules/
+frontend/dist/
 
 # --- Runtime artifacts ---
 logs/

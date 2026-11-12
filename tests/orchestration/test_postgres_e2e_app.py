@@ -52,6 +52,11 @@ def _make_app_via_load_config(tmp_path, scripts=None):
     application uses PostgreSQL when ``.env`` configures it.
     """
     cfg = load_config()
+    # The scripted mock reply drives the classic worker path; the owner's
+    # config.yaml may enable the brain actor, which ignores that script.
+    cfg = cfg.model_copy(
+        update={"orchestration": cfg.orchestration.model_copy(update={"brain_actor": False})}
+    )
     assert cfg.persistence.persistence_backend == "postgres"
     assert cfg.persistence.dsn is not None
 

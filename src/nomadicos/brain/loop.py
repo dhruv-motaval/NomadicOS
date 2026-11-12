@@ -53,8 +53,6 @@ from nomadicos.brain.state import BrainState
 from nomadicos.contracts.core import Contract
 from nomadicos.kernel.ids import new_id
 
-EventClock = Callable[[], datetime]
-
 
 def _failure_reason(exc: Exception) -> str:
     """Normalize any failure into a bounded, structured reason string."""

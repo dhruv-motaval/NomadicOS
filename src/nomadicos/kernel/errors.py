@@ -77,10 +77,6 @@ class ActionFailed(NomadicOSBaseError):
     category = Failure.ACTION_FAILED
 
 
-class ActionTimeout(NomadicOSBaseError):
-    category = Failure.TIMEOUT
-
-
 class ToolError(NomadicOSBaseError):
     category = Failure.TOOL_ERROR
 
@@ -91,14 +87,6 @@ class ModelError(NomadicOSBaseError):
 
 class EngineUnavailable(ModelError):
     category = Failure.RESOURCE_UNAVAILABLE
-
-
-class VerificationFailed(NomadicOSBaseError):
-    category = Failure.VERIFICATION_FAILED
-
-
-class GoalNotSatisfied(NomadicOSBaseError):
-    category = Failure.GOAL_NOT_SATISFIED
 
 
 class ResourceUnavailable(NomadicOSBaseError):

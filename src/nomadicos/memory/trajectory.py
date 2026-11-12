@@ -23,7 +23,6 @@ from collections.abc import Sequence
 
 from nomadicos.contracts.memory import (
     MAX_OUTCOME_CHARS,
-    MAX_STEP_SUMMARY_CHARS,
     MemoryProvenance,
     MemorySource,
     TrajectoryRecord,
@@ -92,8 +91,3 @@ def record_trajectory(
         return store.upsert_trajectory(record)
     except Exception:  # noqa: BLE001 - memory is fail-safe by contract
         return None
-
-
-# summary length is enforced by the contract; kept as a named constant
-# import for callers that pre-truncate
-STEP_SUMMARY_CHARS = MAX_STEP_SUMMARY_CHARS

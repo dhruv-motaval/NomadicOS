@@ -67,29 +67,6 @@ SECRET_NAME_MARKERS = (
     "keystore",
 )
 
-SOURCE_SUFFIXES = {
-    ".py",
-    ".js",
-    ".ts",
-    ".tsx",
-    ".jsx",
-    ".rs",
-    ".go",
-    ".java",
-    ".c",
-    ".h",
-    ".cpp",
-    ".cs",
-    ".rb",
-    ".php",
-    ".kt",
-    ".swift",
-    ".md",
-    ".txt",
-    ".html",
-    ".css",
-}
-
 MAX_TREE = 200
 MAX_FILE_BYTES = 64_000
 MAX_EXCERPT_CHARS = 3000

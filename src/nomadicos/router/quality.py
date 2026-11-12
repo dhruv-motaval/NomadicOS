@@ -79,9 +79,12 @@ def utility(
     latency_ms: float | None,
     memory_mib: float | None,
     *,
+    tokens_per_second: float | None = None,
+    throughput_ref_tps: float = 30.0,
     eta: float = 1.0,
     alpha: float = 1.0,
     beta: float = 0.5,
+    delta: float = 0.35,
     gamma: float = 0.0,
     cost_per_task: float | None = None,
     latency_ref_ms: float = 30_000.0,
@@ -100,7 +103,17 @@ def utility(
     latency_ratio = (latency_ms / latency_ref_ms) if latency_ms else 1.0
     memory_ratio = (memory_mib / memory_ref_mib) if memory_mib else 1.0
     cost_ratio = ((cost_per_task or 0.0) + epsilon) / cost_ref if gamma > 0 else 1.0
-    return (p_lcb**eta) / ((latency_ratio**alpha) * (memory_ratio**beta) * (cost_ratio**gamma))
+    # Throughput is a positive signal: a model that reaches the same verified
+    # quality substantially faster is more useful for interactive local work.
+    # Unknown throughput stays neutral; it is never guessed from model size.
+    throughput_ratio = (
+        max(tokens_per_second, epsilon) / throughput_ref_tps
+        if tokens_per_second is not None and throughput_ref_tps > 0
+        else 1.0
+    )
+    return (p_lcb**eta) * (throughput_ratio**delta) / (
+        (latency_ratio**alpha) * (memory_ratio**beta) * (cost_ratio**gamma)
+    )
 
 
 def estimate_memory_mib(record: ModelRecord) -> float | None:

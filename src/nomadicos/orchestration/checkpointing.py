@@ -12,23 +12,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from nomadicos.persistence.checkpoints import (
-    NOMADICOS_SERDE_CLASSES as _NOMADICOS_MODEL_CLASSES,
-)
-
-
-def make_saver() -> Any:
-    try:
-        from langgraph.checkpoint.memory import InMemorySaver
-        from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
-    except ImportError:  # pragma: no cover - langgraph always present here
-        raise
-    try:
-        serde = JsonPlusSerializer(allowed_msgpack_modules=list(_NOMADICOS_MODEL_CLASSES))
-        return InMemorySaver(serde=serde)
-    except TypeError:  # older/newer langgraph signature: fall back, warnings only
-        return InMemorySaver()
-
 
 def make_durable_saver(persistence) -> Any:
     """Durable checkpoint saver selected by PersistenceConfig (Phase 13B,

@@ -321,8 +321,3 @@ def _contradictory(r1: MemoryRecord, r2: MemoryRecord) -> bool:
     if has_not_1 != has_not_2:
         return True  # one negates, the other doesn't
     return False
-
-
-def consolidate_all(stores: list[MemoryStore]) -> list[ConsolidationResult]:
-    """Consolidate multiple stores (e.g. per-workspace stores)."""
-    return [consolidate(s) for s in stores]

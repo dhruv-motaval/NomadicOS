@@ -167,6 +167,10 @@ class RegistryBuilder:
         role and the models-dir scan record under one identity.
         """
         health = await engine.health()
+        # served context windows reported BY the engine (llama.cpp meta.n_ctx)
+        # are measured truth; the filename size proxy applies only when the
+        # engine reports nothing (older builds) — never the other way round
+        reported_contexts = health.context_windows or {}
         owned: set[str] | None = None
         if models_dir is not None and engine.engine_id == "ollama":
             root = Path(models_dir)
@@ -186,6 +190,12 @@ class RegistryBuilder:
             ):
                 continue
             roles = self._role_for(model_id)
+            reported = reported_contexts.get(model_id)
+            if reported:
+                context_window = int(reported)
+            else:
+                size_hint = estimate_size_b(model_id)
+                context_window = int((size_hint or 4) * 2048)
             registry.register(
                 ModelRecord(
                     model_id=model_id,
@@ -194,7 +204,7 @@ class RegistryBuilder:
                     capabilities=caps_for_roles(roles),
                     health=health.status,
                     source=engine.engine_id,  # type: ignore[arg-type]
-                    context_window=int((estimate_size_b(model_id) or 4) * 2048),
+                    context_window=context_window,
                 )
             )
         return registry

@@ -29,7 +29,6 @@ from nomadicos.contracts.verification import VerificationResult
 #: closed on load (no auto-migration of security-sensitive state in 13A)
 SCHEMA_VERSION = 1
 
-MAX_TASK_ID = 128
 MAX_OBJECTIVE = 2000
 MAX_CONSTRAINTS = 20
 MAX_CONSTRAINT_CHARS = 500
@@ -86,13 +85,6 @@ class AuditEventRecord(Contract):
     result: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
     timestamp: str
-
-
-def _correlated(item: dict[str, Any]) -> dict[str, Any]:
-    for key in ("id", "type", "timestamp"):
-        if not isinstance(item.get(key), str) or not item.get(key):
-            raise ValueError(f"audit event missing correlation field {key!r}")
-    return item
 
 
 class TaskRecord(Contract):

@@ -45,8 +45,5 @@ class TargetRegistry:
             )
         return target, ""
 
-    def enumerate_targets(self) -> list[TargetRecord]:
-        return [self._targets[key] for key in sorted(self._targets)]
-
     def __len__(self) -> int:
         return len(self._targets)

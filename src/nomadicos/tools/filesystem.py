@@ -15,7 +15,7 @@ from typing import Any, ClassVar
 from pydantic import BaseModel
 
 from nomadicos.contracts.execution import ExecutionStatus
-from nomadicos.kernel.errors import Failure, ToolError
+from nomadicos.kernel.errors import Failure
 from nomadicos.tools.base import Tool, ToolOutcome
 from nomadicos.tools.context import ExecutionContext
 from nomadicos.tools.paths import resolve_scoped
@@ -287,7 +287,3 @@ def _atomic_replace(tmp, path) -> str | None:
         except OSError:
             pass
         return f"atomic replace failed: {exc}"
-
-
-class FilesystemError(ToolError):
-    """Kept for callers that special-case fs failures."""

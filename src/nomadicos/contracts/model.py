@@ -80,6 +80,10 @@ class MetricsBundle(Contract):
     critic_quality: float | None = None
     median_latency_s: float | None = None
     p95_latency_s: float | None = None
+    median_ttft_s: float | None = None
+    p95_ttft_s: float | None = None
+    median_tokens_per_second: float | None = None
+    p95_tokens_per_second: float | None = None
     avg_steps: float | None = None
     avg_retries: float | None = None
 

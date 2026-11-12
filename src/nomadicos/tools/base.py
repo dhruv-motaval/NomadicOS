@@ -42,6 +42,18 @@ class Tool(ABC):
     name: ClassVar[str]
     #: operation -> typed argument model
     ops: ClassVar[dict[str, type[BaseModel]]]
+    #: What syntax errors should suggest instead. Read-only grounding for
+    #: proposal authors: when this tool rejects a proposal as INVALID_PROPOSAL,
+    #: the rejection message names the best alternative so the model can
+    #: self-correct on the next attempt (never "fixed" into an action, SPEC §19).
+    syntax_hint: ClassVar[str] = ""
+    #: Which models get the per-request syntax grounding (auto-injection of
+    #: this tool's syntax_hint into the proposal prompt). Default is empty:
+    #: no model gets it unless the owner opts a model in. The grounding is
+    #: per-model because smaller models (e.g. LFM3-class) benefit from
+    #: explicit vocabulary guardrails, while stronger models do not need a
+    #: larger prompt — and prompt size is a real cost on every call.
+    grounding_models: ClassVar[frozenset[str]] = frozenset()
 
     def has(self, operation: str) -> bool:
         return operation in self.ops
@@ -95,6 +107,30 @@ class ToolRegistry:
 
     def check_args(self, tool: str, operation: str, args: dict[str, Any]) -> dict[str, Any]:
         return self.get(tool).check_args(operation, args)
+
+    def syntax_hint(self, tool: str) -> str:
+        impl = self._tools.get(tool)
+        return impl.syntax_hint if impl is not None else ""
+
+    def grounding_hint(self, model_id: str) -> str:
+        """Aggregated syntax grounding for ONE model (reusable opt-in).
+
+        Each tool declares ``grounding_models``; the model only sees a
+        tool's ``syntax_hint`` when it is in that set. Empty for every
+        non-opted-in model. Read-only guidance — nothing here is authority.
+        """
+        hints: list[str] = []
+        for name in sorted(self._tools):
+            tool = self._tools[name]
+            if model_id in tool.grounding_models and tool.syntax_hint:
+                hints.append(f"- {name}: {tool.syntax_hint}")
+        if not hints:
+            return ""
+        return (
+            "WINDOWS/LOCATION VOCABULARY GROUNDING (use these spellings):\n"
+            + "\n".join(hints)
+            + "\n"
+        )
 
     def capability_args(self) -> dict[str, str]:
         """Every registered "<tool>.<operation>" -> its argument keys, required ones

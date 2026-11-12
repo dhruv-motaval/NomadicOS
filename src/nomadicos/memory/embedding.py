@@ -20,7 +20,6 @@ Design principles (mirroring the rest of NomadicOS):
 
 from __future__ import annotations
 
-import hashlib
 from typing import Protocol, runtime_checkable
 
 import httpx
@@ -83,7 +82,6 @@ class OllamaEmbeddingModel:
         self.model_id = model
         self.embedding_dim = EMBEDDING_DIM
         self._client = client or httpx.AsyncClient(base_url=base_url, timeout=default_timeout_s)
-        self._default_timeout_s = default_timeout_s
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -138,27 +136,3 @@ class OllamaEmbeddingModel:
             return resp.status_code == 200
         except httpx.HTTPError:
             return False
-
-
-def embedding_dim_for_model(model_id: str) -> int:
-    """Return the embedding dimension for a known model id.
-
-    Unknown models default to the nomic-embed-text dimension (768).
-    """
-    _KNOWN_DIMS: dict[str, int] = {
-        "nomic-embed-text": 768,
-        "nomic-embed-text-v1.5": 768,
-        "all-minilm": 384,
-        "all-mpnet-base-v2": 768,
-    }
-    return _KNOWN_DIMS.get(model_id, EMBEDDING_DIM)
-
-
-def stable_embedding_id(model_id: str, embedding_dim: int, text: str) -> str:
-    """Deterministic content-addressed id for an embedding.
-
-    Format: ``emb-<sha16(model_id|dim|text)>``. Same text + same model
-    always yields the same id, which makes embedding storage idempotent.
-    """
-    digest = hashlib.sha256(f"{model_id}|{embedding_dim}|{text}".encode()).hexdigest()[:16]
-    return f"emb-{digest}"

@@ -1,7 +1,4 @@
-models:
-  reasoning: models/Spark-X2.5-4B-uncensored-Q4_K_M.gguf
-  coding_worker: models/Spark-X2.5-4B-uncensored-Q4_K_M.gguf
-  worker: models/Spark-X2.5-4B-uncensored-Q4_K_M.gguf
+models: {}
 inference:
   default_engine: llamacpp
   fallback_engine: ollama
@@ -18,3 +15,9 @@ autonomy:
     - desktop.*
 routing:
   mode: BALANCED
+budget:
+  max_recoveries: 5
+orchestration:
+  # NomadicBrain: set true to let the brain plan (planner) and propose actions (actor)
+  brain_planner: false
+  brain_actor: true

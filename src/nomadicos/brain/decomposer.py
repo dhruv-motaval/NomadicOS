@@ -40,7 +40,6 @@ from nomadicos.brain.schemas import (
     MAX_PROVENANCE_REFS,
     CandidateKind,
     Subgoal,
-    canonical_json,
 )
 from nomadicos.brain.state import BrainState
 from nomadicos.contracts.core import Contract, GoalPredicate, parse_predicate
@@ -322,8 +321,3 @@ def apply_decomposition(state: BrainState, decomposition: Decomposition) -> Brai
     data["task_graph"] = graph
     data["state_version"] = state.state_version + 1
     return BrainState.model_validate(data)
-
-
-def decomposition_fingerprint(decomposition: Decomposition) -> str:
-    """Deterministic fingerprint for replay comparison."""
-    return canonical_json(decomposition.task_graph)

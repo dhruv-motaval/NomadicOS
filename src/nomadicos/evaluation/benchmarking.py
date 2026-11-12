@@ -30,6 +30,8 @@ class ProbeCase(Contract):
     must_contain: list[str] = Field(default_factory=list)
     must_not_contain: list[str] = Field(default_factory=list)
     category: str = "bug_fix"
+    #: Optional explicit capability attribution; absent for legacy probes.
+    capability: str | None = None
 
 
 class TaskRunOutcome(Contract):
@@ -171,6 +173,7 @@ class BenchmarkRunner:
             task_id=case.id,
             task_category=case.category,  # type: ignore[arg-type]
             language="_probe",
+            capability=case.capability,
             difficulty=0.1,
             success=success,
             total_latency_ms=round(latency * 1000.0, 2),

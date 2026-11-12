@@ -51,6 +51,18 @@ class InferenceConfig(_Contract):
     llama_server_url: str = "http://127.0.0.1:8080"
     llama_server_bin: str = "llama-server"
     llama_port: int = Field(default=8080, ge=1, le=65535)
+    # context the host auto-start SERVES (§14D-1: the launcher's --ctx-size
+    # is the runtime's actual context setting). Default covers the routing
+    # policy's large-context floor (16384): a host serving less can never
+    # satisfy large-context tasks, making them unsatisfiable by construction.
+    llama_context_size: int = Field(default=16384, ge=512)
+    # disable the chat template's reasoning channel for llama.cpp chat
+    # requests. Reasoning models (e.g. Spark-X) spend their entire
+    # max_tokens budget in the reasoning channel and emit EMPTY content —
+    # every structured proposal then fails closed as INVALID_PROPOSAL.
+    # Measured: disabled emission produced valid Action IR JSON; enabled
+    # produced 4k+ reasoning tokens with zero content (2026-11-03 evidence).
+    llama_enable_thinking: bool = False
     models_dir: str = "models"
     request_timeout_s: float = Field(default=600.0, gt=0)
 
@@ -215,13 +227,21 @@ class RouterConfig(_Contract):
     #: accumulates.
     quality_min_samples: int = Field(default=5, ge=1)
     #: utility weights: eta = reliability, alpha = latency, beta = memory,
-    #: gamma = monetary cost (omitted for local-first configs)
+    #: delta = decode throughput, gamma = monetary cost (omitted locally)
     utility_weights: dict[str, float] = Field(
-        default_factory=lambda: {"eta": 1.0, "alpha": 1.0, "beta": 0.5, "gamma": 0.0}
+        default_factory=lambda: {
+            "eta": 1.0,
+            "alpha": 1.0,
+            "beta": 0.5,
+            "delta": 0.35,
+            "gamma": 0.0,
+        }
     )
-    #: normalisation references: L_ref in ms, R_ref in MiB
+    #: normalisation references: latency in ms, memory in MiB, throughput in
+    #: generated tokens/second. Unknown measurements remain neutral.
     latency_ref_ms: float = Field(default=30_000.0, gt=0)
     memory_ref_mib: float = Field(default=8_192.0, gt=0)
+    throughput_ref_tps: float = Field(default=30.0, gt=0)
     #: per-model repeat cap inside an escalation chain (Phase 14D-3): a model
     #: that repeatedly times out does not keep getting attempts just because its
     #: historical quality score is high
@@ -233,6 +253,10 @@ class RouterConfig(_Contract):
 
 class OrchestrationConfig(_Contract):
     engine: Literal["langgraph"] = "langgraph"
+    #: NomadicBrain actor proposes step actions (off = legacy worker prompt)
+    brain_actor: bool = False
+    #: NomadicBrain decomposes the goal into the mission plan
+    brain_planner: bool = False
 
 
 # ---------------------------------------------------------------------------

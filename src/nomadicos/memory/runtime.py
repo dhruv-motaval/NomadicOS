@@ -138,22 +138,6 @@ class RuntimeMemory:
         }
 
     # ------------------------------------------------------------- read ---
-    def memory_block(self, query_text: str, *, limit: int = 6) -> str:
-        """Bounded DATA-only retrieval block (Retriever.context framing);
-        any retrieval problem degrades to an empty block. A retriever whose
-        ``retrieve`` is async cannot be awaited here — the block degrades
-        to empty; the async read seam (:meth:`amemory_block`) runs the full
-        hybrid ranking."""
-        if self.retriever is None:
-            return ""
-        try:
-            result = self.retriever.context(MemoryQuery(text=(query_text or "")[:400], limit=limit))
-            if inspect.isawaitable(result):
-                return ""  # async retriever in a sync seam: degrade safely
-            return result
-        except Exception:  # noqa: BLE001 - reads degrade to no-memory context
-            return ""
-
     async def amemory_block(self, query_text: str, *, limit: int = 6) -> str:
         """Async read seam: the full retriever ranking (hybrid when active),
         degrading to an empty block on any problem."""
@@ -197,48 +181,3 @@ class RuntimeMemory:
             return request.model_copy(update={"messages": messages})
         except Exception:  # noqa: BLE001 - memory seam never breaks the task
             return request
-
-    # ------------------------------------------------------------- write ---
-    def record_task_result(
-        self,
-        task_id: str,
-        goal_text: str,
-        step_results: list[dict[str, Any]] | None = None,
-        overall_outcome: str = "",
-        verified: bool = False,
-        confidence: float = 0.6,
-        source_event_id: str | None = None,
-    ) -> None:
-        """Record an episodic trajectory for a completed task.
-
-        Fail-safe: any problem is swallowed and does not affect task state.
-        """
-        from nomadicos.memory.trajectory import (
-            TrajectoryStep,
-            TrajectoryStepKind,
-            record_trajectory,
-        )
-
-        steps: list[TrajectoryStep] = []
-        for sr in step_results or []:
-            steps.append(
-                TrajectoryStep(
-                    kind=TrajectoryStepKind(sr.get("kind", "ACTION")),
-                    ref=str(sr.get("ref", "")),
-                    summary=str(sr.get("summary", ""))[:200],
-                )
-            )
-        try:
-            record_trajectory(
-                self.store,
-                task_id=task_id,
-                mission_id=task_id,
-                goal_text=goal_text or "",
-                steps=steps,
-                outcome=overall_outcome or "",
-                verified=verified,
-                confidence=confidence,
-                source_event_id=source_event_id,
-            )
-        except Exception:  # noqa: BLE001 - memory writes never break tasks
-            pass

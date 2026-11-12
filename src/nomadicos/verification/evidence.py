@@ -8,9 +8,9 @@ of the filesystem. Nothing in here mutates anything (SPEC §8.33).
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from nomadicos.contracts.execution import ExecutionResult
 
@@ -25,6 +25,12 @@ class EvidenceContext:
     executions: list[ExecutionResult] = field(default_factory=list)
     budget_items: int = 60
     _used: int = 0
+    #: TRUSTED verifier hook (§27): the goal verifier may execute an
+    #: OWNER-authored predicate command itself when no fresh executor
+    #: evidence exists for it — the only code path that can append
+    #: executions inside predicate evaluation. Never model-driven; the
+    #: command to run reaches it verbatim from the goal contract.
+    run_command: Callable[[str, str, Path | None], ExecutionResult] | None = None
 
     # ------------------------------------------------------- correlation --
     def task_executions(self, step_id: str | None = None) -> list[ExecutionResult]:
@@ -100,17 +106,3 @@ class EvidenceContext:
                 ).strip()
             ]
         return execs
-
-
-def as_context(
-    task_id: str,
-    executions: list[ExecutionResult] | None,
-    workspace: Path | str | None,
-    extra: dict[str, Any] | None = None,
-) -> EvidenceContext:
-    return EvidenceContext(
-        task_id=task_id,
-        workspace=Path(workspace) if workspace else None,
-        executions=list(executions or []),
-        **(extra or {}),
-    )

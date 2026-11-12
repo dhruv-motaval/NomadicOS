@@ -8,7 +8,6 @@ Bounded recovery implemented:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -359,33 +358,3 @@ class RealityLoop:
             failure=failure,
             recovered=recovered,
         )
-
-    def _failure_outcome(
-        self,
-        task_id: str,
-        step_id: str,
-        attempt_number: int,
-        category: FailureCategory,
-        message: str,
-    ) -> dict[str, Any]:
-        return {
-            "action_candidate_id": "",
-            "task_id": task_id,
-            "step_id": step_id,
-            "attempt_number": attempt_number,
-            "execution_attempt": None,
-            "observation": None,
-            "verification_result": None,
-            "failure": {
-                "id": "",
-                "category": category,
-                "message": message,
-                "details": {
-                    "task_id": task_id,
-                    "step_id": step_id,
-                    "attempt_number": attempt_number,
-                },
-                "occurred_at": datetime.now(UTC),
-            },
-            "completed_at": datetime.now(UTC),
-        }

@@ -21,6 +21,34 @@ class PathDenied(AuthorizationDenied):
     """Escape attempt / invalid path: an AUTHORIZATION-shaped refusal."""
 
 
+#: common POSIX absolute prefixes, mapped to their Windows equivalents.
+#: The translation is purely lexical; confinement is enforced on the
+#: RESOLVED Windows path afterwards, exactly as for native paths.
+_POSIX_TO_WINDOWS: tuple[tuple[str, str, str], ...] = (
+    ("/tmp", "TEMP", r"C:\Windows\Temp"),
+    ("/var/tmp", "TEMP", r"C:\Windows\Temp"),
+    ("/usr/bin", "SYSTEMROOT", r"C:\Windows"),
+    ("/usr/local/bin", "SYSTEMROOT", r"C:\Windows"),
+    ("/home", "USERPROFILE", r"C:\Users"),
+    ("/root", "USERPROFILE", r"C:\Users"),
+)
+
+
+def _to_windows_abs(raw: str) -> Path:
+    """Translate a POSIX-style absolute path to its Windows equivalent.
+
+    LLM-authored paths routinely follow POSIX conventions (/tmp/x, /usr/bin)
+    even on Windows. A blanket refusal makes legitimate intents fail closed
+    for a purely lexical reason. Translation keeps confinement intact because
+    the WINDOWS path is then resolved and segment-checked exactly like any
+    other absolute path (SPEC §23: resolved paths, never string prefixes)."""
+    for prefix, env_var, default in _POSIX_TO_WINDOWS:
+        if raw == prefix or raw.startswith(f"{prefix}/"):
+            rest = raw[len(prefix) :].lstrip("/")
+            return Path(os.environ.get(env_var, default)) / rest
+    return Path(raw)
+
+
 def _reject_invalid(pure: PurePath) -> None:
     if "\x00" in str(pure):
         raise PathDenied("null byte in path")
@@ -60,6 +88,18 @@ def _confine(resolved: Path, ctx: ExecutionContext) -> Path:
     return resolved
 
 
+def _resolve_windows(candidate: Path, ctx: ExecutionContext) -> Path:
+    """Run the SAME invalid-char + resolved-path confinement checks for a
+    Windows path candidate (native or POSIX-translated)."""
+    _reject_invalid(candidate)
+    candidate = Path(os.path.normcase(str(candidate)))
+    try:
+        resolved = candidate.resolve(strict=False)
+    except OSError as exc:  # e.g. symlink loops
+        raise PathDenied(f"unresolvable path: {exc}") from exc
+    return _confine(resolved, ctx)
+
+
 def resolve_scoped(raw: str, ctx: ExecutionContext) -> Path:
     """Resolve a model-supplied path against the task scope.
 
@@ -69,10 +109,14 @@ def resolve_scoped(raw: str, ctx: ExecutionContext) -> Path:
     """
     if not isinstance(raw, str) or not raw.strip():
         raise PathDenied("empty path")
-    # Reject POSIX-style absolute paths on Windows (they are not valid Windows
-    # paths and would resolve to the drive root, e.g. /usr/bin -> C:\usr\bin).
+    # POSIX-style absolute paths on Windows: translate to their Windows
+    # equivalent, then confine the RESOLVED Windows path below. They are not
+    # valid Windows paths natively (/usr/bin would resolve to C:\usr\bin);
+    # refusing them outright fails closed for a lexical reason, not a scope
+    # reason. The translated path goes through the SAME invalid-char and
+    # containment checks afterwards.
     if os.name == "nt" and raw.startswith("/"):
-        raise PathDenied(f"POSIX absolute path not allowed on Windows: {raw}")
+        return _resolve_windows(_to_windows_abs(raw), ctx)
     candidate = Path(raw).expanduser()
     _reject_invalid(candidate)
     if not candidate.is_absolute():

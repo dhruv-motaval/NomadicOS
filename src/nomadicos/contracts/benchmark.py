@@ -60,6 +60,9 @@ class BenchmarkRecord(Contract):
     task_id: str
     task_category: BenchmarkCategory
     language: str
+    #: Explicit capability attribution for cognitive probes. Legacy records may
+    #: omit this and remain valid, but they cannot be used as capability proof.
+    capability: str | None = None
     framework: str = ""
     difficulty: float
     success: bool

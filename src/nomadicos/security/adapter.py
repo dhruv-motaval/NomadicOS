@@ -16,7 +16,6 @@ tools, no second executor).
 from __future__ import annotations
 
 from nomadicos.contracts.action import ActionProposal, ProposalKind
-from nomadicos.contracts.execution import ExecutionResult
 from nomadicos.contracts.security import (
     Engagement,
     SandboxRecord,
@@ -85,16 +84,3 @@ def to_action_proposal(
         args=dict(action.args),
         note=note[:200],
     )
-
-
-def to_security_result(execution: ExecutionResult, action: SecurityAction) -> dict[str, object]:
-    """Map an existing ExecutionResult into structured security data."""
-    return {
-        "capability": action.capability.value,
-        "invocation_id": action.invocation_id,
-        "engagement_id": action.engagement_id,
-        "target_id": action.target_id,
-        "execution_id": execution.id,
-        "status": execution.status.value,
-        "evidence": {str(key)[:64]: value for key, value in list(execution.evidence.items())[:16]},
-    }

@@ -188,6 +188,36 @@ async def test_llamacpp_generate_and_tps() -> None:
     assert out.tokens_per_second is not None
 
 
+async def test_llamacpp_schema_request_sets_response_format() -> None:
+    """Regression: a request with a response schema must constrain sampling
+    via llama-server ``response_format`` json_schema; without a schema the
+    payload is unchanged (no response_format key)."""
+
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "{}"}}]},
+        )
+
+    engine = LlamaCppEngine(client=transport(handler))
+    await engine.generate(req())
+    assert "response_format" not in captured["body"]
+
+    await engine.generate(
+        GenerationRequest(
+            model_id="m1",
+            messages=[ChatMessage(role="user", content="hello")],
+            response_schema={"type": "object"},
+        )
+    )
+    body = captured["body"]
+    assert body["response_format"]["type"] == "json_schema"
+    assert body["response_format"]["json_schema"]["schema"] == {"type": "object"}
+
+
 async def test_llamacpp_stream_sse() -> None:
     sse = (
         'data: {"choices":[{"delta":{"content":"Foo"}}]}\n\n'

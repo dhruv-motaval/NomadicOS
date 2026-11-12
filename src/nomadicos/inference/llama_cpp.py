@@ -124,9 +124,16 @@ class LlamaCppEngine(InferenceEngine):
         default_timeout_s: float = 600.0,
         client: httpx.AsyncClient | None = None,
         launcher: LlamaServerLauncher | None = None,
+        enable_thinking: bool = False,
     ) -> None:
         self._client = client or httpx.AsyncClient(base_url=base_url, timeout=default_timeout_s)
         self._launcher = launcher
+        # chat-template reasoning-channel control (see
+        # InferenceConfig.llama_enable_thinking): reasoning models spend
+        # their whole token budget thinking and emit empty content by
+        # default — structured proposals fail closed. Disabled unless the
+        # owner opts in.
+        self._enable_thinking = enable_thinking
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -134,7 +141,7 @@ class LlamaCppEngine(InferenceEngine):
             self._launcher.stop()
 
     async def generate(self, request: GenerationRequest) -> GenerationResponse:
-        payload = self._payload(request, stream=False)
+        payload = self._payload(request, stream=False, enable_thinking=self._enable_thinking)
         started = time.monotonic()
         try:
             resp = await self._client.post("/v1/chat/completions", json=payload)
@@ -160,7 +167,7 @@ class LlamaCppEngine(InferenceEngine):
         )
 
     async def stream(self, request: GenerationRequest) -> AsyncIterator[GenerationResponse]:
-        payload = self._payload(request, stream=True)
+        payload = self._payload(request, stream=True, enable_thinking=self._enable_thinking)
         started = time.monotonic()
         ttft: float | None = None
         produced = 0
@@ -218,8 +225,24 @@ class LlamaCppEngine(InferenceEngine):
                     status=ModelHealth.UNHEALTHY, detail=f"status {resp.status_code}"
                 )
             models = await self.list_models()
+            # served context, from the engine itself (meta.n_ctx): measured
+            # serving truth, never a filename heuristics proxy (§14D-1)
+            contexts: dict[str, int] = {}
+            try:
+                meta_resp = await self._client.get("/v1/models", timeout=5.0)
+                meta_resp.raise_for_status()
+                for entry in meta_resp.json().get("data", []):
+                    model_id = entry.get("id")
+                    n_ctx = (entry.get("meta") or {}).get("n_ctx")
+                    if model_id and isinstance(n_ctx, int) and n_ctx > 0:
+                        contexts[str(model_id).replace("\\", "/")] = n_ctx
+            except (httpx.HTTPError, ValueError, TypeError):
+                contexts = {}  # older builds without meta: honest absence
             return EngineHealth(
-                status=ModelHealth.HEALTHY, detail="llama-server ready", models=models
+                status=ModelHealth.HEALTHY,
+                detail="llama-server ready",
+                models=models,
+                context_windows=contexts,
             )
         except httpx.HTTPError as exc:
             return EngineHealth(status=ModelHealth.UNHEALTHY, detail=str(exc))
@@ -240,7 +263,9 @@ class LlamaCppEngine(InferenceEngine):
         return None
 
     @staticmethod
-    def _payload(request: GenerationRequest, stream: bool) -> dict:
+    def _payload(
+        request: GenerationRequest, stream: bool, *, enable_thinking: bool = False
+    ) -> dict:
         payload: dict = {
             "model": request.model_id,
             "messages": [m.model_dump() for m in request.messages],
@@ -249,4 +274,19 @@ class LlamaCppEngine(InferenceEngine):
         }
         if request.max_tokens is not None:
             payload["max_tokens"] = request.max_tokens
+        if request.response_schema is not None:
+            # llama-server structured output: constrain sampling to the JSON
+            # schema (grammar-based). Downstream validation stays fail-closed.
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "structured_output",
+                    "schema": request.response_schema,
+                },
+            }
+        if not enable_thinking:
+            # disable the template reasoning channel; measured evidence:
+            # reasoning models exhaust max_tokens thinking and return EMPTY
+            # content (SPEC §12: every number above is measured, not claimed)
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
         return payload

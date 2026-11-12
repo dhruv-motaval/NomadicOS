@@ -29,6 +29,35 @@ _FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)\n\s*```", re.IGNORECASE | re.DOT
 _PROPOSAL_KEYS = frozenset({"tool", "operation", "args", "note"})
 _CLAIM_KEYS = frozenset({"finished", "justification"})
 
+#: Sampling grammar for proposal generation (llama-server response_format).
+#: Constraining emission to the SAME closed shape ``parse_model_output``
+#: validates eliminates malformed-JSON proposals at the sampler level;
+#: downstream validation is unchanged and fail-closed (SPEC §19).
+PROPOSAL_RESPONSE_SCHEMA: dict[str, Any] = {
+    "anyOf": [
+        {
+            "type": "object",
+            "properties": {
+                "tool": {"type": "string", "minLength": 1},
+                "operation": {"type": "string", "minLength": 1},
+                "args": {"type": "object", "additionalProperties": {}},
+                "note": {"type": "string"},
+            },
+            "required": ["tool", "operation"],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {
+                "finished": {"type": "boolean"},
+                "justification": {"type": "string"},
+            },
+            "required": ["finished"],
+            "additionalProperties": False,
+        },
+    ]
+}
+
 
 def extract_json_candidate(raw: str) -> str:
     """Deterministically select THE single JSON candidate, or reject."""

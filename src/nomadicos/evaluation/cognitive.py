@@ -89,6 +89,7 @@ class CapabilityBenchmarkSuite:
                 must_contain=list(case.must_contain),
                 must_not_contain=list(case.must_not_contain),
                 category=category,
+                capability=case.capability,
             )
             records.append(await runner.probe(model, probe))
         return records

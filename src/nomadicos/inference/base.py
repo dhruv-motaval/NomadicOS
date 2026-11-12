@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field
 
@@ -31,6 +31,12 @@ class GenerationRequest(Contract):
     timeout_s: float | None = Field(default=None, gt=0)
     #: optional base64-encoded images for vision/multimodal models
     images: list[str] = Field(default_factory=list)
+    #: optional JSON Schema for constrained structured generation. Engines
+    #: that support it (e.g. llama-server ``response_format`` json_schema)
+    #: constrain sampling to the schema; engines that do not ignore it.
+    #: This NEVER replaces downstream validation — the brain still parses
+    #: and validates all returned text fail-closed.
+    response_schema: dict[str, Any] | None = Field(default=None)
 
 
 class GenerationResponse(Contract):
@@ -51,6 +57,10 @@ class EngineHealth(Contract):
     status: ModelHealth
     detail: str = ""
     models: list[str] = Field(default_factory=list)
+    #: model id -> context the engine reports as SERVED (e.g. llama-server's
+    #: /v1/models meta.n_ctx). Measured serving truth, never a filename
+    #: proxy (SPEC §12); registry records consume it when present.
+    context_windows: dict[str, int] = Field(default_factory=dict)
 
 
 class InferenceEngine(ABC):

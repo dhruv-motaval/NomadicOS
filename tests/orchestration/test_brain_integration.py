@@ -277,6 +277,16 @@ async def test_legacy_path_unchanged_when_brain_disabled(tmp_path: Path) -> None
     assert "BRAIN_PROPOSED" not in [e.type for e in app.log.events(summary.task_id)]
 
 
+def test_brain_enabled_from_config(tmp_path: Path) -> None:
+    off = make_app(tmp_path / "off")
+    assert not off.runtime.brain_actor and not off.runtime.brain_planner_enabled
+    on = make_app(
+        tmp_path / "on",
+        config_over={"orchestration": {"brain_actor": True, "brain_planner": True}},
+    )
+    assert on.runtime.brain_actor and on.runtime.brain_planner_enabled
+
+
 def test_candidate_with_bare_tool_uses_capability_for_the_operation() -> None:
     from nomadicos.brain.schemas import ActionCandidate
     from nomadicos.orchestration.brain_adapter import candidate_to_model_output

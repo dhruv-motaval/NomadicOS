@@ -57,6 +57,10 @@ from nomadicos.tools.filesystem import FilesystemTool
 from nomadicos.tools.process import ProcessTool
 from nomadicos.tools.terminal import ProcessSupervisor, TerminalTool
 
+#: bounded readiness wait when auto-starting the default engine (SPEC §14):
+#: the server may take seconds to load a GGUF; startup never waits forever
+_ENGINE_READY_TIMEOUT_S = 60.0
+
 
 @dataclass
 class RunSummary:
@@ -109,7 +113,9 @@ class NomadicApp:
                     binary=cfg.inference.llama_server_bin,
                     host="127.0.0.1",
                     port=cfg.inference.llama_port,
+                    context_size=cfg.inference.llama_context_size,
                 ),
+                enable_thinking=cfg.inference.llama_enable_thinking,
             ),
             "ollama": OllamaEngine(
                 base_url=cfg.inference.ollama_base_url,
@@ -200,8 +206,8 @@ class NomadicApp:
             step_verifier=PredicateStepVerifier(runtime_workspace, per_task=workspace_per_task),
             goal_verifier=PredicateGoalVerifier(runtime_workspace, per_task=workspace_per_task),
             full_pc=self.store.has_full_autonomy,
-            brain_actor=brain_actor,
-            brain_planner_enabled=brain_planner,
+            brain_actor=brain_actor or cfg.orchestration.brain_actor,
+            brain_planner_enabled=brain_planner or cfg.orchestration.brain_planner,
             workspace_per_task=workspace_per_task,
         )
         self.memory_runtime = build_runtime_memory(
@@ -394,6 +400,12 @@ class NomadicApp:
     async def sync_models(self) -> None:
         """Best-effort: register live engine models + models/ files. Missing
         engines remain unregistered; nothing is invented (SPEC §12)."""
+        # Auto-start the DEFAULT engine FIRST: the owner's binary + model
+        # file get the server up before engine discovery, so the engine
+        # sync below can register live serving evidence. Without this order
+        # every dir-scanned file stays UNKNOWN (unmeasured === unroutable)
+        # and the first real task fail-closes on "no routable model".
+        await self._ensure_default_engine()
         builder = RegistryBuilder(self.config.models)
         for name in ("llamacpp", "ollama"):
             engine = self.engines.get(name)
@@ -408,12 +420,46 @@ class NomadicApp:
             except Exception:
                 continue  # engine down: honest absence, not an error
         builder.build(self.registry, models_dir=self.config.inference.models_dir)
-        # Best-effort auto-start of the DEFAULT engine: if the owner has the
-        # binary and a model file, NomadicOS starts the server itself so the
-        # first task does not wait on a hand-started process. A launcher that
-        # fails (binary missing, port taken, model incompatible) is an honest
-        # absence — the router falls back by configuration.
-        await self._ensure_default_engine()
+        # Engines are the authority on what is served (SPEC §12): serving
+        # proof does not survive an engine restart under a different model,
+        # so llamacpp/ollama records the engine no longer reports revert to
+        # UNKNOWN instead of silently keeping stale health. A HEALTHY record
+        # for a model the engine is not serving would otherwise claim serving
+        # evidence measured against a different model's outputs.
+        live_ids: dict[str, set[str]] = {}
+        live_context_reported: dict[str, bool] = {}
+        for name in ("llamacpp", "ollama"):
+            engine = self.engines.get(name)
+            if engine is None:
+                continue
+            try:
+                engine_health = await engine.health()
+            except Exception:
+                engine_health = None  # down: live proof is empty
+            live_ids[name] = {
+                model.replace("\\", "/")
+                for model in (engine_health.models if engine_health is not None else [])
+            }
+            live_context_reported[name] = bool(
+                engine_health is not None and engine_health.context_windows
+            )
+        for record in self.registry.all():
+            if record.engine not in live_ids:
+                continue
+            if record.model_id in live_ids[record.engine]:
+                continue
+            if record.health is ModelHealth.HEALTHY:
+                self.registry.set_health(record.model_id, ModelHealth.UNKNOWN, record.engine)
+        # When the engine reports served contexts it is the authority
+        # (§14D-1); only when it reports nothing (older llama-server builds)
+        # does the launcher's configured --ctx-size stand in as the runtime's
+        # actual context setting — and _ensure_default_engine runs BEFORE the
+        # records exist in a fresh process, so the correction must be
+        # re-applied here, after discovery.
+        default = self.config.inference.default_engine
+        launcher = getattr(self.engines.get(default), "_launcher", None)
+        if launcher is not None and not live_context_reported.get(default, False):
+            self._record_context(default, launcher.context_size)
 
     async def _ensure_default_engine(self) -> None:
         default = self.config.inference.default_engine
@@ -445,11 +491,22 @@ class NomadicApp:
         except ValueError:
             model_arg = str(model_path).replace("\\", "/")
         try:
-            launcher.start(model_arg, context_size=8192)
-            # give the server a moment to bind before reporting health
-            await asyncio.sleep(1.0)
+            launcher.start(model_arg, context_size=launcher.context_size)
         except Exception:
             return
+        # Bounded readiness wait: llama-server binds quickly but loads the
+        # GGUF asynchronously, and the registry may only claim HEALTHY from
+        # a live /v1/models report. Poll until serving or deadline — never
+        # invented health, and startup stays bounded (SPEC §14).
+        deadline = time.monotonic() + _ENGINE_READY_TIMEOUT_S
+        while time.monotonic() < deadline:
+            try:
+                engine_health = await engine.health()
+            except Exception:
+                engine_health = None
+            if engine_health is not None and engine_health.status is ModelHealth.HEALTHY:
+                break
+            await asyncio.sleep(1.0)
         # the launcher's configured context size is the runtime's actual
         # context setting (§14D-1): it is authoritative for the registry
         # record, unlike the name-derived size proxy used before the engine
@@ -480,6 +537,41 @@ class NomadicApp:
             candidate = Path(role)
             if candidate.exists():
                 return candidate
+        # single-model serving: the HOST must choose what to load. Measured
+        # evidence outranks alphabetical order — serve the llamacpp model
+        # with the best coding-capability benchmark bundle (measured success
+        # rate, then throughput, then id) so the auto-proven model is the
+        # one routing evidence already knows. Evidence-only iterations: a
+        # fresh process rehydrates benchmark identities from the durable
+        # store before any model record exists (SPEC §52A honest measured
+        # evidence; unmeasured files fall back to alphabetical order).
+        candidates: list[tuple[float, float, str]] = []
+        for model_id, engine in self.registry.benchmark_identities():
+            if engine != "llamacpp":
+                continue
+            versions = self.registry.metrics_versions(model_id, engine)
+            if not versions:
+                continue
+            bundle = self.registry.capability_bundle(
+                model_id, engine, "coding", benchmark_version=versions[-1]
+            )
+            if bundle.samples < self.config.routing.minimum_sample_count:
+                continue
+            candidates.append(
+                (
+                    -(bundle.success_rate or 0.0),
+                    -(bundle.median_tokens_per_second or 0.0),
+                    model_id,
+                )
+            )
+        if candidates:
+            candidates.sort()
+            best_id = candidates[0][2]
+            candidate2 = Path(best_id)
+            if not candidate2.exists():
+                candidate2 = root / Path(best_id).name
+            if candidate2.exists():
+                return candidate2
         ggufs = sorted(root.glob("*.gguf"))
         return ggufs[0] if ggufs else None
 
@@ -533,18 +625,6 @@ class NomadicApp:
             return None
         return json.loads(path.read_text(encoding="utf-8"))
 
-    def coding_report(self, task_id: str):
-        """Rebuild a worker report from a finished task thread's state."""
-        from nomadicos.agents.coding import build_worker_report
-
-        final = self.graph.get_state({"configurable": {"thread_id": f"nomadic:{task_id}"}}).values
-        return build_worker_report(
-            task_id=task_id,
-            executions=list(final.get("executions") or []),
-            state=dict(final),
-            elapsed_s=0.0,
-        )
-
     async def aclose(self) -> None:
         self.supervisor.kill_all()
         if self._metric_store is not None:
@@ -579,6 +659,7 @@ class NomadicApp:
         from nomadicos.agents.coding import CodingWorker, build_worker_report
         from nomadicos.agents.inspect import RepoInspector
         from nomadicos.agents.planning import CodingPlanner, predicates_for_coding_task
+        from nomadicos.executor.fresh_run import fresh_command_evidence
         from nomadicos.kernel.events import EventType
         from nomadicos.verification.goal import PredicateGoalVerifier
         from nomadicos.verification.step import PredicateStepVerifier
@@ -621,7 +702,15 @@ class NomadicApp:
             r.workspace_root = repo_root
             r.workspace_per_task = False
             r.step_verifier = PredicateStepVerifier(repo_root, per_task=False)
-            r.goal_verifier = PredicateGoalVerifier(repo_root, per_task=False)
+            r.goal_verifier = PredicateGoalVerifier(
+                repo_root,
+                per_task=False,
+                run_command=lambda command, task_id, workspace: fresh_command_evidence(
+                    command,
+                    task_id=task_id,
+                    workspace=workspace or repo_root,
+                ),
+            )
             if critic_model:
                 from nomadicos.agents.critic import ModelCritic
 
@@ -673,6 +762,41 @@ class NomadicApp:
             ) = saved
 
     # --------------------------------------------------------- benchmark ---
+    async def run_capability_benchmarks(
+        self,
+        cases: list[Any],
+        *,
+        model_ids: list[str] | None = None,
+        benchmark_version: str = "cognitive-v1",
+        max_models: int = 32,
+    ) -> list[BenchmarkRecord]:
+        """Run the bounded capability suite against discovered healthy models.
+
+        This is an evaluation-only path: it records measurements through the
+        existing ``BenchmarkRunner`` and never changes authority or production
+        task state. Model order and the model bound are deterministic.
+        """
+        from nomadicos.evaluation.cognitive import CapabilityBenchmarkSuite
+
+        if max_models < 1:
+            raise ValueError("max_models must be >= 1")
+        requested = set(model_ids) if model_ids is not None else None
+        models = [
+            model
+            for model in self.registry.all()
+            if model.health is ModelHealth.HEALTHY
+            and (requested is None or model.model_id in requested)
+        ]
+        models = sorted(models, key=lambda model: (model.model_id, model.engine))[:max_models]
+        suite = CapabilityBenchmarkSuite(benchmark_version)
+        records: list[BenchmarkRecord] = []
+        for model in models:
+            runner = BenchmarkRunner(
+                self.registry, self.runtime.engine_for(model.model_id), benchmark_version
+            )
+            records.extend(await suite.run(runner, model, list(cases)))
+        return records
+
     async def run_benchmark(self, model_id: str, task: BenchmarkTask) -> BenchmarkRecord:
         """One deterministic benchmark through the SAME production lifecycle
         as a normal task (Phase 14B): analyze -> route -> model -> Action IR

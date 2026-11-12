@@ -29,20 +29,6 @@ from nomadicos.router.quality import (
     utility,
 )
 
-#: task types whose routing mode still requires the strongest critic role.
-CRITIC_TASKS = {TaskType.REASONING}
-
-_PREFERRED_ROLES: dict[TaskType, list[str]] = {
-    TaskType.CLASSIFICATION: ["tiny", "worker"],
-    TaskType.CHAT: ["worker", "tiny"],
-    TaskType.SIMPLE_FILE: ["worker", "tiny"],
-    TaskType.TERMINAL: ["worker"],
-    TaskType.CODING: ["coding", "worker", "reasoning"],
-    TaskType.TESTING: ["coding", "worker", "evaluator"],
-    TaskType.REASONING: ["reasoning", "critic"],
-    TaskType.PLANNING: ["reasoning", "worker"],
-}
-
 _SIZELESS_MODEL = 7.0  # neutral size proxy when no hint exists
 
 
@@ -126,6 +112,24 @@ class ModelSelector:
         exceeding a known host budget, must not win on speed alone.
         """
         task_class = requirements.task_type.value
+        specialist_caps = set(requirements.capabilities) - {
+            CapabilityTag.TEXT,
+            CapabilityTag.TOOL_USE,
+        }
+        # Once any model has explicit evidence for a specialist capability,
+        # that evidence becomes the qualification source for the task. Before
+        # that point, declared capabilities remain a deterministic cold-start
+        # fallback, but are never presented as measured evidence.
+        measured_caps = {
+            capability
+            for capability in specialist_caps
+            if any(
+                registry.capability_bundle(record.model_id, record.engine, capability).samples
+                >= self._router.minimum_sample_count
+                for record in registry.enabled()
+            )
+        }
+        evidence_required = specialist_caps & measured_caps
         qualified: list[tuple[ModelRecord, MetricsBundle]] = []
         for record in registry.enabled():
             if record.health in (ModelHealth.UNHEALTHY, ModelHealth.UNKNOWN):
@@ -134,8 +138,30 @@ class ModelSelector:
                 # has never proven it serves the model — a GGUF file on
                 # disk is not proof of llama.cpp availability)
                 continue
-            if not set(requirements.capabilities) <= set(record.capabilities):
-                continue  # capability filter removes non-tool models (§13)
+            # TEXT and TOOL_USE are execution prerequisites. Specialist labels
+            # such as CODING/REASONING/TESTING are measured capabilities, not
+            # hardcoded role claims: benchmark evidence ranks them below.
+            # This keeps an unlabelled but healthy model eligible for discovery
+            # instead of making one config entry the only coding candidate.
+            core_caps = {CapabilityTag.TEXT, CapabilityTag.TOOL_USE}
+            required_core = set(requirements.capabilities) & core_caps
+            if not required_core <= set(record.capabilities):
+                continue
+            if evidence_required:
+                measured_for_record = {
+                    capability
+                    for capability in evidence_required
+                    if registry.capability_bundle(
+                        record.model_id, record.engine, capability
+                    ).samples
+                    >= self._router.minimum_sample_count
+                }
+                if not evidence_required <= measured_for_record:
+                    continue
+            # Cold start: with no measured evidence for a specialist
+            # capability anywhere in the registry, every healthy core-capable
+            # model stays eligible for deterministic discovery. Labels alone
+            # can never qualify — and never disqualify — a candidate.
             if requirements.needs_large_context and record.context_window < 16384:
                 continue
             if (
@@ -165,12 +191,25 @@ class ModelSelector:
                 task_class,
                 benchmark_version=versions[-1] if versions else None,
             )
+            # Specialist routing uses the explicit capability bundle as its
+            # quality/latency evidence, rather than a role-derived task proxy.
+            if specialist_caps and evidence_required:
+                specialist_bundles = [
+                    registry.capability_bundle(
+                        record.model_id,
+                        record.engine,
+                        capability,
+                        benchmark_version=versions[-1] if versions else None,
+                    )
+                    for capability in sorted(evidence_required)
+                ]
+                if specialist_bundles:
+                    bundle = specialist_bundles[0]
             qualified.append((record, bundle))
         return task_class, qualified
 
     def rank(self, registry: ModelRegistry, requirements: TaskRequirements) -> list[CandidateScore]:
         task_class, qualified = self._hard_filter(registry, requirements)
-        preferred = _PREFERRED_ROLES.get(requirements.task_type, ["worker"])
         min_quality = (
             _quality_gate(self._router, requirements.latency)
             if requirements.verification_required
@@ -180,18 +219,22 @@ class ModelSelector:
         for record, bundle in qualified:
             measured = bundle.samples > 0 and bundle.success_rate is not None
             success = bundle.success_rate if measured else None
-            role_fit = max(
-                (1.0 / (preferred.index(r) + 1) for r in record.roles if r in preferred),
-                default=0.4,
-            )
-            score = (
-                role_fit
-                if success is None
-                else (
-                    (1 - self._router.historical_weight) * role_fit
-                    + self._router.historical_weight * success
+            # Roles are descriptive legacy metadata only. Routing quality is
+            # based on measured outcomes; unmeasured candidates receive no
+            # invented capability score and remain eligible for cold start.
+            measured_quality = success if success is not None else 0.5
+            speed_bonus = 0.0
+            if bundle.median_tokens_per_second is not None:
+                speed_bonus = min(
+                    0.25,
+                    bundle.median_tokens_per_second
+                    / max(self._router.throughput_ref_tps, 1.0)
+                    * 0.1,
                 )
-            )
+            # A measured success rate is already the evidence score; keep it
+            # exact for compatibility and auditability. The throughput signal
+            # is only a secondary bonus, while cold start remains neutral.
+            score = measured_quality + speed_bonus if measured else 0.5
             # Phase 14C-B: the quality gate may reject a measured candidate
             # only when the evidence is SUFFICIENT (samples >=
             # minimum_sample_count); fewer samples stay in the ranking -
@@ -211,7 +254,10 @@ class ModelSelector:
                     score=round(score, 4),
                     size_b=_size_proxy(record),
                     measured=measured,
-                    reason=f"role_fit={role_fit:.2f} success={success}",
+                    reason=(
+                        f"measured_quality={measured_quality:.2f} "
+                        f"success={success} tps={bundle.median_tokens_per_second}"
+                    ),
                     engine=record.engine,
                     median_latency_s=bundle.median_latency_s,
                     p95_latency_s=bundle.p95_latency_s,
@@ -270,9 +316,12 @@ class ModelSelector:
                 rel.p_lcb,
                 bundle.p95_latency_s * 1000.0 if bundle.p95_latency_s is not None else None,
                 memory_mib,
+                tokens_per_second=bundle.median_tokens_per_second,
+                throughput_ref_tps=self._router.throughput_ref_tps,
                 eta=eta,
                 alpha=alpha,
                 beta=beta,
+                delta=self._router.utility_weights.get("delta", 0.35),
                 latency_ref_ms=self._router.latency_ref_ms,
                 memory_ref_mib=self._router.memory_ref_mib,
             )
@@ -337,12 +386,10 @@ class ModelSelector:
         preferred by measured quality, then size. Without measurements the
         existing size-based fallback applies deterministically. Critic
         metrics never influence the worker selection path."""
-        critics = [
-            r
-            for r in registry.enabled()
-            if ("critic" in r.roles or "evaluator" in r.roles or "reasoning" in r.roles)
-            and r.health is not ModelHealth.UNHEALTHY
-        ]
+        # Review capability is measured, not granted by a role label. Every
+        # healthy enabled model is eligible; measured evidence wins, while
+        # cold-start falls back deterministically to the largest candidate.
+        critics = [r for r in registry.enabled() if r.health is not ModelHealth.UNHEALTHY]
         if not critics:
             raise ResourceUnavailable("no critic-capable model registered")
         scored: list[tuple[bool, float | None, ModelRecord]] = []
@@ -364,19 +411,6 @@ class ModelSelector:
             return measured[0][2]
         critics.sort(key=lambda r: (-_size_proxy(r), r.model_id))  # strongest plausible first
         return critics[0]
-
-    def select_worker_for_class(self, registry: ModelRegistry, task_class: str) -> ModelRecord:
-        """Used by benchmarks/agents needing a specific class' best measured."""
-        try:
-            req_type = TaskType(task_class)
-        except ValueError:
-            req_type = TaskType.CODING
-        reqs = TaskRequirements(
-            task_type=req_type,
-            capabilities=caps_for(req_type),
-            difficulty=0.5,
-        )
-        return self.select(registry, reqs).selected
 
 
 def caps_for(task_type: TaskType) -> list[CapabilityTag]:
