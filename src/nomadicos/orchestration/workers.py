@@ -18,6 +18,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from pydantic import ValidationError
+
 from nomadicos.action_ir.parser import extract_json_candidate
 from nomadicos.inference.base import ChatMessage, GenerationRequest, InferenceEngine
 from nomadicos.kernel.errors import InvalidProposal
@@ -93,7 +95,9 @@ def _parse_worker_result(
     except (ValueError, TypeError) as exc:
         raise InvalidProposal(f"{worker} output has invalid status {status!r}") from exc
     diagnostics = obj.get("diagnostics") or ""
-    if diagnostics and len(diagnostics) > 500:
+    if not isinstance(diagnostics, str):
+        raise InvalidProposal(f"{worker} diagnostics must be a string")
+    if len(diagnostics) > 500:
         raise InvalidProposal(f"{worker} diagnostics exceed 500 chars")
     actions_attempted = obj.get("actions_attempted", 0)
     if not isinstance(actions_attempted, int) or actions_attempted < 0:
@@ -104,21 +108,26 @@ def _parse_worker_result(
     evidence = obj.get("verification_evidence") or []
     if not isinstance(evidence, list):
         raise InvalidProposal(f"{worker} verification_evidence must be a list")
-    return WorkerResult(
-        worker=worker,
-        role=role,
-        task_id=assignment.task_id,
-        mission_id=assignment.mission_id,
-        step_id=assignment.step_id,
-        status=status,
-        artifacts=artifacts,
-        verification_evidence=evidence,
-        failure_category=obj.get("failure_category"),
-        diagnostics=diagnostics,
-        model_used=None,  # filled in by the caller
-        actions_attempted=actions_attempted,
-        elapsed_s=float(obj.get("elapsed_s", 0.0)),
-    )
+    # Any other wrongly typed field is malformed model output: fail closed as a
+    # proposal error, never as a worker crash.
+    try:
+        return WorkerResult(
+            worker=worker,
+            role=role,
+            task_id=assignment.task_id,
+            mission_id=assignment.mission_id,
+            step_id=assignment.step_id,
+            status=status,
+            artifacts=artifacts,
+            verification_evidence=evidence,
+            failure_category=obj.get("failure_category"),
+            diagnostics=diagnostics,
+            model_used=None,  # filled in by the caller
+            actions_attempted=actions_attempted,
+            elapsed_s=float(obj.get("elapsed_s", 0.0)),
+        )
+    except (ValidationError, TypeError, ValueError) as exc:
+        raise InvalidProposal(f"{worker} output has invalid field types: {exc}"[:500]) from exc
 
 
 class _ModelWorker:
