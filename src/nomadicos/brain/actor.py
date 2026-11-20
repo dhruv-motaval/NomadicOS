@@ -164,7 +164,7 @@ def candidate_request_payload(
         "capability_args": {
             c.name: c.description for c in state.capabilities[:48] if c.description
         },
-        "recent_observations": [o.summary[:600] for o in state.observations[-4:]],
+        "recent_observations": [o.summary[:600] for o in state.observations[-8:]],
         "world_facts": {
             key: {"value": fact.value, "kind": fact.kind.value}
             for key, fact in list(state.world.facts.items())[:16]

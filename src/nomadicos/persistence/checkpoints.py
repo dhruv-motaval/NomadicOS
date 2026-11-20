@@ -128,13 +128,15 @@ class DurableCheckpointSaver(InMemorySaver):
     def _write_snapshot(self, state: dict) -> None:  # pragma: no cover - interface
         raise NotImplementedError
 
-    def _trim(self) -> None:
+    def _trim(self, threads: list[str] | None = None) -> None:
         """Bound checkpoints: keep the latest MAX_CHECKPOINTS_PER_THREAD
         per (thread, namespace); prune writes and blobs no longer
-        referenced by the surviving checkpoints."""
+        referenced by the surviving checkpoints. ``threads`` limits the work
+        to those threads (a per-thread persist must not touch the rest)."""
+        ids = list(self.storage) if threads is None else [t for t in threads if t in self.storage]
         referenced: set[tuple[str, str, Any, Any]] = set()
-        for thread_id, namespaces in list(self.storage.items()):
-            for ns, cps in namespaces.items():
+        for thread_id in ids:
+            for ns, cps in self.storage[thread_id].items():
                 latest = list(cps.keys())[-MAX_CHECKPOINTS_PER_THREAD:]
                 for cp_id in list(cps.keys()):
                     if cp_id not in latest:
@@ -144,7 +146,15 @@ class DurableCheckpointSaver(InMemorySaver):
                     ckpt = self.serde.loads_typed(cps[cp_id][0])
                     for channel, version in (ckpt.get("channel_versions") or {}).items():
                         referenced.add((thread_id, ns, channel, version))
-        self.blobs = {key: value for key, value in self.blobs.items() if key in referenced}
+        if threads is None:
+            self.blobs = {key: value for key, value in self.blobs.items() if key in referenced}
+        else:
+            mine = set(ids)
+            self.blobs = {
+                key: value
+                for key, value in self.blobs.items()
+                if key[0] not in mine or key in referenced
+            }
 
     def _snapshot(self) -> dict:
         self._trim()
@@ -158,8 +168,10 @@ class DurableCheckpointSaver(InMemorySaver):
 
     def _hydrate(self) -> None:
         state = self._read_snapshot()
-        if state is None:
-            return
+        if state is not None:
+            self._load_state(state)
+
+    def _load_state(self, state: dict) -> None:
         if state.get("schema_version") != CHECKPOINT_SCHEMA_VERSION:
             raise PersistenceCorrupt(
                 f"checkpoint schema version mismatch: {state.get('schema_version')!r}"
@@ -183,14 +195,18 @@ class DurableCheckpointSaver(InMemorySaver):
         """Durable thread identities discovered from persisted checkpoints."""
         return sorted(str(key) for key in self.storage.keys())
 
+    def _persist(self, thread_id: str) -> None:
+        """Make the mutation durable. Default: the whole snapshot (file adapter)."""
+        self._write_snapshot(self._snapshot())
+
     def put(self, config, checkpoint, metadata, new_versions: ChannelVersions):
         result = super().put(config, checkpoint, metadata, new_versions)
-        self._write_snapshot(self._snapshot())
+        self._persist(config["configurable"]["thread_id"])
         return result
 
     def put_writes(self, config, writes, task_id, task_path: str = ""):
         result = super().put_writes(config, writes, task_id, task_path=task_path)
-        self._write_snapshot(self._snapshot())
+        self._persist(config["configurable"]["thread_id"])
         return result
 
 
@@ -241,13 +257,23 @@ def _replace_with_retry(tmp: Path, target: Path, attempts: int = 4) -> None:
 
 class PostgresCheckpointSaver(DurableCheckpointSaver):
     """PostgreSQL-backed checkpoint saver (SPEC 34 durable source of
-    truth). One versioned snapshot row; same fail-closed semantics."""
+    truth). One versioned row PER THREAD, so a graph step rewrites only its
+    own thread (the old single-row snapshot rewrote every thread ever run:
+    ~40 MB per step). Same fail-closed semantics."""
 
     engine_id = "checkpoint-postgres"
 
-    _SCHEMA_SQL = """
+    _LEGACY_SQL = """
     CREATE TABLE IF NOT EXISTS nomadic_checkpoints (
         id             INTEGER PRIMARY KEY CHECK (id = 1),
+        schema_version INTEGER NOT NULL,
+        state          JSONB NOT NULL,
+        updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """
+    _SCHEMA_SQL = """
+    CREATE TABLE IF NOT EXISTS nomadic_checkpoint_threads (
+        thread_id      TEXT PRIMARY KEY,
         schema_version INTEGER NOT NULL,
         state          JSONB NOT NULL,
         updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -265,10 +291,30 @@ class PostgresCheckpointSaver(DurableCheckpointSaver):
         except Exception as exc:
             raise PersistenceUnavailable(f"PostgreSQL unavailable: {exc}") from exc
         try:
+            self._conn.execute(self._LEGACY_SQL)
             self._conn.execute(self._SCHEMA_SQL)
         except Exception as exc:
             raise PersistenceUnavailable(f"checkpoint schema init failed: {exc}") from exc
         self._hydrate()
+
+    def _hydrate(self) -> None:
+        try:
+            rows = self._conn.execute("SELECT state FROM nomadic_checkpoint_threads").fetchall()
+        except Exception as exc:
+            raise PersistenceUnavailable(f"checkpoint read failed: {exc}") from exc
+        if rows:
+            for (state,) in rows:
+                if not isinstance(state, dict):
+                    raise PersistenceCorrupt("checkpoint thread row is not a mapping")
+                self._load_state(state)
+            return
+        # one-time migration: split the legacy single-row snapshot into thread rows
+        # (the legacy row is left in place, never deleted)
+        legacy = self._read_snapshot()
+        if legacy is not None:
+            self._load_state(legacy)
+            for thread_id in list(self.storage):
+                self._write_thread(thread_id)
 
     def _read_snapshot(self) -> dict | None:
         try:
@@ -284,16 +330,34 @@ class PostgresCheckpointSaver(DurableCheckpointSaver):
             raise PersistenceCorrupt("checkpoint snapshot is not a mapping")
         return state
 
-    def _write_snapshot(self, state: dict) -> None:
+    def _write_snapshot(self, state: dict) -> None:  # pragma: no cover - superseded by _persist
+        raise NotImplementedError("PostgresCheckpointSaver persists per thread")
+
+    def _persist(self, thread_id: str) -> None:
+        self._trim([thread_id])
+        self._write_thread(thread_id)
+
+    def _write_thread(self, thread_id: str) -> None:
         from psycopg.types.json import Jsonb
 
+        state = {
+            "schema_version": CHECKPOINT_SCHEMA_VERSION,
+            "kind": "langgraph_checkpoints",
+            "storage": _to_jsonable(
+                {thread_id: self.storage[thread_id]} if thread_id in self.storage else {}
+            ),
+            "blobs": _to_jsonable({k: v for k, v in list(self.blobs.items()) if k[0] == thread_id}),
+            "writes": _to_jsonable(
+                {k: v for k, v in list(self.writes.items()) if k[0] == thread_id}
+            ),
+        }
         try:
             self._conn.execute(
-                "INSERT INTO nomadic_checkpoints (id, schema_version, state) "
-                "VALUES (1, %s, %s) ON CONFLICT (id) DO UPDATE SET "
+                "INSERT INTO nomadic_checkpoint_threads (thread_id, schema_version, state) "
+                "VALUES (%s, %s, %s) ON CONFLICT (thread_id) DO UPDATE SET "
                 "schema_version = EXCLUDED.schema_version, "
                 "state = EXCLUDED.state, updated_at = now()",
-                (CHECKPOINT_SCHEMA_VERSION, Jsonb(state)),
+                (thread_id, CHECKPOINT_SCHEMA_VERSION, Jsonb(state)),
             )
         except Exception as exc:
             raise PersistenceUnavailable(f"checkpoint persist failed: {exc}") from exc

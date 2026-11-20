@@ -30,6 +30,7 @@ _PREFIXES = (
     "rec",
     "pred",
     "eval",
+    "trace",
 )
 
 

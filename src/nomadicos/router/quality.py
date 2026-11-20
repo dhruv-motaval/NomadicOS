@@ -111,8 +111,10 @@ def utility(
         if tokens_per_second is not None and throughput_ref_tps > 0
         else 1.0
     )
-    return (p_lcb**eta) * (throughput_ratio**delta) / (
-        (latency_ratio**alpha) * (memory_ratio**beta) * (cost_ratio**gamma)
+    return (
+        (p_lcb**eta)
+        * (throughput_ratio**delta)
+        / ((latency_ratio**alpha) * (memory_ratio**beta) * (cost_ratio**gamma))
     )
 
 

@@ -70,7 +70,9 @@ class VisionGoalVerifier:
     def verify_task(self, goal: Goal, executions: list[ExecutionResult]) -> VerificationResult:
         workspace = None
         if self.workspace_root is not None:
-            workspace = self.workspace_root / goal.id if self.per_task else self.workspace_root
+            workspace = (
+                self.workspace_root / goal.workspace_name if self.per_task else self.workspace_root
+            )
 
         ctx = EvidenceContext(
             task_id=goal.id,

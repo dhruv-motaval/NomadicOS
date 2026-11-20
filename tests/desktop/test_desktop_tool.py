@@ -178,6 +178,24 @@ async def test_focus_window_hit_and_miss(tmp_path) -> None:
     assert "not found" in miss.message
 
 
+async def test_focus_window_handle_pins_the_observed_window(tmp_path) -> None:
+    tool, backend = make()
+    backend.windows = [
+        {"handle": 1, "title": "Budget - draft"},
+        {"handle": 2, "title": "Budget - final"},
+    ]
+    hit = await tool.run("focus_window", {"title": "Budget - final", "handle": 2}, ctx(tmp_path))
+    assert hit.status is ExecutionStatus.SUCCEEDED
+    assert hit.evidence["handle"] == 2
+    assert backend.focused == "Budget - final"
+
+    stale = await tool.run("focus_window", {"title": "Budget - final", "handle": 1}, ctx(tmp_path))
+    assert stale.status is ExecutionStatus.FAILED
+    assert stale.evidence["handle"] == 1
+    assert "no longer matches" in stale.message
+    assert backend.focused == "Budget - final"
+
+
 # ---------------------------------------------------------- screenshot -----
 
 

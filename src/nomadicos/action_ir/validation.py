@@ -102,19 +102,25 @@ class ProposalValidator:
 def _resource_hint(args: dict) -> str:
     # "executable" (process.launch) and "window" (desktop ui_* operations)
     # name what an action touches, so owner rules like "do not touch
-    # Project B" apply to launches and UI actions too
-    for key in (
-        "path",
-        "source",
-        "directory",
-        "command",
-        "target",
-        "url",
-        "title",
-        "executable",
-        "window",
-    ):
-        value = args.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return ""
+    # Project B" apply to launches and UI actions too.
+    # EVERY target is listed, not the first one found: a move's target and a
+    # command's arguments and cwd are where the protected path usually is.
+    parts = [
+        args.get(key)
+        for key in (
+            "path",
+            "source",
+            "directory",
+            "command",
+            "target",
+            "url",
+            "title",
+            "executable",
+            "window",
+            "text",  # what is typed into a terminal or a window
+        )
+    ]
+    argv = args.get("args")
+    parts += argv if isinstance(argv, list) else []
+    parts.append(args.get("cwd"))
+    return " ".join(part for part in parts if isinstance(part, str) and part)

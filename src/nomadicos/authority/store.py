@@ -15,6 +15,9 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -78,9 +81,79 @@ class AuthorityState(Contract):
     last_revoked_at: datetime | None = None
 
 
+#: a lock file older than this belongs to a crashed process and is reaped
+_LOCK_STALE_S = 30.0
+_LOCK_WAIT_S = 5.0
+
+
 class AuthorityStore:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
+
+    @staticmethod
+    def _reap_stale(lock: Path) -> bool:
+        """Remove a crashed process's lock. Serialised through a guard file and re-checked
+        inside it, so a waiter that already looked can never delete a lock another waiter
+        has just taken over (check-then-unlink would leave two holders)."""
+        guard = lock.with_suffix(lock.suffix + ".reap")
+        try:
+            gfd = os.open(str(guard), os.O_CREAT | os.O_EXCL | os.O_RDWR)
+        except (FileExistsError, PermissionError):
+            try:
+                if time.time() - guard.stat().st_mtime > _LOCK_STALE_S:
+                    guard.unlink(missing_ok=True)  # a reaper that crashed
+            except OSError:
+                pass
+            return False
+        try:
+            if time.time() - lock.stat().st_mtime > _LOCK_STALE_S:
+                lock.unlink(missing_ok=True)
+                return True
+        except OSError:
+            pass
+        finally:
+            os.close(gfd)
+            try:
+                guard.unlink()
+            except OSError:
+                pass
+        return False
+
+    @contextmanager
+    def _locked(self, *, required: bool = True) -> Iterator[None]:
+        """Cross-process lock around a read-modify-write of the state file.
+
+        Without it a task's write racing the owner's ``revoke-all`` could write
+        back a stale copy: the grant returns and the epoch moves backwards.
+        ``required=False`` (revoke) proceeds unlocked after the wait: revocation
+        must never be blocked by a stuck lock.
+        """
+        lock = self.path.with_suffix(self.path.suffix + ".lock")
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        deadline = time.monotonic() + _LOCK_WAIT_S
+        fd: int | None = None
+        while fd is None:
+            try:
+                fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_RDWR)
+            except (FileExistsError, PermissionError):  # busy (Windows: sharing violation)
+                if self._reap_stale(lock):
+                    continue
+                if time.monotonic() >= deadline:
+                    if required:
+                        raise ConfigInvalid(
+                            "authority state is locked by another process"
+                        ) from None
+                    break
+                time.sleep(0.01)
+        try:
+            yield
+        finally:
+            if fd is not None:
+                os.close(fd)
+                try:
+                    lock.unlink()
+                except OSError:
+                    pass
 
     # ------------------------------------------------------------- load ---
     def state(self) -> AuthorityState:
@@ -111,45 +184,50 @@ class AuthorityStore:
 
     # ---------------------------------------------------------- mutate ---
     def grant_full_pc_autonomy(self, *, source: str = "owner_cli") -> AuthorityState:
-        state = self.state()
-        if state.grant is not None and state.grant.profile == "FULL_PC_AUTONOMY":
-            return state  # persistent: already granted, later tasks inherit (§5)
-        state.grant = AuthorityGrant(
-            profile="FULL_PC_AUTONOMY", granted_at=datetime.now(UTC), source=source
-        )
-        state.epoch += 1  # new epoch: fresh validity window
-        state.last_revoked_at = None
-        self._write(state)
-        return state
+        with self._locked():
+            state = self.state()
+            if state.grant is not None and state.grant.profile == "FULL_PC_AUTONOMY":
+                return state  # persistent: already granted, later tasks inherit (§5)
+            state.grant = AuthorityGrant(
+                profile="FULL_PC_AUTONOMY", granted_at=datetime.now(UTC), source=source
+            )
+            state.epoch += 1  # new epoch: fresh validity window
+            state.last_revoked_at = None
+            self._write(state)
+            return state
 
     def revoke_all(self) -> AuthorityState:
         """Master revoke: no operational autonomy, all overrides void (§5)."""
-        state = self.state()
-        state.grant = None
-        state.override_allowed.clear()
-        state.conflicts.clear()
-        state.epoch += 1  # invalidates every outstanding grant artifact
-        state.last_revoked_at = datetime.now(UTC)
-        self._write(state)
-        return state
+        with self._locked(required=False):
+            state = self.state()
+            state.grant = None
+            state.override_allowed.clear()
+            state.conflicts.clear()
+            state.epoch += 1  # invalidates every outstanding grant artifact
+            state.last_revoked_at = datetime.now(UTC)
+            self._write(state)
+            return state
 
     def add_instruction(self, rule: str, resource: str = "") -> OwnerInstruction:
-        state = self.state()
-        instruction = OwnerInstruction(rule=rule, resource=resource)
-        state.instructions = [i for i in state.instructions if i.rule != rule] + [instruction]
-        self._write(state)
-        return instruction
+        with self._locked():
+            state = self.state()
+            instruction = OwnerInstruction(rule=rule, resource=resource)
+            state.instructions = [i for i in state.instructions if i.rule != rule] + [instruction]
+            self._write(state)
+            return instruction
 
     def remove_instruction(self, instruction_id: str) -> None:
-        state = self.state()
-        state.instructions = [i for i in state.instructions if i.id != instruction_id]
-        self._write(state)
+        with self._locked():
+            state = self.state()
+            state.instructions = [i for i in state.instructions if i.id != instruction_id]
+            self._write(state)
 
     # ------------------------------------------------- conflict storage ---
     def record_conflict(self, request_id: str, payload: dict) -> None:
-        state = self.state()
-        state.conflicts[request_id] = payload
-        self._write(state)
+        with self._locked():
+            state = self.state()
+            state.conflicts[request_id] = payload
+            self._write(state)
 
     def answer_conflict(self, request_id: str, decision: str, *, resolver: str) -> OwnerAnswer:
         """Only the owner may answer. resolver must literally be 'owner'."""
@@ -157,35 +235,36 @@ class AuthorityStore:
             raise ConfigInvalid("only the owner can answer authority conflicts")
         if decision.upper() not in {"ALLOW", "DENY"}:
             raise ConfigInvalid("decision must be ALLOW or DENY")
-        state = self.state()
-        conflict = state.conflicts.pop(request_id, None)
-        if conflict is None:
-            raise ConfigInvalid(f"unknown conflict request {request_id!r}")
-        answer = OwnerAnswer(decision=decision.upper())
-        if conflict is not None and decision.upper() == "ALLOW":
+        with self._locked():
+            state = self.state()
+            conflict = state.conflicts.pop(request_id, None)
+            if conflict is None:
+                raise ConfigInvalid(f"unknown conflict request {request_id!r}")
+            answer = OwnerAnswer(decision=decision.upper())
             fingerprint = str(conflict.get("fingerprint", ""))
-            if fingerprint:
-                state.override_allowed[fingerprint] = answer
-                state.denied_fingerprints.pop(fingerprint, None)
-        elif conflict is not None and decision.upper() == "DENY":
-            fingerprint = str(conflict.get("fingerprint", ""))
-            state.override_allowed.pop(fingerprint, None)
-            if fingerprint:
-                state.denied_fingerprints[fingerprint] = answer
-        self._write(state)
-        return answer
+            if decision.upper() == "ALLOW":
+                if fingerprint:
+                    state.override_allowed[fingerprint] = answer
+                    state.denied_fingerprints.pop(fingerprint, None)
+            else:
+                state.override_allowed.pop(fingerprint, None)
+                if fingerprint:
+                    state.denied_fingerprints[fingerprint] = answer
+            self._write(state)
+            return answer
 
     def is_denied(self, fingerprint: str) -> bool:
         return fingerprint in self.state_or_empty().denied_fingerprints
 
     def consume_override(self, fingerprint: str) -> bool:
         """Single-use ALLOW (SPEC §5: ALLOW -> execute with explicit override)."""
-        state = self.state()
-        if fingerprint in state.override_allowed:
-            del state.override_allowed[fingerprint]
-            self._write(state)
-            return True
-        return False
+        with self._locked():
+            state = self.state()
+            if fingerprint in state.override_allowed:
+                del state.override_allowed[fingerprint]
+                self._write(state)
+                return True
+            return False
 
     # ------------------------------------------------------------ views ---
     @property

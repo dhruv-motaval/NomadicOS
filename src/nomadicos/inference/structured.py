@@ -45,11 +45,18 @@ _DECOMPOSER_PROMPT = (
     '{"subgoals": [{"id": "s1", "description": "...", '
     '"success_predicate": {"type": "<predicate>", ...} | null}], '
     '"tasks": [{"id": "t1", "description": "...", "subgoal_id": "s1" | null, '
-    '"depends_on": ["<task ids>"], "success_predicate": {...} | null}]}. '
+    '"depends_on": ["<task ids>"], "success_predicate": {...} | null, '
+    '"worker_role": "execute|research|coding|testing"}]}. '
     "Rules: every id matches [A-Za-z0-9][A-Za-z0-9_.-]*; dependencies "
     "reference existing task ids; no cycles; at least one task; together the "
     "tasks must cover EVERY part of the goal, in order (e.g. open an "
-    "application AND then type into it are two tasks).\n\n"
+    "application AND then type into it are two tasks; running a command AND "
+    "saving its output to a file are two tasks). Set worker_role per task: "
+    "research = look something up, coding = write or change code/files, "
+    "testing = run tests or check results, execute = anything else. A coding "
+    "task that uses research must list that research task in depends_on, and "
+    "a testing task must depend on the coding task it checks. Put the goal's "
+    "own success_predicate on the task that produces it.\n\n"
     "CONTEXT:\n"
 )
 
@@ -82,7 +89,10 @@ _ACTOR_PROMPT = (
     "For filesystem.write use argument keys 'path' (target file path) and "
     "'content' (EXACT file content to write); for filesystem.read and "
     "filesystem.exists use 'path'; copy exact values (paths, contents) "
-    "from the world facts instead of paraphrasing them.\n\n"
+    "from the world facts instead of paraphrasing them. "
+    "To save a command's output to a file, propose filesystem.write with the "
+    "output text copied from recent_observations as 'content'; never "
+    "filesystem.read a file that does not exist yet.\n\n"
     "CONTEXT:\n"
 )
 

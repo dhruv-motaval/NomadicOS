@@ -279,12 +279,14 @@ class DesktopTool(Tool):
         )
 
     def _focus_window(self, a: FocusWindowArgs, ctx: ExecutionContext) -> ToolOutcome:
-        result = self.backend.focus_window(a.title)
+        result = self.backend.focus_window(a.title, a.handle)
         focused = bool(result.get("focused"))
         evidence: dict[str, Any] = {
             "focused": focused,
             "title": str(result.get("title", ""))[:MAX_TITLE_CHARS],
         }
+        if a.handle is not None:
+            evidence["handle"] = int(result.get("handle", a.handle) or a.handle)
         if focused:
             return ToolOutcome(status=ExecutionStatus.SUCCEEDED, evidence=evidence)
         reason = str(result.get("reason", "window not focused"))[:MAX_TITLE_CHARS]

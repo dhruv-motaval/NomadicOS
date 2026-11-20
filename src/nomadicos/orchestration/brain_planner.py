@@ -35,6 +35,7 @@ from nomadicos.brain.state import BrainState
 from nomadicos.contracts.core import Goal, PlanStep
 from nomadicos.kernel.errors import InvalidProposal
 from nomadicos.tools.base import ToolRegistry
+from nomadicos.verification.predicates import SUPPORTED_TYPES
 
 #: Maximum graph depth (chain length) for a mission plan
 MAX_GRAPH_DEPTH = 32
@@ -195,7 +196,7 @@ class BrainMissionPlanner:
         generator: Any,
         tool_registry: ToolRegistry,
     ) -> None:
-        self._decomposer = ModelDecomposer(generator)
+        self._decomposer = ModelDecomposer(generator, known_predicate_types=SUPPORTED_TYPES)
         self._tool_registry = tool_registry
 
     async def decompose_goal(self, brain_state: BrainState) -> Any:

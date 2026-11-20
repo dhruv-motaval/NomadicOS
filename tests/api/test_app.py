@@ -64,7 +64,15 @@ def make_api_app(
         )
     cfg = AppConfig.model_validate(
         {
-            "inference": {"default_engine": "mock", "fallback_engine": "ollama"},
+            # dead ports + empty models dir: POST /api/goals calls sync_models(), which must
+            # not discover a real llama-server/Ollama on this machine and route past the mock
+            "inference": {
+                "default_engine": "mock",
+                "fallback_engine": "ollama",
+                "llama_server_url": "http://127.0.0.1:9",
+                "ollama_base_url": "http://127.0.0.1:9",
+                "models_dir": str(tmp_path / "models"),
+            },
             "persistence": {"state_dir": str(tmp_path / "state")},
         }
     )

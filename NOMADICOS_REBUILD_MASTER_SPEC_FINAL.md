@@ -4,8 +4,8 @@
 **Primary orchestration:** LangGraph  
 **Primary local inference engine:** llama.cpp #1 (owner revision 2026-09-15; supersedes the original FreeToken plan) — **Local compatibility inference:** Ollama #2  
 
-**Cloud LLM APIs:** Out of scope for the initial rebuild  
-**Model strategy:** small capable workers first; stronger local models as critics/evaluators or escalation models
+**Cloud inference for development/qualification:** OpenRouter free models initially (owner revision 2026-11-13); provider/model-independent and not an execution authority
+**Model strategy:** smallest capable eligible model first; stronger models as critics/evaluators or escalation models
 
 ---
 
@@ -392,6 +392,8 @@ InferenceEngine
     |
     +-- LlamaCppEngine
     +-- OllamaEngine
+    +-- OpenRouterEngine (development/qualification; initial cloud adapter)
+    +-- CustomCloudProviderEngine (owner-configured adapter)
     +-- MockEngine
 ```
 
@@ -442,27 +444,69 @@ without changing the higher-level architecture.
 
 ---
 
-# 10. Local-Only Initial Scope
+# 10. Cloud-First Development, Local Migration, and Hybrid Runtime
 
-Do not require cloud LLM APIs.
+**Status: provider-neutral cloud engine, `free_only` admission, catalog sync, retry/fallback and tracing are implemented and unit-tested with fakes (2026-11-13); live-provider qualification evidence, per-role local replacement and the hybrid runtime remain pending.**
 
-Initial engine layer:
+Use OpenRouter free models as the initial cloud inference provider to develop and qualify NomadicBrain on constrained
+local hardware. Cloud inference substitutes for a local reasoning backend during development; it does not make a cloud
+model local, change NomadicOS's execution model, or establish a permanent provider/model dependency. Free-model
+availability, limits, context windows, quality, and usage reporting are variable. Qualification records must retain the
+exact provider model ID and configuration.
+
+The migration path is:
 
 ```text
-llama.cpp
-Ollama
+cloud-first development and qualification
+        -> incremental replacement of individual roles with qualified local models
+        -> hybrid runtime with policy-controlled local/cloud selection
+```
+
+The initial engine layer for this direction is:
+
+```text
+OpenRouterEngine (free models; development/qualification)
+LlamaCppEngine (local serving direction)
+OllamaEngine (local compatibility backend)
 Mock/Test Engine
 ```
 
-A future cloud engine may be added as another Lego brick, but it must not be required for the initial core.
+All engines satisfy the same typed `InferenceEngine` contract. Brain and workers request a cognitive role plus capability
+requirements, never a provider or hard-coded model. The model router chooses an eligible model by role/capabilities
+(including reasoning, coding, structured-output support, context capacity, latency, and budget), applies bounded
+timeouts/retries/fallback, and records the selection and outcome.
 
-The system should remain useful when:
+### Custom cloud providers
 
-```text
-internet unavailable
-cloud API unavailable
-cloud credentials missing
-```
+The owner may register additional cloud providers through an adapter configuration, not through provider-specific logic
+in NomadicBrain or workers. A registered provider supplies its endpoint/credential reference, model-catalog resolver,
+capability metadata, pricing metadata when available, health check, and response normalization behind the same
+`InferenceEngine` contract. Credentials remain local configuration and are never included in prompts, trajectories, or
+model-visible context. A custom provider has the same proposal-only boundary as OpenRouter.
+
+### Free-only model policy
+
+An owner-configurable `free_only` policy is supported for development/qualification. When it is on, the registry refreshes
+catalog metadata and admits only models whose declared input and output token prices are both zero for the requested
+modality, meet the requested capabilities/context requirement, and are explicitly allowed by the owner. The selected
+model ID, catalog timestamp, declared price fields, and any provider-reported usage are recorded with the request.
+
+Do **not** discover price by sending a probe prompt: a probe can itself be billed and a response does not prove future
+pricing. For OpenRouter, use its model-catalog pricing metadata or its documented free router only under `free_only`;
+record the resolved model/provider for each request. If price metadata is absent, stale, nonzero, or ambiguous, exclude
+the model while `free_only` is enabled. Free-only does not override rate limits, availability, privacy policy, or budget
+ceilings; failed attempts may still consume a provider's free quota.
+
+The normalized inference contract must make these conditions explicit: provider/model availability, rate limit, timeout,
+malformed response, context overflow, exhausted retry/fallback budget, token usage, and estimated cost (or `unknown`
+when unavailable). Structured responses must validate against their requested schema before entering Brain state.
+
+The system must remain useful with local adapters when internet is unavailable, cloud access fails, or credentials are
+missing. No cloud provider may be required by NomadicBrain itself, and no provider-specific logic may enter Brain or
+worker implementations.
+
+Cloud models return untrusted reasoning proposals only. They receive no direct local-tool, filesystem, database, owner
+grant, or execution access. Their proposals remain subject to **Action IR -> authorization -> executor -> verification**.
 
 ---
 
@@ -1861,6 +1905,29 @@ Two tasks must not silently corrupt one another's state.
 
 Scheduling and resource management belong in the orchestration/infrastructure layer rather than in individual model prompts.
 
+### Multi-agent missions (owner revision 2026-11-18)
+
+A goal may run as several agents (`nomadicos run --agents`, `agents: true` on the API):
+
+```text
+PARENT AGENT  -> NomadicBrain splits the goal into a validated task graph (plans only)
+CHILD AGENTS  -> one per sub-task; each is a complete, separate task run
+                 (own task id, model choice, retry budget, audit trail, terminals)
+SCHEDULER     -> a child starts when its dependencies finish; independent children
+                 run at the same time, up to budget.max_concurrent_agents
+VERIFY        -> the parent goal is verified over the evidence of all children
+```
+
+- Children add no execution path: every action still goes Action IR -> authorization
+  -> executor -> verification. A child never gains authority from its parent.
+- Children share the parent's workspace folder. A file being changed by one agent is
+  leased to it until that agent's run ends; the desktop stays one agent at a time.
+- A child waiting for the owner pauses only that child.
+- A child that failed cleanly gets one fresh retry; never after an uncertain outcome.
+- Mission SUCCESS comes only from the goal verifier (§28).
+- Agents may keep terminals open (`terminal.open/send/read/close`); they are closed
+  when that agent's run ends.
+
 ---
 
 # 47. Restart / Recovery
@@ -2631,6 +2698,7 @@ Build:
 InferenceEngine
 llama.cpp
 Ollama
+OpenRouter (development/qualification adapter)
 model contracts
 health
 ```
@@ -2785,7 +2853,7 @@ routing optimization
 Do not build these prematurely:
 
 ```text
-cloud LLM APIs
+cloud-hosted execution or cloud access to local tools, authority, or persistent private state
 multi-critic swarm
 complex graphical UI
 distributed deployment

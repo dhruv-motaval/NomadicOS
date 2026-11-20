@@ -68,9 +68,8 @@ class CapabilityPolicy:
             ns, _, op = pattern.partition(".")
             if ns != cap.namespace:
                 continue
-            if op == "*":
+            if op == "*" or pattern == cap.capability:
                 return True
-            return pattern == cap.capability
         return False
 
     def evaluate(self, cap: CapabilityRef, state: AuthorityState | None = None) -> PolicyOutcome:
@@ -84,6 +83,13 @@ class CapabilityPolicy:
         for denied in self._hard_denied:
             if resource_matches(denied, cap.resource):
                 return out(PolicyDecision.DENY, f"resource hard-denied by owner config: {denied}")
+        # ceiling before owner rules: an owner ALLOW settles a rule conflict,
+        # it must never widen the configured profile
+        if not self._pattern_match(cap):
+            #: unknown capability => DENY, never implicit success (§56.14)
+            return out(
+                PolicyDecision.DENY, f"capability {cap.capability} not inside active profile"
+            )
         for instruction in state.instructions:
             if resource_matches(instruction.resource, cap.resource):
                 return out(
@@ -91,9 +97,4 @@ class CapabilityPolicy:
                     f"conflicts with owner instruction: {instruction.rule!r}",
                     instruction,
                 )
-        if not self._pattern_match(cap):
-            #: unknown capability => DENY, never implicit success (§56.14)
-            return out(
-                PolicyDecision.DENY, f"capability {cap.capability} not inside active profile"
-            )
         return out(PolicyDecision.ALLOW, f"capability granted by profile {state.grant.profile}")

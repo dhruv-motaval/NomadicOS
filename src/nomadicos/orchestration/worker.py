@@ -41,6 +41,20 @@ class WorkerArtifact(Contract):
     sha256: str | None = None
 
 
+#: max worker objective length (the assignment contract's bound)
+MAX_OBJECTIVE_CHARS = 400
+
+
+def bounded_objective(text: str) -> str:
+    """A plan step description may be up to 2000 chars (brain schema) but an
+    assignment objective is capped at 400: building one from a long step
+    raised an uncaught ValidationError that crashed the whole mission (seen
+    live). Keep the head, mark the cut; the full step stays in mission state."""
+    if len(text) <= MAX_OBJECTIVE_CHARS:
+        return text
+    return text[: MAX_OBJECTIVE_CHARS - 3] + "..."
+
+
 class WorkerAssignment(Contract):
     """Bounded assignment the Brain gives a worker. Data only — no authority."""
 
@@ -57,8 +71,8 @@ class WorkerAssignment(Contract):
 
     @model_validator(mode="after")
     def _bounded(self) -> WorkerAssignment:
-        if len(self.objective) > 400:
-            raise ValueError("worker objective exceeds 400 chars")
+        if len(self.objective) > MAX_OBJECTIVE_CHARS:
+            raise ValueError(f"worker objective exceeds {MAX_OBJECTIVE_CHARS} chars")
         if len(self.constraints) > 16:
             raise ValueError("worker constraints exceed 16")
         if self.attempt < 1:

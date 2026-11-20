@@ -7,15 +7,17 @@ must never silently produce a half-wired system.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from nomadicos.kernel.errors import ConfigInvalid
 
-EngineName = Literal["llamacpp", "ollama", "mock"]
+EngineName = Literal["llamacpp", "ollama", "mock", "cloud"]
 CapabilityPattern = str  # e.g. "filesystem.*", "terminal.execute", "git.*"
 RoutingMode = Literal["FAST", "BALANCED", "QUALITY"]
 
@@ -65,6 +67,112 @@ class InferenceConfig(_Contract):
     llama_enable_thinking: bool = False
     models_dir: str = "models"
     request_timeout_s: float = Field(default=600.0, gt=0)
+
+
+_CLOUD_ROLES = frozenset({"tiny", "worker", "coding", "reasoning", "critic", "evaluator"})
+_PROVIDER_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+_ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_LOOPBACK = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+class CloudProviderConfig(_Contract):
+    """One owner-configured cloud provider (SPEC §10). Holds a REFERENCE to
+    the credential (an environment-variable NAME), never the secret itself."""
+
+    kind: Literal["openrouter", "openai_compatible"]
+    #: required for ``openai_compatible``; OpenRouter defaults to its API root
+    base_url: str | None = None
+    #: NAME of the environment variable (or root ``.env`` key) with the API key
+    api_key_env: str
+    #: owner assertion that this endpoint honours ``response_format`` JSON
+    #: schemas when its catalog does not say so. Output is still validated.
+    assume_structured_output: bool = False
+
+    @field_validator("api_key_env")
+    @classmethod
+    def _env_name(cls, v: str) -> str:
+        if not _ENV_NAME.match(v):
+            raise ValueError("api_key_env must be an environment-variable NAME, not a secret")
+        return v
+
+    @model_validator(mode="after")
+    def _url(self) -> CloudProviderConfig:
+        if self.base_url is None:
+            if self.kind != "openrouter":
+                raise ValueError("openai_compatible providers require base_url")
+            object.__setattr__(self, "base_url", "https://openrouter.ai/api/v1")
+            return self
+        parts = urlsplit(self.base_url)
+        loopback = (parts.hostname or "") in _LOOPBACK
+        if parts.scheme != "https" and not (parts.scheme == "http" and loopback):
+            raise ValueError("base_url must be https (http only for loopback)")
+        if not parts.hostname or parts.username or parts.password or parts.query or parts.fragment:
+            raise ValueError("base_url must be a bare URL with no credentials or query")
+        return self
+
+
+class CloudConfig(_Contract):
+    """Cloud inference policy (SPEC §10). OFF by default; local-first.
+
+    Cloud models are untrusted proposal sources only: nothing here grants
+    them tool, filesystem, database, or authority access.
+    """
+
+    enabled: bool = False
+    #: development/qualification switch: only models whose CURRENT catalog
+    #: metadata declares zero input AND output price are admitted; missing,
+    #: stale, ambiguous or nonzero pricing excludes the model
+    free_only: bool = True
+    providers: dict[str, CloudProviderConfig] = Field(default_factory=dict)
+    #: owner allowlist of provider-qualified model ids (``provider/model``),
+    #: ``fnmatch`` patterns. EMPTY = nothing is allowed (default deny).
+    allowed_models: list[str] = Field(default_factory=list)
+    #: optional role pins: ModelRole -> allowlist patterns. Selection still
+    #: goes through the router; this only labels registry records.
+    roles: dict[str, list[str]] = Field(default_factory=dict)
+    #: catalog metadata older than this is stale (excluded under free_only)
+    max_catalog_age_s: float = Field(default=3600.0, gt=0)
+    catalog_timeout_s: float = Field(default=20.0, gt=0, le=300)
+    request_timeout_s: float = Field(default=60.0, gt=0, le=600)
+    #: hard wall-clock cap for one logical request incl. retries + fallbacks
+    total_timeout_s: float = Field(default=180.0, gt=0, le=1800)
+    #: retries of the SAME model per request, and distinct fallback models
+    max_retries: int = Field(default=2, ge=0, le=5)
+    max_fallbacks: int = Field(default=2, ge=0, le=5)
+    retry_backoff_s: float = Field(default=1.0, ge=0, le=60)
+    max_backoff_s: float = Field(default=20.0, ge=0, le=300)
+    #: provider requests in flight at once across all missions (free tiers
+    #: rate-limit hard; parallel missions must not stampede one provider)
+    max_concurrent_requests: int = Field(default=4, ge=1, le=32)
+    #: a model that just failed on AVAILABILITY (429, unavailable, timeout,
+    #: empty/malformed response) is skipped for this long, or until it answers
+    #: again. When every admitted model is cooling down the engine WAITS for
+    #: the first one (inside total_timeout_s) instead of failing instantly.
+    rate_limit_cooldown_s: float = Field(default=60.0, ge=0, le=3600)
+    #: output reservation used for the context check when a request sets none
+    default_max_tokens: int = Field(default=2048, ge=1)
+
+    @field_validator("providers")
+    @classmethod
+    def _names(cls, v: dict[str, CloudProviderConfig]) -> dict[str, CloudProviderConfig]:
+        for name in v:
+            if not _PROVIDER_NAME.match(name):
+                raise ValueError(f"invalid provider name {name!r}")
+        return v
+
+    @field_validator("roles")
+    @classmethod
+    def _roles(cls, v: dict[str, list[str]]) -> dict[str, list[str]]:
+        unknown = set(v) - _CLOUD_ROLES
+        if unknown:
+            raise ValueError(f"unknown cloud roles {sorted(unknown)}")
+        return v
+
+    @model_validator(mode="after")
+    def _coherent(self) -> CloudConfig:
+        if self.enabled and not self.providers:
+            raise ValueError("cloud.enabled requires at least one provider")
+        return self
 
 
 class ModelRoles(_Contract):
@@ -146,12 +254,25 @@ class BudgetConfig(_Contract):
     #: total specialist worker launches allowed per mission; exceeding it is
     #: a typed budget failure, never a silent skip
     max_workers_per_mission: int = Field(default=16, ge=1, le=64)
+    #: how long a task waits for the exclusive desktop lease (keyboard/mouse
+    #: are one shared resource) before failing with a typed RESOURCE_UNAVAILABLE
+    desktop_lease_timeout_s: float = Field(default=300.0, gt=0, le=3600)
+    #: how long an agent waits for a file another agent is changing before
+    #: failing with a typed RESOURCE_UNAVAILABLE (bounds lock-order deadlocks)
+    write_lease_timeout_s: float = Field(default=120.0, gt=0, le=3600)
+    #: child agents a multi-agent mission runs at once (``run --agents``)
+    max_concurrent_agents: int = Field(default=3, ge=1, le=16)
+    #: sub-tasks one mission may split into; more is refused, never truncated
+    max_agents_per_mission: int = Field(default=8, ge=1, le=32)
     #: enforced wall-clock budget around each worker execution (real timeout,
     #: not a suggestion)
     worker_timeout_s: float = Field(default=60.0, gt=0, le=3600)
     #: grace a timed-out/cancelled worker gets to die before its outcome is
     #: declared OUTCOME_UNKNOWN (uncertain, never auto-replayed)
     worker_cancel_grace_s: float = Field(default=5.0, gt=0, le=60)
+    #: output-token budget of ONE specialist worker call. A coding worker
+    #: returns whole files inside JSON, so this caps the file size it can write.
+    worker_max_tokens: int = Field(default=900, ge=64, le=32768)
     #: bounded worker output/diagnostics retained per result
     max_worker_output_chars: int = Field(default=20_000, ge=100, le=1_000_000)
     #: bounded worker_results retained per mission (older entries dropped)
@@ -246,6 +367,12 @@ class RouterConfig(_Contract):
     #: that repeatedly times out does not keep getting attempts just because its
     #: historical quality score is high
     escalation_repeat_cap: int = Field(default=2, ge=1, le=10)
+    #: when EVERY qualified model has already been tried for a step, let the
+    #: least recently tried one run again (still bounded by
+    #: ``budget.max_escalations``) instead of ending the mission. Off by
+    #: default: escalation normally moves to a DIFFERENT model. Needed for a
+    #: single-model pool, e.g. one pinned cloud model.
+    retry_tried_models: bool = False
     #: conservative prior used for unmeasured candidates (never presented as
     #: measured reliability)
     unmeasured_p_lcb: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -257,6 +384,9 @@ class OrchestrationConfig(_Contract):
     brain_actor: bool = False
     #: NomadicBrain decomposes the goal into the mission plan
     brain_planner: bool = False
+    #: goals ``run_many`` executes at once. Only DESKTOP work is serialized
+    #: (exclusive lease); coding/research/etc. missions run independently.
+    max_concurrent_missions: int = Field(default=3, ge=1, le=16)
 
 
 # ---------------------------------------------------------------------------
@@ -452,9 +582,12 @@ class AppConfig(_Contract):
     persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
     evaluation: EvaluationConfig = Field(default_factory=EvaluationConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    cloud: CloudConfig = Field(default_factory=CloudConfig)
 
     @model_validator(mode="after")
     def _engine_coherence(self) -> AppConfig:
+        # "cloud" is deliberately NOT a default/fallback engine: it is opt-in
+        # via ``cloud.enabled`` and selected per model by the router.
         known = {"llamacpp", "ollama", "mock"}
         if (
             self.inference.default_engine not in known

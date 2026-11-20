@@ -125,10 +125,13 @@ def test_press_key_normalizes_vocabulary() -> None:
 
 def test_window_title_bounded() -> None:
     assert FocusWindowArgs(title="t" * 200).title == "t" * 200
+    assert FocusWindowArgs(title="Notepad", handle=42).handle == 42
     with pytest.raises(ValidationError):
         FocusWindowArgs(title="t" * 201)
     with pytest.raises(ValidationError):
         FocusWindowArgs(title="")
+    with pytest.raises(ValidationError):
+        FocusWindowArgs(title="Notepad", handle=0)
 
 
 def test_list_windows_limit_bounded() -> None:

@@ -118,6 +118,9 @@ class Executor:
         self._store = store
         self._log = logger
         self._ledger = ledger or InMemoryLedger()
+        #: session-bound ops are never durable (their sessions die with the process), but
+        #: one authorized action still runs once per process
+        self._volatile_ledger = InMemoryLedger()
         #: owner state stamped onto EVERY context at this one boundary, so no
         #: caller can forget it (SPEC §4, §56.5)
         self._protected = tuple(normalize_root(root) for root in protected_roots)
@@ -147,9 +150,20 @@ class Executor:
                 current_epoch=state.epoch,
             )
 
+        # session-bound operations (e.g. typing into an open terminal) act on
+        # in-memory sessions that die with the process, so they cannot replay
+        # after a restart; repeating them within a run is legitimate (pressing
+        # Enter twice, as a NEW action). They get a process-lifetime ledger, so the
+        # same authorized action still cannot run twice.
+        impl = self._tools.find(proposal.tool)
+        ledgered = proposal.operation not in getattr(impl, "unledgered_ops", frozenset())
+        ledger: ExecutionLedger = self._ledger if ledgered else self._volatile_ledger
+
         # 3. single-use lifecycle on explicit action identity
-        key = action_key(authorized)
-        previous = self._ledger.get(key)
+        # session ops key on the minted artifact: re-dispatching the SAME artifact is a
+        # replay and is refused; a freshly authorized identical proposal is a new action
+        key = action_key(authorized) if ledgered else authorized.id
+        previous = ledger.get(key)
         if previous is not None:
             duplicate = previous.model_copy(
                 update={
@@ -176,8 +190,8 @@ class Executor:
             operation=proposal.operation,
             args=dict(proposal.args),
         )
-        if not self._ledger.claim_intent(key, intent):
-            prior_result = self._ledger.get(key)
+        if not ledger.claim_intent(key, intent):
+            prior_result = ledger.get(key)
             if prior_result is not None:
                 duplicate = prior_result.model_copy(
                     update={
@@ -200,7 +214,7 @@ class Executor:
 
         # 3c. mark execution started: the side-effect boundary is about to be
         # crossed. If we crash here, the tool may or may not have run.
-        self._ledger.mark_intent_started(key)
+        ledger.mark_intent_started(key)
 
         # 4. unknown tool/operation cannot execute even past earlier gates
         try:
@@ -251,7 +265,7 @@ class Executor:
         #    recorded - replay protection is NOT guaranteed for this action,
         #    and nothing retries automatically (SPEC §56.14).
         try:
-            self._ledger.put(key, result)
+            ledger.put(key, result)
         except PersistenceError as exc:
             self._log.log(EventType.RECOVERY_STARTED, result="LEDGER_UNRECORDED", **base)
             result = result.model_copy(
@@ -266,7 +280,7 @@ class Executor:
             # intent stays EXECUTION_STARTED with no result → restart will
             # classify UNKNOWN and block (never replay)
         else:
-            self._ledger.mark_intent_completed(key)
+            ledger.mark_intent_completed(key)
         self._log.log(EventType.TOOL_EXECUTED, result=outcome.status.value, **base)
         return result
 
@@ -289,5 +303,5 @@ class Executor:
         """Kill only processes owned by this task (SPEC §6.7)."""
         terminal = self._tools.find("terminal")
         if isinstance(terminal, TerminalTool):
-            return terminal.supervisor.kill_owned(task_id)
+            return terminal.end_task(task_id)
         return []

@@ -80,9 +80,7 @@ def aggregate_benchmarks(records: list[BenchmarkRecord]) -> MetricsBundle:
         return MetricsBundle()
     latencies = [r.total_latency_ms / 1000.0 for r in records if r.total_latency_ms is not None]
     ttft = [
-        r.time_to_first_token_ms / 1000.0
-        for r in records
-        if r.time_to_first_token_ms is not None
+        r.time_to_first_token_ms / 1000.0 for r in records if r.time_to_first_token_ms is not None
     ]
     throughput = [r.tokens_per_second for r in records if r.tokens_per_second is not None]
     return MetricsBundle(
@@ -384,11 +382,7 @@ class ModelRegistry:
                 continue
             if benchmark_version is not None and version != benchmark_version:
                 continue
-            records.extend(
-                sample
-                for sample in samples
-                if sample.capability == capability
-            )
+            records.extend(sample for sample in samples if sample.capability == capability)
         return aggregate_benchmarks(self._fresh(records, self._clock(), "timestamp"))
 
     def bundle_for(

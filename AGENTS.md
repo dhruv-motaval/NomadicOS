@@ -28,7 +28,9 @@ silently change its architecture.
   recognizes semantic-equivalent repeats (SPEC §14, §30, §31).
 - **Everything is a replaceable Lego brick behind typed contracts** (SPEC §3):
   engines (llama.cpp #1, Ollama #2, Mock), orchestrator, tools, memory, verifiers.
-- **Local inference only** for v0.2 core — no cloud LLM APIs (SPEC §9-10, §54).
+- **Local inference by default.** Cloud inference is opt-in (`cloud.enabled`), for
+  development/qualification only, and is an untrusted proposal source with no tool or
+  authority access (SPEC §10, §54).
 - **PostgreSQL is the durable source of truth for task state** (SPEC §34);
   LangGraph checkpoints assist orchestration but are not the truth (SPEC §47).
 - **Learning/eval never touches the authority path** (SPEC §33, §52C).
@@ -40,6 +42,14 @@ silently change its architecture.
 `models/` (repo root, git-ignored) is where the owner places model files. The
 directory-scanning provider registers whatever it finds; llama.cpp is\nthe primary serving engine (serves models/ files directly via llama-server), Ollama the compatibility backend. Test with real models
 only when the owner says a model was added (hardware-marked tests).
+
+## UI development
+
+All UI work (web pages, React components, styling, any interface) MUST use the
+`ui-ux-pro-max` skill at `.opencode/skills/ui-ux-pro-max/` (read `SKILL.md`; get a
+design system with `python .opencode/skills/ui-ux-pro-max/scripts/search.py "<product keywords>" --design-system`
+and stack rules with `--stack react`). When running UI goals through NomadicOS, pass its
+rules as `--constraint`s (colors, accessibility, touch targets, focus, reduced motion).
 
 ## Commands
 

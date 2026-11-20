@@ -7,6 +7,9 @@ model that satisfies the task (SPEC §13, §52B, §56.11-12).
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from datetime import UTC, datetime
+
 from pydantic import Field
 
 from nomadicos.contracts.core import Contract
@@ -18,7 +21,8 @@ from nomadicos.contracts.model import (
     TaskRequirements,
     TaskType,
 )
-from nomadicos.kernel.config import RouterConfig
+from nomadicos.inference.cloud.policy import admit
+from nomadicos.kernel.config import CloudConfig, RouterConfig
 from nomadicos.kernel.errors import ResourceUnavailable
 from nomadicos.registry.model_registry import ModelRegistry
 from nomadicos.registry.scanner import estimate_size_b
@@ -99,8 +103,27 @@ def _quality_gate(router: RouterConfig, task_latency: str | None = None) -> floa
 
 
 class ModelSelector:
-    def __init__(self, router: RouterConfig) -> None:
+    def __init__(
+        self,
+        router: RouterConfig,
+        cloud: CloudConfig | None = None,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self._router = router
+        #: owner cloud policy (SPEC §10). Without it NO cloud record is
+        #: routable: cloud is opt-in and fails closed.
+        self._cloud = cloud
+        self._clock = clock or (lambda: datetime.now(UTC))
+
+    def _cloud_routable(self, record: ModelRecord) -> bool:
+        """Non-cloud records pass. A cloud record needs the owner policy to
+        admit it NOW (allowlist, and under ``free_only`` fresh zero pricing);
+        capability/context needs are enforced by the shared filters."""
+        if record.cloud is None:
+            return record.engine != "cloud"
+        if self._cloud is None or not self._cloud.enabled:
+            return False
+        return admit(record.cloud, self._cloud, now=self._clock()).ok
 
     def _hard_filter(
         self, registry: ModelRegistry, requirements: TaskRequirements
@@ -120,18 +143,23 @@ class ModelSelector:
         # that evidence becomes the qualification source for the task. Before
         # that point, declared capabilities remain a deterministic cold-start
         # fallback, but are never presented as measured evidence.
+        # Evidence only gates competitors that could actually run: a measured
+        # model that is down/unproven (or not owner-admitted) must not lock
+        # every unmeasured but healthy model out of the specialist capability.
+        routable = [r for r in registry.enabled() if self._cloud_routable(r)]
+        live = [r for r in routable if r.health not in (ModelHealth.UNHEALTHY, ModelHealth.UNKNOWN)]
         measured_caps = {
             capability
             for capability in specialist_caps
             if any(
                 registry.capability_bundle(record.model_id, record.engine, capability).samples
                 >= self._router.minimum_sample_count
-                for record in registry.enabled()
+                for record in live
             )
         }
         evidence_required = specialist_caps & measured_caps
         qualified: list[tuple[ModelRecord, MetricsBundle]] = []
-        for record in registry.enabled():
+        for record in routable:
             if record.health in (ModelHealth.UNHEALTHY, ModelHealth.UNKNOWN):
                 # health filter: only PROVEN-runnable engine state is
                 # routable (UNKNOWN = the model file exists but the engine
@@ -389,7 +417,11 @@ class ModelSelector:
         # Review capability is measured, not granted by a role label. Every
         # healthy enabled model is eligible; measured evidence wins, while
         # cold-start falls back deterministically to the largest candidate.
-        critics = [r for r in registry.enabled() if r.health is not ModelHealth.UNHEALTHY]
+        critics = [
+            r
+            for r in registry.enabled()
+            if r.health is not ModelHealth.UNHEALTHY and self._cloud_routable(r)
+        ]
         if not critics:
             raise ResourceUnavailable("no critic-capable model registered")
         scored: list[tuple[bool, float | None, ModelRecord]] = []

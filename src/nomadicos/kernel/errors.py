@@ -95,3 +95,66 @@ class ResourceUnavailable(NomadicOSBaseError):
 
 class BudgetExhausted(NomadicOSBaseError):
     category = Failure.BUDGET_EXHAUSTED
+
+
+# ---------------------------------------------------------------------------
+# Cloud inference failures (SPEC §10): every outcome is a typed error with a
+# machine-readable ``kind``; none is ever turned into an implicit success.
+# ---------------------------------------------------------------------------
+
+
+class CloudInferenceError(ModelError):
+    """Root of typed cloud-inference failures. ``kind`` is stable and logged;
+    ``context['retryable']`` tells the engine whether retrying the SAME model
+    can help."""
+
+    kind = "cloud_error"
+
+    @property
+    def retryable(self) -> bool:
+        return bool(self.context.get("retryable", True))
+
+
+class ModelUnavailable(CloudInferenceError, EngineUnavailable):
+    """Provider/model not reachable, not found, unauthorized, or not served."""
+
+    kind = "unavailable"
+
+
+class RateLimited(ModelUnavailable):
+    """Rate limit or exhausted free quota. Never evidence that a model is paid."""
+
+    kind = "rate_limit"
+
+
+class InferenceTimeout(CloudInferenceError):
+    category = Failure.TIMEOUT
+    kind = "timeout"
+
+
+class MalformedResponse(CloudInferenceError):
+    kind = "malformed_response"
+
+
+class SchemaValidationFailed(CloudInferenceError):
+    kind = "schema_validation"
+
+
+class ContextOverflow(CloudInferenceError):
+    kind = "context_overflow"
+
+    @property
+    def retryable(self) -> bool:  # the same prompt cannot fit the same model
+        return False
+
+
+class RetryBudgetExhausted(CloudInferenceError):
+    category = Failure.BUDGET_EXHAUSTED
+    kind = "budget_exhausted"
+
+
+class FreeOnlyExcluded(CloudInferenceError):
+    """No owner-allowed model satisfies the request under ``free_only``."""
+
+    category = Failure.RESOURCE_UNAVAILABLE
+    kind = "free_only_excluded"

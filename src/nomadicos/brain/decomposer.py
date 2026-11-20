@@ -33,6 +33,7 @@ from nomadicos.brain.cognition import (
     parse_model_json,
 )
 from nomadicos.brain.errors import InvalidBrainState, InvalidTransition, ModelOutputRejected
+from nomadicos.brain.plan_quality import check_plan
 from nomadicos.brain.planner.task_graph import MAX_NODES, TaskGraph, TaskNode, is_safe_node_id
 from nomadicos.brain.schemas import (
     MAX_DESCRIPTION,
@@ -280,8 +281,16 @@ class ModelDecomposer:
     reply, return a typed decomposition.
     """
 
-    def __init__(self, generator: StructuredGenerator) -> None:
+    def __init__(
+        self,
+        generator: StructuredGenerator,
+        *,
+        max_repairs: int = 2,
+        known_predicate_types: frozenset[str] | None = None,
+    ) -> None:
         self._generator = generator
+        self._max_repairs = max_repairs
+        self._predicate_types = known_predicate_types
 
     async def decompose(self, state: BrainState) -> Decomposition:
         if state.task_graph.nodes:
@@ -290,13 +299,31 @@ class ModelDecomposer:
                 mission_id=state.mission_id,
                 goal_id=state.goal.id,
             )
-        request = CognitiveRequest(
-            role=CognitiveRole.DECOMPOSER,
-            mission_id=state.mission_id,
-            payload=decomposition_request_payload(state),
-        )
-        text = await self._generator.generate_structured(request)
-        return parse_decomposition(text, goal_id=state.goal.id)
+        payload = decomposition_request_payload(state)
+        for attempt in range(self._max_repairs + 1):
+            request = CognitiveRequest(
+                role=CognitiveRole.DECOMPOSER,
+                mission_id=state.mission_id,
+                payload=payload,
+            )
+            text = await self._generator.generate_structured(request)
+            try:
+                decomposition = parse_decomposition(text, goal_id=state.goal.id)
+                problems = check_plan(
+                    decomposition.task_graph,
+                    state.goal,
+                    known_predicate_types=self._predicate_types,
+                )
+                if not problems:
+                    return decomposition
+                error = ModelOutputRejected("implausible plan: " + "; ".join(problems))
+            except ModelOutputRejected as exc:
+                problems, error = [str(exc)], exc
+            if attempt == self._max_repairs:
+                raise error
+            # Bounded repair: show the model what was wrong with its last plan.
+            payload = {**payload, "fix_these_plan_errors": problems}
+        raise AssertionError("unreachable")  # pragma: no cover
 
 
 def apply_decomposition(state: BrainState, decomposition: Decomposition) -> BrainState:

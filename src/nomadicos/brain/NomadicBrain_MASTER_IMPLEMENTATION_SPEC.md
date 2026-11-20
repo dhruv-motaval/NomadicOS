@@ -77,6 +77,62 @@ Model selection belongs to the cognitive/model router.
 
 ---
 
+### 1.1.1 Cloud-first development and eventual hybrid runtime
+
+**Status: the unified cloud inference layer (OpenRouter + owner-configured OpenAI-compatible adapter, `free_only`, catalog, retry/fallback, schema validation, traces) is implemented and unit-tested with fakes; it has NOT been verified against a live provider, and no cloud model is qualified for any Brain role yet. Local-model replacement and the hybrid runtime are proposed only.**
+
+NomadicOS will qualify the Brain with cloud inference before requiring strong local hardware. The initial provider is
+**OpenRouter**, using models available through its free catalog for development and repeatable qualification runs. This is
+a development strategy, not a claim that a cloud model is local, a permanent provider choice, or evidence that any
+particular free model is reliable. Free-model availability, limits, context windows, and quality are variable; every
+qualification result must record the exact provider model ID and run configuration.
+
+The migration path is:
+
+```text
+cloud-first development and qualification
+        -> incremental per-role local-model replacement
+        -> hybrid runtime (local preferred where qualified; cloud fallback by policy)
+```
+
+The Brain requests a **role** and requirements, never a provider or hard-coded model. The unified inference boundary
+normalizes requests and responses for OpenRouter and the local `Ollama` and `llama.cpp` adapters. It must carry,
+at minimum:
+
+- requested cognitive role, capability requirements, context and output schema;
+- selected provider/model and a trace ID;
+- normalized output, finish reason, latency, token usage, and estimated cost (including a clear `unknown` value where
+  a provider does not supply usage or pricing);
+- typed failures for unavailable capacity, rate limits, timeouts, malformed responses, context overflow, and exhausted
+  retry/fallback budgets.
+
+Custom cloud providers are permitted only as owner-configured adapters behind this same interface. Their credentials,
+endpoints, catalog resolver, health checks, capability/pricing metadata, and response normalization remain in the
+inference layer; neither NomadicBrain nor a worker receives provider-specific logic or credentials.
+
+For development/qualification, an owner-controlled `free_only` policy may restrict routing to models with catalog
+metadata showing zero input and output token prices for the requested modality, sufficient capabilities/context, and an
+explicit allowlist entry. The catalog is refreshed and its timestamp, selected model ID, declared price fields, and
+provider-reported usage are traced. The router must not send a test prompt to determine whether a model is paid: that
+prompt can incur cost and cannot prove future pricing. Missing, stale, nonzero, or ambiguous pricing excludes a model
+while `free_only` is enabled; free quota/rate-limit failures remain normal typed failures.
+
+The router selects among eligible models by role and declared capabilities (for example reasoning, coding, structured
+output, context capacity, latency, and cost/budget policy), then applies bounded timeouts, retries, and fallback.
+Structured responses must validate against the requested schema before they re-enter Brain state; invalid output is a
+recoverable inference failure, never an executable instruction. Context selection must remain bounded by the selected
+model's actual limit and preserve the separation between temporary prompt context and persistent memory.
+
+Cloud inference does not change the safety boundary. Cloud models receive reasoning requests and return proposals;
+they do not receive execution authority or direct access to local tools, filesystem, database, or owner grants. Their
+proposals continue through the existing **Action IR -> authority -> executor -> verifier** pipeline.
+
+Provider/model choice, fallback reason, retries, validation result, context truncation, token/cost accounting, and
+outcome must be attributable in the existing mission trajectory. This makes cloud qualification comparable with local
+adapter qualification and prevents provider-specific behavior from leaking into NomadicBrain or workers.
+
+---
+
 ## 1.2 Cognition ≠ Execution
 
 The model and cognitive modules can propose.

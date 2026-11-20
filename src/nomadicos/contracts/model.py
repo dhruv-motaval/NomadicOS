@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -11,7 +12,7 @@ from nomadicos.contracts.core import Contract
 from nomadicos.kernel.config import EngineName, RoutingMode
 
 ModelRole = Literal["tiny", "worker", "coding", "reasoning", "critic", "evaluator"]
-ModelSource = Literal["models_dir", "llamacpp", "ollama", "ollama_store", "mock", "manual"]
+ModelSource = Literal["models_dir", "llamacpp", "ollama", "ollama_store", "mock", "manual", "cloud"]
 
 
 class ModelHealth(StrEnum):
@@ -42,6 +43,36 @@ class TaskType(StrEnum):
     PLANNING = "planning"
 
 
+class Pricing(Contract):
+    """Catalog-DECLARED prices, kept as the provider's raw decimal strings
+    (USD per token) so nothing is rounded or guessed. ``None`` = the catalog
+    did not declare that field (never treated as zero)."""
+
+    prompt: str | None = None
+    completion: str | None = None
+    request: str | None = None
+    image: str | None = None
+    internal_reasoning: str | None = None
+
+
+class CloudModelMeta(Contract):
+    """Normalized provider catalog entry (SPEC §10). Metadata only: the
+    catalog is untrusted data and grants no authority."""
+
+    provider: str
+    provider_model_id: str
+    #: None = the provider publishes no pricing at all (unknown, not free)
+    pricing: Pricing | None = None
+    supported_parameters: list[str] = Field(default_factory=list)
+    #: declared (not measured) structured-output suitability
+    structured_output: bool = False
+    input_modalities: list[str] = Field(default_factory=lambda: ["text"])
+    #: None = the catalog did not report a context window
+    context_window: int | None = Field(default=None, gt=0)
+    max_completion_tokens: int | None = Field(default=None, gt=0)
+    catalog_retrieved_at: datetime
+
+
 class ModelRecord(Contract):
     """Registry entry; metrics stay null until actually measured (§12)."""
 
@@ -61,6 +92,9 @@ class ModelRecord(Contract):
     #: static size_hint_b is a ranking proxy, NOT VRAM/RAM usage)
     vram_bytes: int | None = Field(default=None, gt=0)
     ram_bytes: int | None = Field(default=None, gt=0)
+    #: set only for cloud-catalog records (engine == "cloud"); such records
+    #: are routable only through the owner's cloud policy
+    cloud: CloudModelMeta | None = None
 
     @model_validator(mode="after")
     def _unique_roles(self) -> ModelRecord:

@@ -96,9 +96,9 @@ from nomadicos.orchestration.brain_planner import (
 from nomadicos.orchestration.outcomes import OutcomeClass, classify_last_outcome
 from nomadicos.orchestration.runtime import TaskRuntime
 from nomadicos.orchestration.state import TaskState
-from nomadicos.orchestration.worker import WorkerAssignment, WorkerResult
+from nomadicos.orchestration.worker import WorkerAssignment, WorkerResult, bounded_objective
 from nomadicos.orchestration.worker_runner import run_worker_bounded
-from nomadicos.orchestration.workers import worker_for_role
+from nomadicos.orchestration.workers import repo_context_for, worker_for_role
 from nomadicos.persistence.errors import PersistenceError
 from nomadicos.router.analyzer import analyze_goal
 from nomadicos.tools.context import ExecutionContext
@@ -191,6 +191,10 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
         # so every evidence query can filter on one immutable field
         if goal.id != task_id:
             goal = goal.model_copy(update={"id": task_id})
+        if state.get("workspace_key"):  # a child agent works in its parent's folder
+            goal = Goal.model_validate(
+                {**goal.model_dump(), "workspace_key": state["workspace_key"]}
+            )
         log.log(EventType.TASK_CREATED, task_id=task_id, result=goal.objective[:120])
         log.log(EventType.TASK_STARTED, task_id=task_id)
         return {
@@ -207,7 +211,10 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
             "tried_models": [],
             "last_failure": None,
             "critic_feedback": None,
-            "brain_planner_enabled": runtime.brain_planner_enabled,
+            # a child agent's task is already decomposed: it may opt out
+            "brain_planner_enabled": state.get(
+                "brain_planner_enabled", runtime.brain_planner_enabled
+            ),
         }
 
     async def classify(state: TaskState) -> dict[str, Any]:
@@ -262,11 +269,6 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
         goal = state["goal"]
         task_id = state["task_id"]
         model_id = state.get("model_id")
-        if model_id is None:
-            # Select a model for planning (same selector as select_model)
-            reqs = state["requirements"]
-            result = runtime.selector.select(runtime.registry, reqs)
-            model_id = result.selected.model_id
 
         # Build an empty BrainState for the decomposer
         from nomadicos.brain.planner.task_graph import TaskGraph as _TG
@@ -279,13 +281,18 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
             observations=list(state.get("observations") or []),
         )
 
-        planner = BrainMissionPlanner(
-            generator=EngineStructuredGenerator(
-                runtime.engine_for(model_id), model_id, temperature=0.0
-            ),
-            tool_registry=runtime.tools,
-        )
         try:
+            if model_id is None:
+                # same selector as select_model; "no routable model" lands in the
+                # fallback below, and select_model then reports the typed failure
+                reqs = state["requirements"]
+                model_id = runtime.selector.select(runtime.registry, reqs).selected.model_id
+            planner = BrainMissionPlanner(
+                generator=EngineStructuredGenerator(
+                    runtime.engine_for(model_id), model_id, temperature=0.0
+                ),
+                tool_registry=runtime.tools,
+            )
             decomposition = await planner.decompose_goal(empty_brain)
         except Exception as exc:  # noqa: BLE001 - graph boundary
             reason = getattr(exc, "message", str(exc))
@@ -568,6 +575,16 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
 
         return await _run_worker_task(state, step, role)
 
+    def _worker_repo_context(state: TaskState, objective: str) -> str | None:
+        """Read-only view of the folder this mission works in (the owner's
+        designated folder, or the task workspace) for a worker prompt."""
+        root = runtime.workspace_root
+        folder = root / state["goal"].workspace_name if runtime.workspace_per_task else root
+        try:
+            return repo_context_for(Path(folder), objective)
+        except OSError:
+            return None  # an unreadable folder is absent context, not a failure
+
     async def _run_worker_task(
         state: TaskState, step: PlanStep, role: WorkerRole
     ) -> dict[str, Any]:
@@ -585,12 +602,15 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
             task_id=task_id,
             mission_id=state["task_id"],
             step_id=step.id,
-            objective=step.description,
+            objective=bounded_objective(step.description),
             constraints=list(state["goal"].constraints),
             capabilities=[],
-            resources={"model_id": state.get("model_id")},
+            resources={
+                "model_id": state.get("model_id"),
+                "repo_context": _worker_repo_context(state, step.description),
+            },
             budget={
-                "max_tokens": 900,
+                "max_tokens": cfg.budget.worker_max_tokens,
                 "timeout_s": timeout_s,
                 "max_iterations": 1,
             },
@@ -774,11 +794,18 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
                 task_id=node_id,
                 mission_id=state["task_id"],
                 step_id=step.id,
-                objective=step.description,
+                objective=bounded_objective(step.description),
                 constraints=list(state["goal"].constraints),
                 capabilities=[],
-                resources={"model_id": state.get("model_id")},
-                budget={"max_tokens": 900, "timeout_s": timeout_s, "max_iterations": 1},
+                resources={
+                    "model_id": state.get("model_id"),
+                    "repo_context": _worker_repo_context(state, step.description),
+                },
+                budget={
+                    "max_tokens": cfg.budget.worker_max_tokens,
+                    "timeout_s": timeout_s,
+                    "max_iterations": 1,
+                },
                 attempt=state.get("attempt", 1),
             )
             async with sem:
@@ -828,7 +855,7 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
         # Deterministic integration: results keyed by their own task id,
         # independent of completion order.
         mission_ws = (
-            runtime.workspace_root / state["task_id"]
+            runtime.workspace_root / state["goal"].workspace_name
             if runtime.workspace_per_task
             else runtime.workspace_root
         )
@@ -965,8 +992,9 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
             steps = state.get("plan") or []
         idx = state.get("current_step", 0)
         brain = load_brain_state(state.get("brain_state"))
-        if brain is None or brain.mission_id != task_id or not brain.task_graph.subgoals:
-            # (no subgoals: a decomposition of tasks only leaves the actor nothing to act on)
+        if brain is None or brain.mission_id != task_id or idx >= len(brain.task_graph.subgoals):
+            # (too few subgoals for this step - none, or a decomposition shorter than the
+            # plan - leaves the actor nothing to act on)
             # initialize or re-construct: the plan + prior observations are
             # authoritative runtime data; the brain mirror is cognition only
             brain = brain_state_for(
@@ -1193,7 +1221,9 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
             }
 
         model_id = state["model_id"]
-        assert model_id is not None
+        if model_id is None:  # routing exhausted mid-mission: typed failure, not a crash
+            f = make_failure(state, Failure.RESOURCE_UNAVAILABLE, "no model available to propose")
+            return {"failures": [f], "last_failure": f.model_dump(mode="json")}
         if state.get("total_steps_used", 0) >= cfg.budget.max_total_steps:
             f = make_failure(state, Failure.BUDGET_EXHAUSTED, "total step budget exhausted")
             return {"failures": [f], "last_failure": f.model_dump(mode="json")}
@@ -1446,9 +1476,21 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
                 "outcome_note": "phantom action reference",
             }
         root = runtime.workspace_root
-        ws = root / state["task_id"] if runtime.workspace_per_task else root
+        ws = root / state["goal"].workspace_name if runtime.workspace_per_task else root
         ctx = ExecutionContext(task_id=state["task_id"], workspace=ws, full_pc=runtime.full_pc)
         ctx.workspace.mkdir(parents=True, exist_ok=True)
+        # exclusive resources: the desktop, and files another agent is changing
+        try:
+            await runtime.acquire_for(authorized.proposal, state["task_id"], ws)
+        except ResourceUnavailable as exc:
+            f = make_failure(state, exc.failure, str(exc.message))
+            return {
+                "failures": [f],
+                "last_failure": f.model_dump(mode="json"),
+                "execution_missing": True,
+                "attempt": 1,
+                "pending_authorized_id": None,
+            }
         try:
             result = await runtime.executor.execute(authorized, ctx)
         except RevokedAuthority as exc:
@@ -1705,7 +1747,7 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
                 status = worker_result.get("status")
                 role = worker_result.get("role")
                 mission_ws = (
-                    runtime.workspace_root / state["task_id"]
+                    runtime.workspace_root / state["goal"].workspace_name
                     if runtime.workspace_per_task
                     else runtime.workspace_root
                 )
@@ -2252,7 +2294,7 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
             return _continue_after_ok(state)
         if decision == CriticDecision.REJECT.value:
             return "blocked"
-        return "partial_end" if _last_goal_verdict_is(state, "NOT_VERIFIED") else "recovery"
+        return "record_partial" if _last_goal_verdict_is(state, "NOT_VERIFIED") else "recovery"
 
     def _last_goal_verdict_is(state: TaskState, verdict: str) -> bool:
         for v in reversed(state.get("verifications") or []):
@@ -2576,6 +2618,9 @@ def _build_request(
         '"https://youtube.com/@channel"]}}\n'
         '  LINUX/MAC EXAMPLE: {"tool": "terminal", "operation": "execute", '
         '"args": {"command": "google-chrome", "args": ["https://youtube.com/@channel"]}}\n'
+        "- terminal.open / send / read / close: a terminal that STAYS OPEN (dev servers,\n"
+        "  REPLs, long builds). open returns a session id; send types a line into it;\n"
+        "  read returns the output since the last read; close stops it.\n"
         "- desktop.type_text: TYPE TEXT into an ALREADY-FOCUSED window\n"
         "  Use for: filling forms, writing in editors, entering URLs in address bar\n"
         "  Requires: target window must already be focused/active\n"

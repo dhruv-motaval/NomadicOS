@@ -27,6 +27,8 @@ class TaskState(TypedDict, total=False):
     goal_text: str
     goal_constraints: list[str]
     goal_predicates: list[dict[str, Any]]
+    #: input only: folder shared with sibling agents (see Goal.workspace_key)
+    workspace_key: str | None
     goal: Goal
 
     # — routing context (CLASSIFY owns)
@@ -163,6 +165,7 @@ class TaskState(TypedDict, total=False):
     adaptive_decision: dict[str, Any] | None
     last_adaptive_decision: str | None
     last_adaptive_decision_category: str | None
+
 
 #: state must never contain these — authority is an artifact, not a bool
 FORBIDDEN_STATE_KEYS = frozenset(

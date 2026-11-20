@@ -125,6 +125,14 @@ class Goal(Contract):
     constraints: list[str] = Field(default_factory=list)
     #: Completion conditions. Success requires these to verifiably hold.
     predicates: list[GoalPredicate] = Field(default_factory=list)
+    #: Folder under the task-workspace root; None = the goal's own id. Child
+    #: agents of one mission share their parent's folder (set by the system,
+    #: never by a model).
+    workspace_key: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+
+    @property
+    def workspace_name(self) -> str:
+        return self.workspace_key or self.id
 
     @model_validator(mode="after")
     def _objective_nonempty(self) -> Goal:

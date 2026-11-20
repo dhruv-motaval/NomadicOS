@@ -26,6 +26,7 @@ MAX_CAPTURE_DIM = 3840
 MAX_MOUSE_COORD = 100_000
 MAX_TITLE_CHARS = 200
 MAX_CLICKS = 3
+MAX_WINDOW_HANDLE = (1 << 63) - 1
 
 MOUSE_BUTTONS = ("left", "right", "middle")
 
@@ -127,7 +128,17 @@ class ForegroundWindowArgs(_Args):
 
 
 class FocusWindowArgs(_Args):
+    """Focus a window by its observed title, optionally pinning its handle.
+
+    A handle is useful only together with the title returned by a preceding
+    ``list_windows`` observation: window handles can become stale or be
+    reused, so the backend must verify that the current title still matches
+    before it transfers foreground focus.  ``title`` remains the generic
+    capability resource, keeping owner instruction conflicts understandable.
+    """
+
     title: str = Field(min_length=1, max_length=MAX_TITLE_CHARS)
+    handle: int | None = Field(default=None, ge=1, le=MAX_WINDOW_HANDLE)
 
 
 # ------------------------------------------------- UI Automation (UIA) ----

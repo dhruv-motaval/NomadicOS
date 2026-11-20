@@ -86,3 +86,33 @@ def test_capability_bundle_excludes_unattributed_legacy_records() -> None:
         )
     )
     assert registry.capability_bundle("m", "mock", CapabilityTag.CODING.value).samples == 0
+
+
+def test_evidence_from_models_that_cannot_run_does_not_lock_out_healthy_ones() -> None:
+    """A benchmarked model that is down (UNKNOWN health) must not make every
+    unmeasured-but-healthy model (e.g. a freshly added cloud model) unroutable."""
+    registry = ModelRegistry(EventLogger())
+    down = _model("measured-but-down", ["coding"], [CapabilityTag.TEXT, CapabilityTag.TOOL_USE])
+    down.health = ModelHealth.UNKNOWN
+    registry.register(down)
+    registry.register(
+        _model("fresh-healthy", ["worker"], [CapabilityTag.TEXT, CapabilityTag.TOOL_USE])
+    )
+    for index in range(3):
+        registry.record_benchmark(
+            BenchmarkRecord(
+                id=f"bench-{index}",
+                model_id="measured-but-down",
+                engine_id="mock",
+                benchmark_version="cognitive-v1",
+                task_id=f"coding-{index}",
+                task_category="feature_implementation",
+                capability=CapabilityTag.CODING.value,
+                language="python",
+                difficulty=0.5,
+                success=True,
+                environment={},
+            )
+        )
+    result = ModelSelector(RouterConfig()).select(registry, _coding_requirements())
+    assert result.selected.model_id == "fresh-healthy"

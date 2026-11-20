@@ -56,7 +56,9 @@ class DesktopBackend:
     def foreground_window(self) -> dict[str, Any]:  # pragma: no cover - protocol
         raise NotImplementedError
 
-    def focus_window(self, title: str) -> dict[str, Any]:  # pragma: no cover - protocol
+    def focus_window(
+        self, title: str, handle: int | None = None
+    ) -> dict[str, Any]:  # pragma: no cover - protocol
         raise NotImplementedError
 
 
@@ -103,7 +105,7 @@ class UnavailableDesktopBackend(DesktopBackend):
     def foreground_window(self) -> dict[str, Any]:
         self._refuse()
 
-    def focus_window(self, title: str) -> dict[str, Any]:
+    def focus_window(self, title: str, handle: int | None = None) -> dict[str, Any]:
         self._refuse()
 
 
@@ -175,7 +177,27 @@ class FakeDesktopBackend(DesktopBackend):
     def foreground_window(self) -> dict[str, Any]:
         return dict(self.windows[0]) if self.windows else {"handle": 0, "title": ""}
 
-    def focus_window(self, title: str) -> dict[str, Any]:
+    def focus_window(self, title: str, handle: int | None = None) -> dict[str, Any]:
+        if handle is not None:
+            for w in self.windows:
+                if int(w.get("handle", 0)) != handle:
+                    continue
+                actual = str(w.get("title", ""))
+                if actual.casefold() != title.casefold():
+                    return {
+                        "focused": False,
+                        "handle": handle,
+                        "title": actual,
+                        "reason": "window handle no longer matches the observed title",
+                    }
+                self.focused = actual
+                return {"focused": True, "handle": handle, "title": actual}
+            return {
+                "focused": False,
+                "handle": handle,
+                "title": "",
+                "reason": "window handle not found",
+            }
         for w in self.windows:
             if title.lower() in str(w.get("title", "")).lower():
                 self.focused = str(w["title"])

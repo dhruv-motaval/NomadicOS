@@ -28,7 +28,8 @@ from nomadicos.contracts.verification import VerificationLevel
 from nomadicos.evaluation.benchmarking import BenchmarkRunner, TaskRunOutcome
 from nomadicos.evaluation.suite import BENCHMARK_VERSION
 from nomadicos.executor.dispatch import Executor
-from nomadicos.inference.base import InferenceEngine
+from nomadicos.inference.base import InferenceEngine, InferenceTrace
+from nomadicos.inference.cloud import CloudEngine, make_provider
 from nomadicos.inference.llama_cpp import LlamaCppEngine, LlamaServerLauncher
 from nomadicos.inference.mock import MockEngine
 from nomadicos.inference.ollama import OllamaEngine
@@ -42,10 +43,12 @@ from nomadicos.orchestration.planner import Planner, StructuralPlanner
 from nomadicos.orchestration.reconciliation import reconcile_resume
 from nomadicos.orchestration.runtime import TaskRuntime
 from nomadicos.persistence import TaskRecord, make_task_store
+from nomadicos.persistence.audit_sink import jsonl_audit_sink
 from nomadicos.persistence.contracts import AuthorizedActionRef, new_record, now_iso
 from nomadicos.persistence.errors import PersistenceCorrupt, PersistenceError
 from nomadicos.persistence.ledger import make_execution_ledger
 from nomadicos.persistence.metrics import ModelMetricStore, PostgresModelMetricStore
+from nomadicos.registry.cloud_catalog import sync_cloud_catalog
 from nomadicos.registry.model_registry import ModelRegistry, ProductionSample
 from nomadicos.registry.scanner import RegistryBuilder
 from nomadicos.router.escalation import EscalationPolicy
@@ -82,6 +85,8 @@ class RunSummary:
     #: Phase 11G observability: episodic/working memory result metadata only;
     #: it never changes task success semantics
     memory_note: str = ""
+    #: multi-agent missions: one report per sub-task agent (empty otherwise)
+    agents: list[dict[str, Any]] = field(default_factory=list)
 
     def waiting_owner(self) -> bool:
         return self.status is TaskStatus.WAITING_OWNER
@@ -103,7 +108,7 @@ class NomadicApp:
     ) -> None:
         self.config = config or AppConfig()
         cfg = self.config
-        self.log = EventLogger()
+        self.log = EventLogger(sink=jsonl_audit_sink(state_dir or cfg.persistence.state_dir))
         self.store = AuthorityStore(Path(state_dir or cfg.persistence.state_dir) / "authority.json")
         engines: dict[str, InferenceEngine] = {
             "llamacpp": LlamaCppEngine(
@@ -123,6 +128,14 @@ class NomadicApp:
             ),
             "mock": MockEngine(default_response='{"finished": true}'),
         }
+        if cfg.cloud.enabled:
+            # opt-in (SPEC §10): providers hold credential REFERENCES only;
+            # every request trace is published to the audit log
+            engines["cloud"] = CloudEngine(
+                cfg.cloud,
+                {n: make_provider(n, p) for n, p in cfg.cloud.providers.items()},
+                trace_sink=self._log_inference_trace,
+            )
         if extra_engines:
             engines.update(extra_engines)
         self.engines = engines
@@ -181,7 +194,7 @@ class NomadicApp:
             ledger=make_execution_ledger(cfg.persistence),
             protected_roots=(*owner_state_paths(cfg), self.store.path.parent),
         )
-        self.selector = ModelSelector(cfg.routing)
+        self.selector = ModelSelector(cfg.routing, cfg.cloud)
         runtime_workspace = Path(workspace_root or cfg.persistence.task_workspace)
         # Phase 8: production verifiers are the DEFAULT, injected through the
         # same DI fields so tests/hosts may replace the boundary (SPEC §8.25).
@@ -198,7 +211,11 @@ class NomadicApp:
             executor=self.executor,
             registry=self.registry,
             selector=self.selector,
-            escalator=EscalationPolicy(self.selector, cfg.budget.max_escalations),
+            escalator=EscalationPolicy(
+                self.selector,
+                cfg.budget.max_escalations,
+                retry_tried=cfg.routing.retry_tried_models,
+            ),
             planner=planner or StructuralPlanner(),
             engines=engines,
             workspace_root=runtime_workspace,
@@ -370,7 +387,7 @@ class NomadicApp:
         if reconciliation.patches:
             self.graph.update_state(config, reconciliation.patches)
 
-        final = await self.graph.ainvoke(None, config)
+        final = await self._invoke(None, config, task_id)
         summary = self._summarize(final)
         self._memory_after_task(summary, final)
         self._record_durable_task(summary, final)
@@ -397,6 +414,14 @@ class NomadicApp:
         return self.memory_runtime.working
 
     # ------------------------------------------------------- discovery ----
+    def _log_inference_trace(self, trace: InferenceTrace) -> None:
+        self.log.log(
+            EventType.INFERENCE_TRACE,
+            model_id=trace.model_id or trace.requested_model_id,
+            result=trace.outcome,
+            payload=trace.model_dump(mode="json"),
+        )
+
     async def sync_models(self) -> None:
         """Best-effort: register live engine models + models/ files. Missing
         engines remain unregistered; nothing is invented (SPEC §12)."""
@@ -420,6 +445,12 @@ class NomadicApp:
             except Exception:
                 continue  # engine down: honest absence, not an error
         builder.build(self.registry, models_dir=self.config.inference.models_dir)
+        cloud = self.engines.get("cloud")
+        if isinstance(cloud, CloudEngine):
+            # metadata GET only; provider failures leave honest absence and
+            # old entries age out under max_catalog_age_s (SPEC §10, §12)
+            await cloud.refresh_catalog()
+            sync_cloud_catalog(self.registry, cloud, self.config.cloud)
         # Engines are the authority on what is served (SPEC §12): serving
         # proof does not survive an engine restart under a different model,
         # so llamacpp/ollama records the engine no longer reports revert to
@@ -586,7 +617,12 @@ class NomadicApp:
         predicates: list[dict[str, Any]] | None = None,
         thread_prefix: str = "nomadic",
         record_production: bool = True,
+        workspace_key: str | None = None,
+        brain_planner: bool | None = None,
     ) -> RunSummary:
+        """``workspace_key``/``brain_planner`` are set for a child agent of a
+        multi-agent mission: it works in its parent's folder on a part that
+        is already split (see orchestration/agents.py)."""
         goal = Goal(objective=goal_text, constraints=constraints or [])
         task = task_id or goal.id
         initial: dict[str, Any] = {
@@ -595,10 +631,18 @@ class NomadicApp:
             "goal_predicates": predicates or [],
             "task_id": task,
         }
+        if workspace_key is not None:
+            initial["workspace_key"] = workspace_key
+        if brain_planner is not None:
+            initial["brain_planner_enabled"] = brain_planner
         started = time.monotonic()
         graph_config = {"configurable": {"thread_id": f"{thread_prefix}:{task}"}}
+        if self.graph.get_state(graph_config).values:
+            # a second run on the same thread inherits the first run's executions
+            # and can be "verified" by them without doing anything (resume instead)
+            raise ValueError(f"task id {task!r} already has a run; use resume or a new id")
         memory_hooks.seed_working(self.memory_runtime, task, goal_text)
-        final = await self.graph.ainvoke(initial, graph_config)
+        final = await self._invoke(initial, graph_config, task)
         summary = self._summarize(final)
         if record_production:
             self._record_production(final, summary, started)
@@ -607,13 +651,70 @@ class NomadicApp:
         self._persist(summary)
         return summary
 
+    async def run_agents(
+        self,
+        goal_text: str,
+        *,
+        task_id: str | None = None,
+        constraints: list[str] | None = None,
+        predicates: list[dict[str, Any]] | None = None,
+        ask_owner: Any = None,
+        max_concurrent: int | None = None,
+    ) -> RunSummary:
+        """Split the goal into sub-tasks and run each as its own agent, in
+        parallel where they do not depend on each other (SPEC §46)."""
+        from nomadicos.orchestration.agents import run_mission_agents
+
+        return await run_mission_agents(
+            self,
+            goal_text,
+            constraints=constraints,
+            predicates=predicates,
+            task_id=task_id,
+            ask_owner=ask_owner,
+            max_concurrent=max_concurrent,
+        )
+
+    async def _invoke(self, state: Any, config: dict[str, Any], task_id: str) -> Any:
+        """Run the graph; the exclusive desktop lease (if this task took it)
+        is always released when the mission ends, pauses, or fails."""
+        try:
+            return await self.graph.ainvoke(state, config)
+        finally:
+            # the agent's run ended (or paused for the owner): free its desktop
+            # and file leases and close the terminals it left open
+            self.runtime.release_desktop(task_id)
+            self.executor.cleanup_task(task_id)
+
+    async def run_many(
+        self, goals: list[dict[str, Any]], *, max_concurrent: int | None = None
+    ) -> list[RunSummary | BaseException]:
+        """Run several independent goals at once (each: ``goal_text`` plus
+        optional ``constraints``/``predicates``/``task_id``). Missions are
+        isolated by task id; only desktop actions are serialized (exclusive
+        lease) and cloud requests share one concurrency limit. One failing
+        goal never cancels the others; results keep the input order."""
+        limit = max_concurrent or self.config.orchestration.max_concurrent_missions
+        slots = asyncio.Semaphore(limit)
+
+        async def one(spec: dict[str, Any]) -> RunSummary:
+            async with slots:
+                return await self.run_goal(
+                    spec["goal_text"],
+                    constraints=spec.get("constraints"),
+                    predicates=spec.get("predicates"),
+                    task_id=spec.get("task_id"),
+                )
+
+        return await asyncio.gather(*(one(g) for g in goals), return_exceptions=True)
+
     async def resume_owner(
         self, task_id: str, decision: str, *, thread_prefix: str = "nomadic"
     ) -> RunSummary:
         """The host (owner) pathway only. The resume value goes to the
         authority resolver, never the other way around (SPEC §5, §7.12)."""
         graph_config = {"configurable": {"thread_id": f"{thread_prefix}:{task_id}"}}
-        final = await self.graph.ainvoke(Command(resume=decision), graph_config)
+        final = await self._invoke(Command(resume=decision), graph_config, task_id)
         summary = self._summarize(final)
         self._record_durable_task(summary, final)
         self._persist(summary)

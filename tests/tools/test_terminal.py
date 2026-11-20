@@ -101,16 +101,19 @@ def wait_gone(*pids: int, timeout_s: float = 10.0) -> bool:
 # ---------------------------------------------------------------- contract ----
 
 
-def test_tool_contract_exposes_one_operation() -> None:
+def test_tool_contract_exposes_execute_and_session_operations() -> None:
     assert TerminalTool.name == "terminal"
-    assert set(TerminalTool.ops) == {"execute"}
+    assert set(TerminalTool.ops) == {"execute", "open", "send", "read", "close"}
+    # only session-bound ops skip the durable ledger; a one-shot command never does
+    assert TerminalTool.unledgered_ops == {"send", "read"}
 
 
 def test_registry_catalog_and_argument_validation() -> None:
     registry = ToolRegistry()
     registry.register(TerminalTool())
     lines = [line for line in registry.catalog_lines() if "- terminal:" in line]
-    assert lines == ['- terminal: operation "execute" args: {command,args,cwd,env,timeout_s,stdin}']
+    assert '- terminal: operation "execute" args: {command,args,cwd,env,timeout_s,stdin}' in lines
+    assert '- terminal: operation "send" args: {session,text,enter}' in lines
     assert registry.capability("terminal", "execute").capability == "terminal.execute"
     # an EMPTY command is deliberately not rejected by validation: the tool
     # answers it with an honest ERRORED outcome instead of failing closed here
@@ -147,8 +150,25 @@ def test_posix_shell_builtins_cannot_become_processes() -> None:
         resolve_command("cd", [".."])
 
 
+@pytest.fixture()
+def no_builtin_executables(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Git for Windows puts dir.exe/echo.exe/type.exe on PATH; these tests are
+    about names that have NO executable, so hide them from PATH lookup."""
+    import shutil
+
+    real = shutil.which
+    hidden = {"dir", "echo", "type"}
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda name, *a, **k: None if name.lower() in hidden else real(name, *a, **k),
+    )
+
+
 @pytest.mark.skipif(not WINDOWS, reason="cmd.exe builtins and .cmd scripts are Windows-only")
-def test_builtins_route_through_the_interpreter_as_separate_argv() -> None:
+def test_builtins_route_through_the_interpreter_as_separate_argv(
+    no_builtin_executables: None,
+) -> None:
     plan = resolve_command("dir", ["/b"])
     assert plan.executable.lower().endswith("cmd.exe")
     assert plan.argv == (plan.executable, "/d", "/c", "dir", "/b")
@@ -162,7 +182,7 @@ def test_quoted_tokens_are_not_decomposed() -> None:
 
 
 @pytest.mark.skipif(not WINDOWS, reason="the interpreter route is Windows-only")
-def test_interpreter_route_refuses_shell_metacharacters() -> None:
+def test_interpreter_route_refuses_shell_metacharacters(no_builtin_executables: None) -> None:
     with pytest.raises(CommandProblem, match="metacharacters"):
         resolve_command("echo", ["a & b"])
     with pytest.raises(CommandProblem, match="metacharacters"):

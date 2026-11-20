@@ -156,7 +156,11 @@ def permissions(
         granted_patterns=cfg.autonomy.capabilities,
         hard_denied_resources=cfg.autonomy.denied_resources,
     )
-    svc = AuthorizationService(store, policy, EventLogger())
+    from nomadicos.persistence.audit_sink import jsonl_audit_sink
+
+    svc = AuthorizationService(
+        store, policy, EventLogger(sink=jsonl_audit_sink(cfg.persistence.state_dir))
+    )
 
     if action == "status":
         state = store.state()
@@ -208,6 +212,12 @@ def run(
         help='Completion check as JSON, e.g. \'{"type":"file_exists","path":"a.txt"}\' '
         "(repeatable; all must hold for SUCCESS)",
     ),
+    agents: bool = typer.Option(
+        False,
+        "--agents",
+        help="Split the goal into sub-tasks, each run by its own agent "
+        "(independent ones in parallel)",
+    ),
 ) -> None:
     """Run a goal through LangGraph: intake -> ... -> execute -> verify."""
     import json
@@ -230,7 +240,7 @@ def run(
     async def drive() -> None:
         try:
             await app.sync_models()  # live engine models + models/ files (SPEC §12)
-            await _drive_goal(app, goal, list(constraint or []), predicates)
+            await _drive_goal(app, goal, list(constraint or []), predicates, agents=agents)
         finally:
             await app.aclose()
 
@@ -254,6 +264,11 @@ def _render_run(summary) -> None:
             f"CRITIC: {it.get('decision')} score={it.get('score')} "
             f"model={it.get('model_id')} iteration={it.get('iteration')}{mark}"
         )
+    for agent in getattr(summary, "agents", []):
+        typer.echo(
+            f"AGENT:  {agent['agent']} {agent['status']} - {agent['part'][:70]}"
+            + (f" ({agent['note'][:80]})" if agent.get("note") else "")
+        )
     typer.echo(
         f"TASK:   {summary.task_id} model={summary.model_id} "
         f"execs={summary.executions} recoveries={summary.recoveries}"
@@ -264,13 +279,90 @@ def _render_run(summary) -> None:
         typer.echo(f"FAIL:   {fail.get('category')}: {str(fail.get('message'))[:120]}")
 
 
+@app.command("run-many")
+def run_many(
+    goals_file: str = typer.Argument(
+        help='JSON list of {"goal": str, "constraints": [str], "predicates": [obj]}'
+    ),
+    parallel: int = typer.Option(
+        0, "--parallel", help="Missions at once (default: orchestration.max_concurrent_missions)"
+    ),
+) -> None:
+    """Run several independent goals in parallel. Only desktop actions are
+    serialized (one task at a time owns keyboard/mouse); coding, research and
+    other missions run independently. Owner decisions are not prompted here:
+    a mission that needs one stops as WAITING_OWNER (use `nomadicos resume`)."""
+    import json
+
+    from nomadicos.contracts.core import parse_predicate
+    from nomadicos.orchestration.app import NomadicApp
+
+    try:
+        raw = json.loads(Path(goals_file).read_text(encoding="utf-8"))
+        specs = [
+            {
+                "goal_text": item["goal"],
+                "constraints": list(item.get("constraints", [])),
+                "predicates": list(item.get("predicates", [])),
+            }
+            for item in raw
+        ]
+        for spec in specs:
+            for pred in spec["predicates"]:
+                parse_predicate(pred)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        typer.echo(f"invalid goals file {goals_file!r}: {exc}", err=True)
+        raise typer.Exit(2) from exc
+    if not specs:
+        typer.echo("no goals given", err=True)
+        raise typer.Exit(2)
+
+    app = NomadicApp(_config())
+
+    async def drive() -> int:
+        try:
+            await app.sync_models()
+            results = await app.run_many(specs, max_concurrent=parallel or None)
+        finally:
+            await app.aclose()
+        failed = 0
+        for spec, result in zip(specs, results, strict=True):
+            typer.echo("")
+            typer.echo(f"=== {spec['goal_text'][:80]}")
+            if isinstance(result, BaseException):
+                failed += 1
+                typer.echo(f"ERROR: {type(result).__name__}: {result}")
+                continue
+            _render_run(result)
+            failed += result.status.value in ("FAILED", "BLOCKED", "PARTIAL", "WAITING_OWNER")
+        return failed
+
+    if asyncio.run(drive()):
+        raise typer.Exit(1)
+
+
 async def _drive_goal(
-    app, goal: str, constraints: list[str], predicates: list | None = None
+    app, goal: str, constraints: list[str], predicates: list | None = None, *, agents: bool = False
 ) -> None:
     """Shared driver: prompts the OWNER on WAITING_OWNER via authority resume."""
     from nomadicos.contracts.core import TaskStatus
 
-    summary = await app.run_goal(goal, constraints=constraints, predicates=predicates or None)
+    if agents:
+
+        def ask(conflict: dict) -> str:
+            typer.echo("")
+            typer.echo(f"AGENT {conflict.get('task_id')}: WAITING_OWNER")
+            typer.echo(
+                f"REQUEST: {conflict.get('capability')} on {conflict.get('resource')!r} "
+                f"-> {conflict.get('conflicting_rule')}"
+            )
+            return _prompt_owner_decision(app.config, "ALLOW a blocked agent action")
+
+        summary = await app.run_agents(
+            goal, constraints=constraints, predicates=predicates or None, ask_owner=ask
+        )
+    else:
+        summary = await app.run_goal(goal, constraints=constraints, predicates=predicates or None)
     while summary.waiting_owner():
         typer.echo("\nSTATUS: WAITING_OWNER (your decision is required)")
         conflict = summary.conflict or {}

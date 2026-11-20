@@ -97,6 +97,9 @@ class GoalRequest(Contract):
     constraints: list[str] = Field(default_factory=list)
     predicates: list[dict[str, Any]] = Field(default_factory=list)
     task_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+    #: split into sub-tasks, each run by its own agent (owner questions leave
+    #: that agent waiting; the mission then reports BLOCKED)
+    agents: bool = False
 
 
 class CapabilityBenchmarkRequest(Contract):
@@ -383,9 +386,10 @@ def create_app(
         # health, and an engines-unknown registry must fail the router
         # honestly rather than route a file on disk.
         await nomadic.sync_models()
+        run = nomadic.run_agents if body.agents else nomadic.run_goal
         runs.start(
             task_id,
-            lambda: nomadic.run_goal(
+            lambda: run(
                 body.goal_text,
                 constraints=body.constraints,
                 predicates=body.predicates,

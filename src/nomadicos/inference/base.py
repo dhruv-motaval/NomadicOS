@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import Field
@@ -39,6 +40,52 @@ class GenerationRequest(Contract):
     response_schema: dict[str, Any] | None = Field(default=None)
 
 
+class Cost(Contract):
+    """Estimated cost in USD, or an EXPLICIT unknown (SPEC §10)."""
+
+    usd: float | None = None
+    basis: Literal["provider_reported", "estimated_from_catalog", "unknown"] = "unknown"
+
+
+class AttemptRecord(Contract):
+    model_id: str
+    outcome: str  # "ok" or a typed error kind
+    latency_s: float
+    detail: str = ""  # redacted, bounded
+
+
+class InferenceTrace(Contract):
+    """Attribution record for one logical inference request (SPEC §10).
+
+    Never contains credentials or prompt text."""
+
+    trace_id: str
+    outcome: Literal["success", "failure"]
+    requested_model_id: str
+    #: provider-qualified id that produced the result (None on failure)
+    model_id: str | None = None
+    provider: str | None = None
+    #: what the provider reports it actually served (e.g. a router's pick)
+    served_model: str | None = None
+    latency_s: float
+    attempts: list[AttemptRecord] = Field(default_factory=list)
+    retries: int = 0
+    fallbacks: int = 0
+    fallback_reasons: list[str] = Field(default_factory=list)
+    validation: Literal["not_requested", "passed", "failed"] = "not_requested"
+    finish_reason: str | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cost: Cost = Field(default_factory=Cost)
+    free_only: bool = False
+    catalog_retrieved_at: datetime | None = None
+    #: raw declared price fields of the model that served the request
+    declared_pricing: dict[str, str] = Field(default_factory=dict)
+    context_window: int | None = None
+    estimated_input_tokens: int | None = None
+    error_kind: str | None = None
+
+
 class GenerationResponse(Contract):
     engine_id: str
     model_id: str
@@ -51,6 +98,8 @@ class GenerationResponse(Contract):
     time_to_first_token_s: float | None = None
     #: measurements, not claims (SPEC §12)
     tokens_per_second: float | None = None
+    #: set by cloud engines only; local engines leave it None
+    trace: InferenceTrace | None = None
 
 
 class EngineHealth(Contract):

@@ -183,7 +183,26 @@ class Win32DesktopBackend(DesktopBackend):
             return {"handle": 0, "title": ""}
         return {"handle": hwnd, "title": _window_title(self._user32, self._ct, hwnd)}
 
-    def focus_window(self, title: str) -> dict[str, Any]:
+    def focus_window(self, title: str, handle: int | None = None) -> dict[str, Any]:
+        if handle is not None:
+            hwnd = int(handle)
+            if not self._user32.IsWindow(hwnd) or not self._user32.IsWindowVisible(hwnd):
+                return {
+                    "focused": False,
+                    "handle": hwnd,
+                    "title": "",
+                    "reason": "window handle not found",
+                }
+            actual = _window_title(self._user32, self._ct, hwnd)
+            if actual.casefold() != title.casefold():
+                return {
+                    "focused": False,
+                    "handle": hwnd,
+                    "title": actual,
+                    "reason": "window handle no longer matches the observed title",
+                }
+            ok = bool(self._user32.SetForegroundWindow(hwnd))
+            return {"focused": ok, "handle": hwnd, "title": actual}
         for w in _enum_windows(self._user32, self._ct, MAX_ENUM_WINDOWS):
             if title.lower() in str(w["title"]).lower():
                 ok = bool(self._user32.SetForegroundWindow(w["handle"]))

@@ -865,3 +865,44 @@ def test_worker_result_is_untrusted_data(tmp_path: Path) -> None:
                 "authorized": True,
             }
         )
+
+
+async def test_worker_survives_none_model_id_in_assignment() -> None:
+    """Regression: resources={'model_id': None} (state reset before reselect)
+    used to crash the worker with a GenerationRequest ValidationError."""
+    from nomadicos.inference.base import GenerationResponse
+    from nomadicos.orchestration.workers import worker_for_role
+
+    seen: list[str] = []
+
+    class Engine:
+        async def generate(self, request):  # type: ignore[no-untyped-def]
+            seen.append(request.model_id)
+            return GenerationResponse(engine_id="fake", model_id=request.model_id, text="{not json")
+
+    worker = worker_for_role(WorkerRole.CODING, engine=Engine())  # type: ignore[arg-type]
+    result = await worker.execute(
+        WorkerAssignment(
+            role=WorkerRole.CODING,
+            task_id="t1",
+            mission_id="m",
+            step_id="s0",
+            objective="Write x",
+            capabilities=["filesystem.write"],
+            resources={"model_id": None},
+            budget={"max_tokens": 100, "timeout_s": 5.0},
+            attempt=1,
+        )
+    )
+    assert seen == ["models/small.gguf"]
+    assert result.status is WorkerStatus.REJECTED  # reached parsing, did not crash
+
+
+def test_coding_worker_prompt_demands_file_content() -> None:
+    """Regression: the schema omitted `content`, so every proposed file was
+    written empty (graph converts art.content or '' into filesystem.write)."""
+    from nomadicos.orchestration.workers import CodingWorker
+
+    worker = CodingWorker(engine=None)  # type: ignore[arg-type]
+    assert '"content"' in worker._system_prompt
+    assert "empty file" in worker._system_prompt

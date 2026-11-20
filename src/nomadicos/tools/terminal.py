@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -184,6 +185,79 @@ class ExecuteArgs(BaseModel):
             if not key or "=" in key or "\x00" in key or "\x00" in item:
                 raise ValueError(f"invalid environment entry {key!r}")
         return value
+
+
+class _SessionRef(BaseModel):
+    session: str = Field(min_length=1, max_length=64)
+
+
+class OpenArgs(BaseModel):
+    """``terminal.open``: start a program that stays running (a shell, a REPL,
+    a dev server). Empty ``command`` opens the platform shell."""
+
+    command: str = ""
+    args: list[str] = Field(default_factory=list)
+    cwd: str | None = None
+    env: dict[str, str] | None = None
+
+
+class SendArgs(_SessionRef):
+    """``terminal.send``: type text into an open terminal."""
+
+    text: str = Field(max_length=20_000)
+    #: press Enter after the text
+    enter: bool = True
+
+
+class ReadArgs(_SessionRef):
+    """``terminal.read``: output produced since the previous read."""
+
+    #: how long to wait for output to appear (and settle)
+    wait_s: float = Field(default=1.0, ge=0, le=30)
+
+
+class CloseArgs(_SessionRef):
+    """``terminal.close``: stop the terminal and everything it started."""
+
+
+#: typed text that changes an interactive shell's directory: the screen below resolves
+#: paths against the directory the terminal OPENED in, so a later relative path would
+#: dodge it. Pick the directory with ``terminal.open``'s ``cwd`` instead.
+_CWD_CHANGE = re.compile(
+    r"(^|[;&|(\s])(cd|chdir|pushd|popd|set-location|sl)(?=[\s.\\/;&|)]|$)", re.IGNORECASE
+)
+
+#: terminals one agent may keep open at once
+MAX_SESSIONS_PER_TASK = 4
+#: a read returns once output has been quiet this long
+READ_SETTLE_S = 0.2
+
+
+@dataclass
+class _Session:
+    id: str
+    task_id: str
+    process: asyncio.subprocess.Process
+    cwd: Path
+    readers: list[asyncio.Task[None]]
+    #: output not yet returned by a read, per stream (bounded)
+    unread: dict[str, list[str]]
+    dropped: dict[str, int]
+
+
+async def _pump(stream: asyncio.StreamReader | None, session: _Session, name: str) -> None:
+    """Move a terminal's output into its unread buffer until EOF, keeping only
+    the newest MAX_STREAM_CHARS so a loud program cannot exhaust memory."""
+    if stream is None:
+        return
+    pending = session.unread[name]
+    while True:
+        chunk = await stream.read(READ_CHUNK)
+        if not chunk:
+            return
+        pending.append(chunk.decode("utf-8", errors="replace"))
+        while sum(map(len, pending)) > MAX_STREAM_CHARS and len(pending) > 1:
+            session.dropped[name] += len(pending.pop(0))
 
 
 class CommandProblem(Exception):
@@ -476,7 +550,16 @@ class TerminalTool(Tool):
     """``terminal.execute`` - one foreground command as a real OS process."""
 
     name = "terminal"
-    ops: ClassVar[dict[str, type[BaseModel]]] = {"execute": ExecuteArgs}
+    ops: ClassVar[dict[str, type[BaseModel]]] = {
+        "execute": ExecuteArgs,
+        "open": OpenArgs,
+        "send": SendArgs,
+        "read": ReadArgs,
+        "close": CloseArgs,
+    }
+    #: act on in-memory sessions that die with the process: no restart replay
+    #: is possible, and repeating them (Enter twice, reading again) is normal
+    unledgered_ops: ClassVar[frozenset[str]] = frozenset({"send", "read"})
     #: Models that get the Windows-spelling grounding auto-injected into
     #: their proposal prompt. Currently only LFM3: it repeatedly proposes
     #: Unix commands (touch/cat/pwd) on Windows. Any future model with the
@@ -496,9 +579,18 @@ class TerminalTool(Tool):
 
     def __init__(self, supervisor: ProcessSupervisor | None = None) -> None:
         self.supervisor = supervisor or ProcessSupervisor()
+        self._sessions: dict[str, _Session] = {}
+        self._session_seq = 0
 
     async def run(self, operation: str, args: dict[str, Any], ctx: ExecutionContext) -> ToolOutcome:
         started = time.monotonic()
+        if operation in ("open", "send", "read", "close"):
+            try:
+                typed = self.ops[operation].model_validate(args)
+            except ValidationError as exc:
+                return _errored(f"terminal.{operation} args: {error_text(exc)}", started)
+            outcome: ToolOutcome = await getattr(self, f"_{operation}")(typed, ctx, started)
+            return outcome
         if operation != "execute":
             return _errored(f"terminal has no operation {operation!r}", started)
         try:
@@ -638,6 +730,174 @@ class TerminalTool(Tool):
             duration_s=duration,
             evidence=evidence,
         )
+
+    # ------------------------------------------------- terminal sessions ---
+
+    def _session(self, session_id: str, ctx: ExecutionContext) -> _Session | None:
+        """A session is only visible to the agent (task) that opened it."""
+        session = self._sessions.get(session_id)
+        return session if session is not None and session.task_id == ctx.task_id else None
+
+    async def _open(self, a: OpenArgs, ctx: ExecutionContext, started: float) -> ToolOutcome:
+        mine = [s for s in self._sessions.values() if s.task_id == ctx.task_id]
+        if len(mine) >= MAX_SESSIONS_PER_TASK:
+            for s in mine:  # a terminal that exited on its own must not hold a slot
+                if s.process.returncode is not None:
+                    self._reap(s)
+        if sum(s.task_id == ctx.task_id for s in self._sessions.values()) >= MAX_SESSIONS_PER_TASK:
+            return _failed(
+                f"{MAX_SESSIONS_PER_TASK} terminals already open; close one first", started
+            )
+        command = a.command.strip() or ("cmd" if os.name == "nt" else "sh")
+        cwd = resolve_scoped(a.cwd, ctx) if a.cwd is not None else ctx.workspace.resolve()
+        if not cwd.is_dir():
+            return _failed(f"cwd does not exist: {cwd}", started)
+        deny_owner_surfaces((*_tokenize(command), *a.args, *(a.env or {}).values()), cwd, ctx)
+        try:
+            plan = resolve_command(command, a.args)
+            process = await asyncio.create_subprocess_exec(
+                *plan.argv,
+                cwd=str(cwd),
+                env=tool_process_env(a.env),
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                creationflags=_NEW_PROCESS_GROUP,
+            )
+        except CommandProblem as exc:
+            return _failed(str(exc), started)
+        except (OSError, ValueError) as exc:
+            return _errored(f"process creation failed: {type(exc).__name__}: {exc}", started)
+        self._session_seq += 1
+        session_id = f"term-{self._session_seq}"
+        session = _Session(
+            id=session_id,
+            task_id=ctx.task_id,
+            process=process,
+            cwd=cwd,
+            readers=[],
+            unread={"stdout": [], "stderr": []},
+            dropped={"stdout": 0, "stderr": 0},
+        )
+        session.readers = [
+            asyncio.create_task(_pump(process.stdout, session, "stdout")),
+            asyncio.create_task(_pump(process.stderr, session, "stderr")),
+        ]
+        self._sessions[session_id] = session
+        self.supervisor.register(ctx.task_id, process.pid)
+        return ToolOutcome(
+            status=ExecutionStatus.SUCCEEDED,
+            process_id=process.pid,
+            message=f"terminal {session_id} open (use terminal.send / read / close)",
+            duration_s=_elapsed(started),
+            evidence={"session": session_id, "argv": list(plan.argv), "cwd": str(cwd)},
+        )
+
+    async def _send(self, a: SendArgs, ctx: ExecutionContext, started: float) -> ToolOutcome:
+        session = self._session(a.session, ctx)
+        if session is None:
+            return _failed(f"no open terminal {a.session!r} for this task", started)
+        if _CWD_CHANGE.search(a.text):
+            return _failed(
+                "terminal.send cannot change directory (cd/pushd/Set-Location); "
+                "close this terminal and terminal.open one with the cwd you need",
+                started,
+            )
+        # typed text is a command line: the same owner-state screen as execute
+        deny_owner_surfaces(tuple(_tokenize(a.text)), session.cwd, ctx)
+        if session.process.returncode is not None or session.process.stdin is None:
+            return _failed(
+                f"terminal {a.session} has exited (code {session.process.returncode})", started
+            )
+        try:
+            session.process.stdin.write((a.text + ("\n" if a.enter else "")).encode())
+            await session.process.stdin.drain()
+        except OSError as exc:
+            return _failed(f"terminal {a.session} is not accepting input: {exc}", started)
+        return ToolOutcome(
+            status=ExecutionStatus.SUCCEEDED,
+            process_id=session.process.pid,
+            duration_s=_elapsed(started),
+            evidence={"session": a.session, "sent_chars": len(a.text)},
+        )
+
+    async def _read(self, a: ReadArgs, ctx: ExecutionContext, started: float) -> ToolOutcome:
+        session = self._session(a.session, ctx)
+        if session is None:
+            return _failed(f"no open terminal {a.session!r} for this task", started)
+
+        def size() -> int:
+            return sum(len(c) for chunks in session.unread.values() for c in chunks)
+
+        # wait for output to appear, then until it has been quiet for a moment
+        deadline = time.monotonic() + a.wait_s
+        seen, quiet_since = size(), time.monotonic()
+        while time.monotonic() < deadline and session.process.returncode is None:
+            await asyncio.sleep(0.05)
+            now = size()
+            if now != seen:
+                seen, quiet_since = now, time.monotonic()
+            elif seen and time.monotonic() - quiet_since >= READ_SETTLE_S:
+                break
+        if session.process.returncode is not None and session.readers:
+            # the process is gone but its pipes may still hold output: let the pumps finish
+            await asyncio.wait(session.readers, timeout=1.0)
+        out: dict[str, str] = {}
+        for name, chunks in session.unread.items():
+            text = "".join(chunks)
+            chunks.clear()
+            if session.dropped[name]:
+                text = f"[{session.dropped[name]} earlier chars dropped]\n" + text
+                session.dropped[name] = 0
+            out[name] = text
+        running = session.process.returncode is None
+        return ToolOutcome(
+            status=ExecutionStatus.SUCCEEDED,
+            stdout=out["stdout"],
+            stderr=out["stderr"],
+            exit_code=None if running else session.process.returncode,
+            process_id=session.process.pid,
+            message="" if running else f"terminal exited (code {session.process.returncode})",
+            duration_s=_elapsed(started),
+            evidence={"session": a.session, "running": running},
+        )
+
+    async def _close(self, a: CloseArgs, ctx: ExecutionContext, started: float) -> ToolOutcome:
+        session = self._session(a.session, ctx)
+        if session is None:
+            return _failed(f"no open terminal {a.session!r} for this task", started)
+        self._stop(session)
+        try:  # kill_tree only signalled it: wait briefly so the exit code is real
+            await asyncio.wait_for(session.process.wait(), 2.0)
+        except TimeoutError:
+            pass
+        return ToolOutcome(
+            status=ExecutionStatus.SUCCEEDED,
+            exit_code=session.process.returncode,
+            process_id=session.process.pid,
+            duration_s=_elapsed(started),
+            evidence={"session": a.session, "closed": True},
+        )
+
+    def _stop(self, session: _Session) -> None:
+        kill_tree(session.process.pid)
+        self._reap(session)
+
+    def _reap(self, session: _Session) -> None:
+        """Forget a session (no kill: its process has exited, and a reused pid is not ours)."""
+        for reader in session.readers:
+            reader.cancel()
+        self.supervisor.release(session.task_id, session.process.pid)
+        self._sessions.pop(session.id, None)
+
+    def end_task(self, task_id: str) -> list[int]:
+        """An agent's run ended: close its terminals, then kill anything else it
+        still owns (SPEC §6.7). Never touches another agent's processes."""
+        killed = []
+        for session in [s for s in self._sessions.values() if s.task_id == task_id]:
+            self._stop(session)
+            killed.append(session.process.pid)
+        return killed + self.supervisor.kill_owned(task_id)
 
 
 def deny_owner_surfaces(argv: tuple[str, ...], cwd: Path, ctx: ExecutionContext) -> None:
