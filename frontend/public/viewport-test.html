@@ -1,0 +1,19 @@
+<!doctype html>
+<!-- Dev-only responsive inspection harness (not shipped in production paths) -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>NomadicOS responsive inspection</title>
+    <style>
+      body { background: #333; margin: 0; padding: 16px; font: 12px/1.4 monospace; color: #eee; }
+      .label { margin: 18px 0 6px; }
+      iframe { border: 2px solid #666; background: #0b0e14; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <div class="label">375 &times; 812 (mobile)</div>
+    <iframe src="/" width="375" height="812"></iframe>
+    <div class="label">768 &times; 1024 (tablet)</div>
+    <iframe src="/" width="768" height="1024"></iframe>
+  </body>
+</html>
