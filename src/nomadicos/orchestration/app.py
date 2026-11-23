@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -63,6 +64,10 @@ from nomadicos.tools.terminal import ProcessSupervisor, TerminalTool
 #: bounded readiness wait when auto-starting the default engine (SPEC §14):
 #: the server may take seconds to load a GGUF; startup never waits forever
 _ENGINE_READY_TIMEOUT_S = 60.0
+
+#: task whose graph run is in progress; cloud traces carry no task id, and
+#: parallel missions share one engine, so the trace sink reads it from here
+_CURRENT_TASK: ContextVar[str | None] = ContextVar("nomadic_current_task", default=None)
 
 
 @dataclass
@@ -417,6 +422,7 @@ class NomadicApp:
     def _log_inference_trace(self, trace: InferenceTrace) -> None:
         self.log.log(
             EventType.INFERENCE_TRACE,
+            task_id=_CURRENT_TASK.get(),
             model_id=trace.model_id or trace.requested_model_id,
             result=trace.outcome,
             payload=trace.model_dump(mode="json"),
@@ -678,9 +684,11 @@ class NomadicApp:
     async def _invoke(self, state: Any, config: dict[str, Any], task_id: str) -> Any:
         """Run the graph; the exclusive desktop lease (if this task took it)
         is always released when the mission ends, pauses, or fails."""
+        token = _CURRENT_TASK.set(task_id)
         try:
             return await self.graph.ainvoke(state, config)
         finally:
+            _CURRENT_TASK.reset(token)
             # the agent's run ended (or paused for the owner): free its desktop
             # and file leases and close the terminals it left open
             self.runtime.release_desktop(task_id)
@@ -1077,6 +1085,15 @@ class NomadicApp:
         model_id = summary.model_id
         if not model_id:
             return
+        answered = [
+            e.model_id
+            for e in self.log.events(summary.task_id)
+            if e.type is EventType.INFERENCE_TRACE and e.result == "success" and e.model_id
+        ]
+        if answered and model_id not in answered:
+            # cloud fell back on every call: the routed model never answered,
+            # so this outcome is evidence about the model that did
+            model_id = answered[-1]
         try:
             from nomadicos.router.analyzer import analyze_goal
             from nomadicos.router.selection import task_bucket

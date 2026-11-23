@@ -951,6 +951,45 @@ def test_app_wires_cloud_engine_only_when_enabled(tmp_path: Path) -> None:
     assert [e.type.value for e in app.log.events()][-1] == "INFERENCE_TRACE"
 
 
+def test_production_outcome_credits_the_model_that_answered(tmp_path: Path) -> None:
+    """A rate-limited routed model whose calls all fell back must not be
+    credited with the task's outcome: the router would learn from it."""
+    from nomadicos.contracts.core import TaskStatus
+    from nomadicos.contracts.model import ModelRecord
+    from nomadicos.orchestration.app import _CURRENT_TASK, NomadicApp, RunSummary
+
+    app = NomadicApp(AppConfig(cloud=make_cfg()), state_dir=tmp_path, workspace_root=tmp_path)
+    for mid in ("openrouter/small:free", "openrouter/big:free"):
+        app.registry.register(ModelRecord(model_id=mid, engine="cloud"))
+    samples: list[Any] = []
+    app.registry.record_production = samples.append  # type: ignore[method-assign]
+
+    def trace(model: str | None, outcome: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            model_id=model,
+            requested_model_id="openrouter/small:free",
+            outcome=outcome,
+            model_dump=lambda mode: {},
+        )
+
+    sink = app.engines["cloud"]._trace_sink  # type: ignore[attr-defined]
+    token = _CURRENT_TASK.set("task_fb")
+    try:
+        sink(trace(None, "failure"))
+        sink(trace("openrouter/big:free", "success"))
+    finally:
+        _CURRENT_TASK.reset(token)
+    sink(trace("openrouter/small:free", "success"))  # another task's call
+    summary = RunSummary(
+        task_id="task_fb",
+        status=TaskStatus.SUCCESS,
+        model_id="openrouter/small:free",
+        goal_verdict="PASS",
+    )
+    app._record_production({"goal_text": "write a file"}, summary, 0.0)
+    assert [(s.model_id, s.engine) for s in samples] == [("openrouter/big:free", "cloud")]
+
+
 # ------------------------------------------- brain independence + boundary ---
 
 
