@@ -29,7 +29,9 @@ def ctx(tmp_path: Path) -> ExecutionContext:
 
 
 async def test_list_finds_this_interpreter(tmp_path: Path) -> None:
-    out = await ProcessTool().run("list", {"name": "python"}, ctx(tmp_path))
+    # Linux names this process after its script ("pytest"), Windows "python.exe"
+    name = psutil.Process().name()
+    out = await ProcessTool().run("list", {"name": name}, ctx(tmp_path))
     assert out.status is ExecutionStatus.SUCCEEDED
     assert os.getpid() in {p["pid"] for p in out.evidence["processes"]}
 

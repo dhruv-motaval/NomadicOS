@@ -1,0 +1,57 @@
+# Example cloud-inference block (SPEC §10). NOT loaded automatically: copy the
+# `cloud:` section into config/config.yaml to enable it. Off by default.
+#
+# Credentials are NEVER written here. `api_key_env` is the NAME of an
+# environment variable (or a key in the git-ignored root `.env`) that holds
+# the secret, e.g.   $env:OPENROUTER_API_KEY = "..."   (PowerShell)
+cloud:
+  enabled: true
+  # Development/qualification switch. When true, only models whose CURRENT
+  # catalog metadata declares zero input AND output price are used. Missing,
+  # stale, ambiguous or nonzero pricing excludes a model; there is no paid
+  # fallback. Free quotas and rate limits still apply.
+  free_only: true
+  providers:
+    openrouter:
+      kind: openrouter                  # base_url defaults to https://openrouter.ai/api/v1
+      api_key_env: OPENROUTER_API_KEY
+    # An owner-configured OpenAI-compatible provider (https, or http on loopback only):
+    # acme:
+    #   kind: openai_compatible
+    #   base_url: https://llm.acme.example/v1
+    #   api_key_env: ACME_API_KEY
+    #   assume_structured_output: true  # only if its /models does not say so
+  # Owner allowlist of "<provider>/<model id>" patterns. EMPTY = nothing allowed.
+  # Pick ids from the provider's catalog; these are examples only.
+  allowed_models:
+    - "openrouter/openrouter/free"       # OpenRouter's documented free router (only admitted if the catalog lists it at zero price)
+    - "openrouter/*:free"
+  # Optional labels for registry records (selection still goes through the router).
+  roles:
+    reasoning: ["openrouter/*:free"]
+  max_catalog_age_s: 3600     # older pricing metadata is stale -> excluded under free_only
+  request_timeout_s: 60
+  total_timeout_s: 180        # hard cap for one request including retries + fallbacks
+  max_retries: 2              # retries of the same model
+  max_fallbacks: 2            # other admitted models tried after that
+  retry_backoff_s: 1.0
+  max_backoff_s: 20
+  max_concurrent_requests: 4  # provider calls in flight across ALL missions
+  rate_limit_cooldown_s: 60   # a model that just failed (429/timeout/empty reply) is skipped this long
+
+# To PIN one model and go slowly (free tiers rate-limit hard), use instead:
+#   allowed_models: ["openrouter/<exact model id>"]
+#   max_concurrent_requests: 1
+#   max_fallbacks: 0
+#   max_retries: 5
+#   retry_backoff_s: 5
+#   max_backoff_s: 60
+#   request_timeout_s: 180
+#   total_timeout_s: 600
+# and in the sections below (a one-model pool needs the router to re-run it):
+#   routing:
+#     retry_tried_models: true
+#   budget:
+#     worker_max_tokens: 4096     # a coding worker returns whole files inside JSON
+#     worker_timeout_s: 600
+#     max_escalations: 6

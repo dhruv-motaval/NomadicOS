@@ -53,10 +53,9 @@ def _make_app_via_load_config(tmp_path, scripts=None):
     """
     cfg = load_config()
     # The scripted mock reply drives the classic worker path; the owner's
-    # config.yaml may enable the brain actor, which ignores that script.
-    cfg = cfg.model_copy(
-        update={"orchestration": cfg.orchestration.model_copy(update={"brain_actor": False})}
-    )
+    # config.yaml may enable the brain actor/planner, which ignore that script.
+    brain_off = {"brain_actor": False, "brain_planner": False}
+    cfg = cfg.model_copy(update={"orchestration": cfg.orchestration.model_copy(update=brain_off)})
     assert cfg.persistence.persistence_backend == "postgres"
     assert cfg.persistence.dsn is not None
 

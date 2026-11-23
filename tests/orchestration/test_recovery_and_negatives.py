@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
+import pytest
 from helpers import make_app, write_json
 
 from nomadicos.contracts.core import TaskStatus
@@ -166,6 +168,7 @@ PRED_OUT = [{"type": "stdout_contains", "text": "DONE-MARK", "command": "cmd"}]
 GOAL_OUT = "Make a note, then print DONE-MARK in the terminal"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="scripted step runs cmd.exe")
 async def test_progress_actions_before_step_expectation_cost_no_recovery(
     tmp_path: Path,
 ) -> None:

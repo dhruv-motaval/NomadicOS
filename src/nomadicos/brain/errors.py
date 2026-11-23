@@ -42,6 +42,11 @@ class InvalidTransition(BrainError):
     """A deterministic state transition was rejected (fail closed)."""
 
 
+class InvalidTrace(BrainError):
+    """A captured brain event trajectory cannot be reconstructed (mixed
+    missions, duplicate ids, causal cycles, history mismatch)."""
+
+
 class DeliberationError(BrainError):
     """Deliberation failed explicitly (no valid root candidate, no
     selectable candidate, bounded search exhausted) — never coerced into

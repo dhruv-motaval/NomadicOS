@@ -1,0 +1,62 @@
+# CI on Linux and Windows (SPEC §52: tests + mypy + ruff before moving on).
+# Hardware tests never run here: they need the owner's local models/GPU.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    # Windows: mypy must see the Windows-only APIs (ctypes.windll, winreg) the code guards
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked --extra dev --extra postgres
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy src/
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      # desktop extra (pyautogui/comtypes) is Windows-only; Linux runners are headless
+      - run: uv sync --locked --extra dev --extra postgres ${{ runner.os == 'Windows' && '--extra desktop' || '' }}
+      - run: uv run pytest -m "not hardware and not integration"
+
+  integration:
+    # service containers only run on Linux runners
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: nomadicos
+          POSTGRES_PASSWORD: nomadicos
+          POSTGRES_DB: nomadicos
+        ports: ["5433:5432"]
+        options: >-
+          --health-cmd "pg_isready -U nomadicos"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked --extra dev --extra postgres
+      - run: uv run pytest -m "integration and not hardware"

@@ -4,6 +4,7 @@ restore, task isolation, corruption handling, bounds."""
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import TypedDict
 
@@ -48,6 +49,31 @@ def test_thread_isolation(tmp_path: Path) -> None:
     graph.invoke({"count": 0}, {"configurable": {"thread_id": "nomadic:task_a"}})
     loaded = graph.get_state({"configurable": {"thread_id": "nomadic:task_B"}})
     assert loaded.values == {}
+
+
+class _SlowEarlyWrite(FileCheckpointSaver):
+    """The 2nd snapshot write (a put_writes from the task thread) stalls, so
+    without serialization its stale snapshot lands after later checkpoints."""
+
+    def __init__(self, state_dir: Path) -> None:
+        self.snapshot_writes = 0
+        super().__init__(state_dir)
+
+    def _write_snapshot(self, state: dict) -> None:
+        self.snapshot_writes += 1
+        if self.snapshot_writes == 2:
+            time.sleep(0.3)
+        super()._write_snapshot(state)
+
+
+def test_background_saves_never_persist_a_stale_snapshot(tmp_path: Path) -> None:
+    """LangGraph saves checkpoints from background threads; a slow early
+    save must not overwrite a later one on disk (lost restart progress)."""
+    cfg = {"configurable": {"thread_id": "nomadic:task_1"}}
+    saver = _SlowEarlyWrite(tmp_path)
+    _builder().compile(checkpointer=saver).invoke({"count": 0}, cfg)
+    on_disk = FileCheckpointSaver(tmp_path).storage["nomadic:task_1"][""]
+    assert list(on_disk) == list(saver.storage["nomadic:task_1"][""])
 
 
 def test_corrupt_snapshot_fails_closed(tmp_path: Path) -> None:

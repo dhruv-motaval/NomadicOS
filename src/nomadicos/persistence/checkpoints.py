@@ -20,6 +20,7 @@ import base64
 import json
 import os
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -121,6 +122,9 @@ class DurableCheckpointSaver(InMemorySaver):
 
     def __init__(self, *, serde: Any = None) -> None:
         super().__init__(serde=serde or default_serde())
+        # LangGraph saves from background threads: mutate+snapshot+write must be one
+        # step, or an older snapshot can be written last and lose checkpoints
+        self._persist_lock = threading.RLock()
 
     def _read_snapshot(self) -> dict | None:  # pragma: no cover - interface
         raise NotImplementedError
@@ -200,13 +204,15 @@ class DurableCheckpointSaver(InMemorySaver):
         self._write_snapshot(self._snapshot())
 
     def put(self, config, checkpoint, metadata, new_versions: ChannelVersions):
-        result = super().put(config, checkpoint, metadata, new_versions)
-        self._persist(config["configurable"]["thread_id"])
+        with self._persist_lock:
+            result = super().put(config, checkpoint, metadata, new_versions)
+            self._persist(config["configurable"]["thread_id"])
         return result
 
     def put_writes(self, config, writes, task_id, task_path: str = ""):
-        result = super().put_writes(config, writes, task_id, task_path=task_path)
-        self._persist(config["configurable"]["thread_id"])
+        with self._persist_lock:
+            result = super().put_writes(config, writes, task_id, task_path=task_path)
+            self._persist(config["configurable"]["thread_id"])
         return result
 
 

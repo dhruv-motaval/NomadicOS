@@ -4,8 +4,10 @@ are task-confined, and are correctly distinguished from ephemeral state."""
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 
+import pytest
 from helpers import make_app, write_json
 
 from nomadicos.contracts.core import TaskStatus
@@ -44,6 +46,7 @@ async def test_workspace_and_artifacts_survive_restart(tmp_path: Path) -> None:
         assert sha_entry == _sha(artifact)
 
 
+@pytest.mark.skipif(os.name != "nt", reason="desktop screenshot needs the Windows desktop")
 async def test_screenshot_artifact_survives_restart(tmp_path: Path) -> None:
     app_a = make_app(
         tmp_path,
