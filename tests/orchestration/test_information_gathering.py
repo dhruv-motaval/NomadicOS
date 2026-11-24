@@ -217,3 +217,87 @@ def test_only_a_successful_read_resolves_and_only_what_it_names() -> None:
     done, _ = observe_into_brain(brain, _obs("SUCCEEDED"), answers=["fable_price"])
     assert open_unknowns(done) == []
     assert done.world.facts["fable_price"].value == "PRICE-42"
+
+
+# --- regression: an action goal on a local app must not turn into a web fetch
+# (live run task_a9f5cf7fc0ae48498946: the actor invented "Notepad download URL
+# is unknown", the semantic monitor accepted it, and a curl ran instead of a launch)
+
+APP_GOAL = "Open Notepad and type the line: Hello from NomadicOS"
+APP_PRED = {"type": "window_present", "title": "Notepad"}
+
+
+def _app_candidates() -> str:
+    fetch = {
+        "id": "c1",
+        "kind": "OBSERVE",
+        "subgoal_id": "s0",
+        "tool": "terminal.execute",
+        "arguments": {
+            "command": "curl",
+            "args": ["-sL", "https://notepad-plus-plus.org/downloads/"],
+        },
+        "preconditions": [],
+        "expected_effect": "learn the Notepad download URL",
+        "rationale": "Notepad download URL is unknown",
+    }
+    launch = {
+        "id": "c2",
+        "kind": "EXECUTE",
+        "subgoal_id": "s0",
+        "tool": "process.launch",
+        "arguments": {"executable": "notepad.exe"},
+        "preconditions": [],
+        "expected_effect": "a Notepad window is open",
+        "rationale": "open the app",
+    }
+    return json.dumps({"candidates": [fetch, launch]})
+
+
+async def _app_step(brain: BrainState) -> Any:
+    from nomadicos.inference.mock import MockEngine
+    from nomadicos.orchestration.brain_adapter import brain_step
+
+    accept_all = json.dumps(
+        {
+            "verdicts": [
+                {"candidate_id": "c1", "accepted": True, "reason": "Notepad URL is unknown"},
+                {"candidate_id": "c2", "accepted": True, "reason": "ok"},
+            ]
+        }
+    )
+    engine = MockEngine()
+    engine.script("CANDIDATES AND CONTEXT", accept_all)
+    engine.script("goal_objective", _app_candidates())
+    subgoal = brain.task_graph.subgoals[0]
+    return await brain_step(brain, subgoal, engine=engine, model_id="mock", adaptive=True)
+
+
+async def test_local_app_goal_never_selects_a_web_fetch() -> None:
+    from nomadicos.contracts.core import PlanStep
+    from nomadicos.orchestration.brain_adapter import brain_state_for
+
+    goal = Goal.from_spec(APP_GOAL, predicates=[APP_PRED])
+    brain = brain_state_for(
+        goal, [PlanStep(description="Satisfy window_present for Notepad")], task_id="t_app"
+    )
+    result = await _app_step(brain)
+    assert result.candidate is not None and result.candidate.id == "c2"  # the launch, not curl
+    verdicts = {r.candidate_id: r for r in result.brain.monitor_results}
+    assert verdicts["c1"].decision.value == "REJECTED"
+    assert "STRUCTURAL INFORMATION" in verdicts["c1"].reasons[0]
+
+
+async def test_web_read_stays_allowed_for_an_open_information_need() -> None:
+    from nomadicos.brain.schemas import WorldFact, WorldState
+    from nomadicos.contracts.core import PlanStep
+    from nomadicos.orchestration.brain_adapter import brain_state_for
+
+    goal = Goal.from_spec(APP_GOAL, predicates=[APP_PRED])
+    brain = brain_state_for(
+        goal, [PlanStep(description="Satisfy window_present for Notepad")], task_id="t_app"
+    )
+    need = WorldFact(key="np_url", value="Where is Notepad?", kind=WorldFactKind.UNKNOWN)
+    brain = brain.model_copy(update={"world": WorldState(version=1, facts={"np_url": need})})
+    result = await _app_step(brain)
+    assert result.candidate is not None and result.candidate.id == "c1"  # gate is need-scoped
