@@ -61,7 +61,12 @@ async def test_launched_processes_carry_the_tool_marker(tmp_path: Path) -> None:
     assert (c.workspace / "marker.txt").read_text() == "1"
 
 
-async def test_quick_failures_and_missing_programs_are_failed_steps(tmp_path: Path) -> None:
+async def test_quick_failures_and_missing_programs_are_failed_steps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # interpreter startup can exceed the 1 s window under full-suite load; the
+    # watch loop returns as soon as the process exits, so this costs nothing
+    monkeypatch.setattr("nomadicos.tools.process.LAUNCH_SETTLE_S", 15.0)
     tool = ProcessTool()
     crash = await tool.run(
         "launch", {"executable": PY, "args": ["-c", "raise SystemExit(3)"]}, ctx(tmp_path)
