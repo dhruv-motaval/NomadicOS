@@ -2727,7 +2727,10 @@ def _build_request(
         "  read returns the output since the last read; close stops it.\n"
         "- desktop.type_text: TYPE TEXT into an ALREADY-FOCUSED window\n"
         "  Use for: filling forms, writing in editors, entering URLs in address bar\n"
-        "  Requires: target window must already be focused/active\n"
+        '  Requires: name the intended window in "window" (a title substring), or\n'
+        "  observe it first (desktop.focus_window, foreground_window, ui_find).\n"
+        "  Typing, keys, clicks and scrolls are REFUSED when the window in front is\n"
+        "  not that window.\n"
         "- desktop.hotkey / press_key: SEND KEYSTROKES (shortcuts, Enter, Tab, etc.)\n"
         "  Use for: Ctrl+L (address bar), Alt+Tab, Enter to submit, navigation\n"
         "- desktop.mouse_click / move: CLICK at coordinates\n"

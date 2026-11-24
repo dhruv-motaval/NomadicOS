@@ -113,6 +113,8 @@ async def test_every_desktop_operation_travels_the_full_pipeline(tmp_path) -> No
     for operation, args in cases:
         backend = FakeDesktopBackend(width=640, height=480)
         chain = granted_chain(tmp_path, backend)
+        # raw input needs a prior look at the foreground window (stale-target guard)
+        await chain.drive(desktop_json("foreground_window", {}), chain.ctx(tmp_path))
         result = await chain.drive(desktop_json(operation, args), chain.ctx(tmp_path))
         assert result.status is ExecutionStatus.SUCCEEDED, (operation, result.message)
         assert result.tool == "desktop" and result.operation == operation
@@ -178,6 +180,7 @@ async def test_same_authorized_desktop_action_cannot_execute_twice(
 ) -> None:
     chain = granted_chain(tmp_path)
     ctx_ = chain.ctx(tmp_path)
+    await chain.drive(desktop_json("foreground_window", {}), ctx_)
     parsed = chain.parse(desktop_json(operation, args), ctx_)
     authorized = chain.authz.authorize(parsed.value, chain.validate(parsed.value, ctx_))
     first = await chain.executor.execute(authorized, ctx_)

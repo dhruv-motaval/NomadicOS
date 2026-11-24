@@ -60,6 +60,7 @@ async def test_rejection_context_exposed_to_replanning(tmp_path: Path) -> None:
                 "win + d",
                 [
                     HALLUCINATION,
+                    desktop_json("foreground_window", {}),  # stale-target guard
                     desktop_json("hotkey", {"keys": ["win", "d"]}),
                     '{"finished": true}',
                 ],
@@ -89,7 +90,14 @@ async def test_valid_proposals_still_recover_normally(tmp_path: Path) -> None:
     app = make_desktop_app(
         tmp_path,
         scripts=[
-            ("win + d", [desktop_json("hotkey", {"keys": ["win", "d"]}), '{"finished": true}'])
+            (
+                "win + d",
+                [
+                    desktop_json("foreground_window", {}),  # stale-target guard
+                    desktop_json("hotkey", {"keys": ["win", "d"]}),
+                    '{"finished": true}',
+                ],
+            )
         ],
     )
     summary = await app.run_goal(GOAL)

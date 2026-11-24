@@ -48,6 +48,12 @@ def make(width: int = 1920, height: int = 1080) -> tuple[DesktopTool, FakeDeskto
     return DesktopTool(backend), backend
 
 
+async def observe(tool: DesktopTool, tmp_path: Path) -> None:
+    """Raw input needs a prior look at the foreground window (stale-target guard)."""
+    seen = await tool.run("foreground_window", {}, ctx(tmp_path))
+    assert seen.status is ExecutionStatus.SUCCEEDED
+
+
 # ------------------------------------------------------------- contract ----
 
 
@@ -99,6 +105,7 @@ async def test_mouse_move_outside_screen_rejected_never_clamped(tmp_path) -> Non
 
 async def test_mouse_click_records_button_and_clicks(tmp_path) -> None:
     tool, backend = make()
+    await observe(tool, tmp_path)
     outcome = await tool.run(
         "mouse_click", {"x": 30, "y": 40, "button": "right", "clicks": 2}, ctx(tmp_path)
     )
@@ -109,6 +116,7 @@ async def test_mouse_click_records_button_and_clicks(tmp_path) -> None:
 
 async def test_mouse_scroll_bounded(tmp_path) -> None:
     tool, backend = make()
+    await observe(tool, tmp_path)
     outcome = await tool.run("mouse_scroll", {"amount": -3}, ctx(tmp_path))
     assert outcome.status is ExecutionStatus.SUCCEEDED
     assert backend.scrolled == [-3]
@@ -121,6 +129,7 @@ async def test_mouse_scroll_bounded(tmp_path) -> None:
 
 async def test_type_text_records_and_bounds(tmp_path) -> None:
     tool, backend = make()
+    await observe(tool, tmp_path)
     outcome = await tool.run("type_text", {"text": "hello"}, ctx(tmp_path))
     assert outcome.status is ExecutionStatus.SUCCEEDED
     assert backend.typed == ["hello"]
@@ -131,6 +140,7 @@ async def test_type_text_records_and_bounds(tmp_path) -> None:
 
 async def test_press_key_normalizes_and_records(tmp_path) -> None:
     tool, backend = make()
+    await observe(tool, tmp_path)
     outcome = await tool.run("press_key", {"key": "CTRL+ALT+Delete"}, ctx(tmp_path))
     assert outcome.status is ExecutionStatus.SUCCEEDED
     assert outcome.evidence["keys"] == ["ctrl", "alt", "delete"]
@@ -311,3 +321,103 @@ async def test_failures_leave_authority_state_unchanged(tmp_path) -> None:
     after = store.state()
     assert after.epoch == before.epoch
     assert after.grant == before.grant
+
+
+# ------------------------------------------------ stale-target guard ------
+
+
+async def test_input_without_observation_is_refused(tmp_path) -> None:
+    tool, backend = make()
+    for op, args in (
+        ("type_text", {"text": "secret"}),
+        ("press_key", {"key": "enter"}),
+        ("hotkey", {"keys": ["alt", "f4"]}),
+        ("mouse_click", {"x": 1, "y": 1}),
+        ("mouse_scroll", {"amount": 1}),
+    ):
+        outcome = await tool.run(op, args, ctx(tmp_path))
+        assert outcome.status is ExecutionStatus.FAILED, op
+        assert outcome.failure is Failure.ACTION_FAILED
+        assert outcome.evidence["stale_target"] is True
+        assert "observe first" in outcome.message
+    assert backend.typed == backend.keys == backend.hotkeys == backend.scrolled == []
+    assert backend.clicks == []
+
+
+async def test_focus_change_after_observation_refuses_input(tmp_path) -> None:
+    tool, backend = make()
+    await observe(tool, tmp_path)
+    backend.windows.insert(0, {"handle": 9, "title": "Pop-up", "pid": 909})
+    outcome = await tool.run("type_text", {"text": "hello"}, ctx(tmp_path))
+    assert outcome.status is ExecutionStatus.FAILED
+    assert "changed since it was observed" in outcome.message
+    assert outcome.evidence["foreground_title"] == "Pop-up"
+    assert backend.typed == []
+
+
+async def test_same_handle_new_process_instance_is_refused(tmp_path) -> None:
+    tool, backend = make()
+    backend.windows[0]["started"] = 1
+    await observe(tool, tmp_path)
+    backend.windows[0]["started"] = 2  # same handle and pid, restarted process
+    outcome = await tool.run("press_key", {"key": "enter"}, ctx(tmp_path))
+    assert outcome.status is ExecutionStatus.FAILED
+    assert backend.keys == []
+
+
+async def test_observation_does_not_carry_across_tasks(tmp_path) -> None:
+    tool, backend = make()
+    await observe(tool, tmp_path)  # task_desk
+    other = ExecutionContext.for_task("task_other", tmp_path / "ws")
+    outcome = await tool.run("type_text", {"text": "x"}, other)
+    assert outcome.status is ExecutionStatus.FAILED
+    assert "no observation" in outcome.message
+    assert backend.typed == []
+
+
+async def test_focus_window_counts_as_observation(tmp_path) -> None:
+    tool, backend = make()
+    focused = await tool.run("focus_window", {"title": "NomadicOS Console"}, ctx(tmp_path))
+    assert focused.status is ExecutionStatus.SUCCEEDED
+    outcome = await tool.run("type_text", {"text": "dir"}, ctx(tmp_path))
+    assert outcome.status is ExecutionStatus.SUCCEEDED
+    assert backend.typed == ["dir"]
+
+
+async def test_ui_read_without_foreground_handle_is_not_an_observation(tmp_path) -> None:
+    from nomadicos.desktop.uia import FakeUIA
+
+    backend = FakeDesktopBackend()
+    uia = FakeUIA({"Other": [{"control_type": "button", "name": "OK", "depth": 1}]})
+    tool = DesktopTool(backend, uia=uia)
+    read = await tool.run("ui_find", {"window": "Other", "name": "OK"}, ctx(tmp_path))
+    assert read.status is ExecutionStatus.SUCCEEDED
+    outcome = await tool.run("type_text", {"text": "x"}, ctx(tmp_path))
+    assert outcome.status is ExecutionStatus.FAILED
+    assert backend.typed == []
+
+
+async def test_click_over_another_application_is_refused(tmp_path) -> None:
+    tool, backend = make()
+    await observe(tool, tmp_path)
+    backend.window_at = lambda x, y: {"handle": 7, "pid": 707}  # type: ignore[method-assign]
+    outcome = await tool.run("mouse_click", {"x": 5, "y": 5}, ctx(tmp_path))
+    assert outcome.status is ExecutionStatus.FAILED
+    assert "another application" in outcome.message
+    assert backend.clicks == []
+    # a menu or dialog of the SAME process is a different window but allowed
+    backend.window_at = lambda x, y: {"handle": 8, "pid": 101}  # type: ignore[method-assign]
+    ok = await tool.run("mouse_click", {"x": 5, "y": 5}, ctx(tmp_path))
+    assert ok.status is ExecutionStatus.SUCCEEDED
+    assert backend.clicks == [(5, 5, "left", 1)]
+
+
+async def test_named_target_window_admits_input_without_observation(tmp_path) -> None:
+    tool, backend = make()
+    ok = await tool.run("type_text", {"text": "hi", "window": "notepad"}, ctx(tmp_path))
+    assert ok.status is ExecutionStatus.SUCCEEDED
+    assert backend.typed == ["hi"]
+    wrong = await tool.run("press_key", {"key": "enter", "window": "Finance"}, ctx(tmp_path))
+    assert wrong.status is ExecutionStatus.FAILED
+    assert 'not "Finance"' in wrong.message
+    assert backend.keys == []

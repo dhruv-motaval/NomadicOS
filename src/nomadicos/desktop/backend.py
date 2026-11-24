@@ -54,6 +54,11 @@ class DesktopBackend:
         raise NotImplementedError
 
     def foreground_window(self) -> dict[str, Any]:  # pragma: no cover - protocol
+        """``handle``, ``title``, owning ``pid`` and process ``started`` time."""
+        raise NotImplementedError
+
+    def window_at(self, x: int, y: int) -> dict[str, Any]:  # pragma: no cover - protocol
+        """Top-level ``handle`` and owning ``pid`` of the window under a point."""
         raise NotImplementedError
 
     def focus_window(
@@ -105,6 +110,9 @@ class UnavailableDesktopBackend(DesktopBackend):
     def foreground_window(self) -> dict[str, Any]:
         self._refuse()
 
+    def window_at(self, x: int, y: int) -> dict[str, Any]:
+        self._refuse()
+
     def focus_window(self, title: str, handle: int | None = None) -> dict[str, Any]:
         self._refuse()
 
@@ -138,9 +146,10 @@ class FakeDesktopBackend(DesktopBackend):
         self.clicks: list[tuple[int, int, str, int]] = []
         self.moves: list[tuple[int, int]] = []
         self.captures = 0
+        #: z-order: windows[0] is the foreground window
         self.windows: list[dict[str, Any]] = [
-            {"handle": 1, "title": "Untitled - Notepad"},
-            {"handle": 2, "title": "NomadicOS Console"},
+            {"handle": 1, "title": "Untitled - Notepad", "pid": 101},
+            {"handle": 2, "title": "NomadicOS Console", "pid": 102},
         ]
         self.focused: str | None = None
 
@@ -177,6 +186,15 @@ class FakeDesktopBackend(DesktopBackend):
     def foreground_window(self) -> dict[str, Any]:
         return dict(self.windows[0]) if self.windows else {"handle": 0, "title": ""}
 
+    def window_at(self, x: int, y: int) -> dict[str, Any]:
+        top = self.foreground_window()
+        return {"handle": top.get("handle", 0), "pid": top.get("pid", 0)}
+
+    def _raise(self, w: dict[str, Any]) -> None:
+        self.focused = str(w.get("title", ""))
+        self.windows.remove(w)
+        self.windows.insert(0, w)
+
     def focus_window(self, title: str, handle: int | None = None) -> dict[str, Any]:
         if handle is not None:
             for w in self.windows:
@@ -190,7 +208,7 @@ class FakeDesktopBackend(DesktopBackend):
                         "title": actual,
                         "reason": "window handle no longer matches the observed title",
                     }
-                self.focused = actual
+                self._raise(w)
                 return {"focused": True, "handle": handle, "title": actual}
             return {
                 "focused": False,
@@ -200,7 +218,7 @@ class FakeDesktopBackend(DesktopBackend):
             }
         for w in self.windows:
             if title.lower() in str(w.get("title", "")).lower():
-                self.focused = str(w["title"])
+                self._raise(w)
                 return {"focused": True, "handle": w["handle"], "title": w["title"]}
         return {"focused": False, "reason": "window not found"}
 

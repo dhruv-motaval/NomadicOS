@@ -10,12 +10,15 @@ the tool gateway renders as honest ToolOutcome failures.
 from __future__ import annotations
 
 import ctypes
+import ctypes.wintypes
 import struct
 from typing import Any
 
 from nomadicos.desktop.backend import DesktopBackend, DesktopUnavailable
 
 KEYUP = 0x0002
+GA_ROOT = 2
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 SRCCOPY = 0x00CC0020
 WHEEL = 0x0800
 MAX_ENUM_WINDOWS = 200
@@ -95,6 +98,13 @@ class Win32DesktopBackend(DesktopBackend):
         self._ct = ctypes
         self._user32 = ctypes.windll.user32
         self._gdi32 = ctypes.windll.gdi32
+        # own instance: setting restype/argtypes must not touch the shared windll.kernel32
+        k32 = ctypes.WinDLL("kernel32")
+        k32.OpenProcess.restype = ctypes.c_void_p
+        k32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_bool, ctypes.c_ulong]
+        k32.GetProcessTimes.argtypes = [ctypes.c_void_p] + [ctypes.c_void_p] * 4
+        k32.CloseHandle.argtypes = [ctypes.c_void_p]
+        self._kernel32 = k32
 
     def screen_size(self) -> tuple[int, int]:
         return (int(self._user32.GetSystemMetrics(0)), int(self._user32.GetSystemMetrics(1)))
@@ -181,7 +191,35 @@ class Win32DesktopBackend(DesktopBackend):
         hwnd = int(self._user32.GetForegroundWindow() or 0)
         if not hwnd:
             return {"handle": 0, "title": ""}
-        return {"handle": hwnd, "title": _window_title(self._user32, self._ct, hwnd)}
+        pid, started = self._process_of(hwnd)
+        return {
+            "handle": hwnd,
+            "title": _window_title(self._user32, self._ct, hwnd),
+            "pid": pid,
+            "started": started,
+        }
+
+    def window_at(self, x: int, y: int) -> dict[str, Any]:
+        point = self._ct.wintypes.POINT(int(x), int(y))
+        hwnd = int(self._user32.WindowFromPoint(point) or 0)
+        root = int(self._user32.GetAncestor(hwnd, GA_ROOT) or 0) if hwnd else 0
+        return {"handle": root, "pid": self._process_of(root)[0] if root else 0}
+
+    def _process_of(self, hwnd: int) -> tuple[int, int]:
+        """(pid, process creation FILETIME): together they name one process
+        instance, so a reused pid is not mistaken for the observed one."""
+        pid = self._ct.c_ulong(0)
+        self._user32.GetWindowThreadProcessId(hwnd, self._ct.byref(pid))
+        started = 0
+        proc = self._kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+        if proc:
+            try:
+                times = [self._ct.c_ulonglong(0) for _ in range(4)]
+                if self._kernel32.GetProcessTimes(proc, *(self._ct.byref(t) for t in times)):
+                    started = int(times[0].value)
+            finally:
+                self._kernel32.CloseHandle(proc)
+        return int(pid.value), started
 
     def focus_window(self, title: str, handle: int | None = None) -> dict[str, Any]:
         if handle is not None:

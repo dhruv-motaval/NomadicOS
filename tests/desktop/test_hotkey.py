@@ -146,6 +146,7 @@ async def test_win_d_reaches_the_desktop_backend(tmp_path) -> None:
     backend = FakeDesktopBackend()
     tools = ToolRegistry()
     tools.register(DesktopTool(backend))
+    await tools.get("desktop").run("foreground_window", {}, ctx_for(tmp_path))
     outcome = await tools.get("desktop").run("hotkey", {"keys": ["Win", "D"]}, ctx_for(tmp_path))
     assert outcome.status.value == "SUCCEEDED"
     # the typed structured chord reached the desktop backend
@@ -157,6 +158,7 @@ async def test_press_key_semantics_preserved(tmp_path) -> None:
     backend = FakeDesktopBackend()
     tools = ToolRegistry()
     tools.register(DesktopTool(backend))
+    await tools.get("desktop").run("foreground_window", {}, ctx_for(tmp_path))
     outcome = await tools.get("desktop").run("press_key", {"key": "enter"}, ctx_for(tmp_path))
     assert outcome.status.value == "SUCCEEDED"
     assert backend.keys == ["enter"]
@@ -181,6 +183,7 @@ async def test_regression_goal_produces_canonical_hotkey(tmp_path) -> None:
                 "win + d",
                 [
                     '{"tool": "press_key", "operation": "press_key", "args": {"key": "win+d"}}',
+                    desktop_json("foreground_window", {}),  # stale-target guard
                     desktop_json("hotkey", {"keys": ["win", "d"]}),
                     # the two-step investigate->act plan gives a second
                     # proposal turn; a compliant model submits a claim once

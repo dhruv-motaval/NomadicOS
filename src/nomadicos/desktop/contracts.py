@@ -14,6 +14,8 @@ desktop capability. Constants here are the security bounds:
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 MAX_TYPE_TEXT = 2000
@@ -66,6 +68,12 @@ class _Args(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+#: title substring of the window raw input is meant for: the tool refuses the
+#: input unless the real foreground window matches it (or this task observed
+#: that window instance), so focus drift cannot redirect keystrokes or clicks
+TargetWindow = Annotated[str | None, Field(min_length=1, max_length=MAX_TITLE_CHARS)]
+
+
 class ScreenshotArgs(_Args):
     """Full primary-screen capture; dimensions checked at execution time."""
 
@@ -78,6 +86,7 @@ class MouseMoveArgs(_Args):
 class MouseClickArgs(MouseMoveArgs):
     button: str = "left"
     clicks: int = Field(default=1, ge=1, le=MAX_CLICKS)
+    window: TargetWindow = None
 
     @field_validator("button")
     @classmethod
@@ -89,16 +98,19 @@ class MouseClickArgs(MouseMoveArgs):
 
 class MouseScrollArgs(_Args):
     amount: int = Field(ge=-MAX_SCROLL, le=MAX_SCROLL)
+    window: TargetWindow = None
 
 
 class TypeTextArgs(_Args):
     text: str = Field(min_length=1, max_length=MAX_TYPE_TEXT)
+    window: TargetWindow = None
 
 
 class PressKeyArgs(_Args):
     """A key or a '+'-joined hotkey from the closed vocabulary (SPEC §26)."""
 
     key: str
+    window: TargetWindow = None
 
     @field_validator("key")
     @classmethod
@@ -112,6 +124,7 @@ class HotkeyArgs(_Args):
     allowed keys, and malformed input all fail closed."""
 
     keys: list[str] = Field(min_length=1, max_length=MAX_HOTKEY_PARTS)
+    window: TargetWindow = None
 
     @field_validator("keys")
     @classmethod

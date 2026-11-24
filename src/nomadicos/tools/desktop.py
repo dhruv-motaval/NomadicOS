@@ -64,9 +64,41 @@ from nomadicos.kernel.errors import Failure
 from nomadicos.tools.base import Tool, ToolOutcome, error_text
 from nomadicos.tools.context import ExecutionContext
 
+#: raw input goes wherever Windows routes it (the foreground window, the
+#: window under the pointer), so each needs a fresh look at that window
+INPUT_OPS = frozenset({"mouse_click", "mouse_scroll", "type_text", "press_key", "hotkey"})
+
+#: (task_id, handle, pid, process start time) of an observed foreground window
+_Target = tuple[str, int, int, int]
+
+
+def _identity(task_id: str, window: dict[str, Any]) -> _Target:
+    return (
+        task_id,
+        int(window.get("handle", 0) or 0),
+        int(window.get("pid", 0) or 0),
+        int(window.get("started", 0) or 0),
+    )
+
+
+def _observed_handle(operation: str, evidence: dict[str, Any]) -> int:
+    """Handle of the window an observation showed the model (0 = none)."""
+    if operation in ("foreground_window", "focus_window"):
+        return int(evidence.get("handle", 0) or 0)
+    if operation in ("ui_tree", "ui_find", "ui_focus"):
+        return int((evidence.get("window") or {}).get("handle", 0) or 0)
+    return 0
+
 
 class DesktopTool(Tool):
-    """Desktop capability in front of a replaceable backend (SPEC §3 Lego)."""
+    """Desktop capability in front of a replaceable backend (SPEC §3 Lego).
+
+    Stale-target guard: raw input (click, scroll, keys, text) runs only while
+    the foreground window is the same window instance — handle, process id
+    and process start time — that this task last observed. A popup or
+    another app taking focus between steps fails the step instead of
+    receiving the input; the model observes again and re-plans.
+    """
 
     name = "desktop"
     ops: ClassVar[dict[str, type[BaseModel]]] = {
@@ -94,6 +126,7 @@ class DesktopTool(Tool):
     ) -> None:
         self.backend = backend if backend is not None else default_backend()
         self.uia = uia if uia is not None else default_uia()
+        self._target: _Target | None = None
 
     async def run(self, operation: str, args: dict[str, Any], ctx: ExecutionContext) -> ToolOutcome:
         model = self.ops.get(operation)
@@ -113,7 +146,11 @@ class DesktopTool(Tool):
             )
         started = time.monotonic()
         try:
-            outcome = self._dispatch(operation, typed, ctx)
+            outcome = self._stale_target(operation, typed, ctx) or self._dispatch(
+                operation, typed, ctx
+            )
+            if outcome.status == ExecutionStatus.SUCCEEDED:
+                self._remember_target(operation, outcome.evidence, ctx)
         except DesktopUnavailable as exc:
             return ToolOutcome(
                 status=ExecutionStatus.FAILED,
@@ -139,6 +176,54 @@ class DesktopTool(Tool):
                 duration_s=round(time.monotonic() - started, 3),
             )
         return outcome.model_copy(update={"duration_s": round(time.monotonic() - started, 3)})
+
+    # ------------------------------------------- stale-target guard ---
+
+    def _remember_target(
+        self, operation: str, evidence: dict[str, Any], ctx: ExecutionContext
+    ) -> None:
+        handle = _observed_handle(operation, evidence)
+        if not handle:
+            return
+        foreground = self.backend.foreground_window()
+        # a UI read of a background window is not a look at where input lands
+        if int(foreground.get("handle", 0) or 0) == handle:
+            self._target = _identity(ctx.task_id, foreground)
+
+    def _stale_target(
+        self, operation: str, typed: BaseModel, ctx: ExecutionContext
+    ) -> ToolOutcome | None:
+        # shortcut: checked just before input, so a focus change in the
+        # milliseconds between check and SendInput is not caught
+        if operation not in INPUT_OPS:
+            return None
+        foreground = self.backend.foreground_window()
+        current = _identity(ctx.task_id, foreground)
+        full_title = str(foreground.get("title", ""))
+        named = getattr(typed, "window", None)
+        if current[1] and named and named.casefold() in full_title.casefold():
+            # the proposal named the window that really is in front
+            self._target = current
+            return None
+        if current[1] and not named and current == self._target:
+            return None
+        title = full_title[:80]
+        if named:
+            reason = f'the foreground window is "{title}", not "{named[:80]}"'
+        elif self._target is not None and self._target[0] == ctx.task_id:
+            reason = f'foreground window changed since it was observed (now "{title}")'
+        else:
+            reason = "no observation of the foreground window yet in this task"
+        return ToolOutcome(
+            status=ExecutionStatus.FAILED,
+            failure=Failure.ACTION_FAILED,
+            message=(
+                f"desktop.{operation} refused: {reason}. Name the target in "
+                '"window", or observe first with desktop.foreground_window, '
+                "focus_window or ui_find, then retry."
+            ),
+            evidence={"stale_target": True, "foreground_title": title},
+        )
 
     # ------------------------------------------------------- dispatch ---
 
@@ -235,6 +320,19 @@ class DesktopTool(Tool):
                 message=str(exc),
                 evidence={"requested": [a.x, a.y], "screen": [width, height]},
             )
+        # menus and dialogs are separate top-level windows of the same
+        # process, so the point must belong to the observed process
+        owner = int(self.backend.window_at(a.x, a.y).get("pid", 0) or 0)
+        if not owner or self._target is None or owner != self._target[2]:
+            return ToolOutcome(
+                status=ExecutionStatus.FAILED,
+                failure=Failure.ACTION_FAILED,
+                message=(
+                    f"desktop.mouse_click refused: ({a.x}, {a.y}) is over a window of "
+                    "another application than the observed one"
+                ),
+                evidence={"requested": [a.x, a.y], "stale_target": True},
+            )
         self.backend.mouse_click(a.x, a.y, a.button, a.clicks)
         return ToolOutcome(
             status=ExecutionStatus.SUCCEEDED,
@@ -287,6 +385,8 @@ class DesktopTool(Tool):
         }
         if a.handle is not None:
             evidence["handle"] = int(result.get("handle", a.handle) or a.handle)
+        elif result.get("handle"):
+            evidence["handle"] = int(result["handle"])
         if focused:
             return ToolOutcome(status=ExecutionStatus.SUCCEEDED, evidence=evidence)
         reason = str(result.get("reason", "window not focused"))[:MAX_TITLE_CHARS]

@@ -71,7 +71,11 @@ async def test_action_goal_reaches_execution_pipeline(tmp_path: Path) -> None:
         scripts=[
             (
                 "Ctrl",
-                [desktop_json("hotkey", {"keys": ["ctrl", "l"]}), '{"finished": true}'],
+                [
+                    desktop_json("foreground_window", {}),  # stale-target guard
+                    desktop_json("hotkey", {"keys": ["ctrl", "l"]}),
+                    '{"finished": true}',
+                ],
             )
         ],
     )

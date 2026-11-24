@@ -104,6 +104,7 @@ async def test_case1_restart_duplicate_blocked_no_second_side_effect(tmp_path: P
     backend_a = FakeDesktopBackend(width=320, height=200)
     chain_a = granted(tmp_path, backend_a)
     ctx_a = chain_a.ctx(tmp_path, "task_dupe")
+    await chain_a.drive(desktop_json("foreground_window", {}), ctx_a)  # stale-target guard
     first = await chain_a.drive(desktop_json("mouse_click", {"x": 5, "y": 6}), ctx_a)
     assert first.status is ExecutionStatus.SUCCEEDED
     assert backend_a.clicks == [(5, 6, "left", 1)]
@@ -266,6 +267,7 @@ async def test_crash_window_side_effect_without_durable_record(tmp_path: Path) -
 async def test_desktop_and_filesystem_duplicate_protection(tmp_path: Path) -> None:
     chain = granted(tmp_path)
     ctx = chain.ctx(tmp_path, "task_dupe2")
+    await chain.drive(desktop_json("foreground_window", {}), ctx)  # stale-target guard
     r1 = await chain.drive(desktop_json("press_key", {"key": "ctrl+s"}), ctx)
     r2 = await chain.drive(desktop_json("press_key", {"key": "ctrl+s"}), ctx)
     assert r1.status is ExecutionStatus.SUCCEEDED and r2.evidence["duplicate_blocked"] is True

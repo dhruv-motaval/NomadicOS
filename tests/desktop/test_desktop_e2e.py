@@ -65,7 +65,8 @@ async def test_click_success_without_window_evidence_is_not_goal_success(
     requested UI state is never evidenced -> NO SUCCESS."""
     app = make_desktop_app(
         tmp_path,
-        scripts=[("Click", desktop_json("mouse_click", {"x": 10, "y": 20}))],
+        # names its target window: the stale-target guard checks it is in front
+        scripts=[("Click", desktop_json("mouse_click", {"x": 10, "y": 20, "window": "Notepad"}))],
     )
     backend = app.tools.get("desktop").backend
     summary = await app.run_goal(
