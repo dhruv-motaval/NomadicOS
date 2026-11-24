@@ -98,3 +98,14 @@ def test_run_rejects_malformed_predicates_before_starting(fake_app) -> None:
         result = runner.invoke(cli_typer_app, ["run", "goal", "--predicate", bad])
         assert result.exit_code == 2
         assert fake_app.calls == []
+
+
+def test_run_renders_non_ascii_observation_on_cp1252_stdout(fake_app, monkeypatch) -> None:
+    # Regression 2026-11-24: U+2011 in an observation crashed the summary
+    # with UnicodeEncodeError when stdout was redirected (cp1252).
+    monkeypatch.setattr(_FakeSummary, "last_observations", ["non\u2011breaking"])
+    result = CliRunner(charset="cp1252").invoke(cli_typer_app, ["run", "goal"])
+    assert result.exception is None, result.exception
+    assert result.exit_code == 0, result.output
+    assert "OBS:    non?breaking" in result.output
+    assert "STATUS: SUCCESS" in result.output

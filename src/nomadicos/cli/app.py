@@ -4,11 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from pathlib import Path
 
 import typer
 
 app = typer.Typer(no_args_is_help=True, help="NomadicOS — local-first AI OS.")
+
+
+@app.callback()
+def _safe_output() -> None:
+    # Redirected stdio on Windows is cp1252: fetched text (e.g. U+2011) must
+    # not crash the summary of a task that already finished.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
 
 
 def _config():
