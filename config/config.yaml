@@ -16,6 +16,14 @@ cloud:
     openrouter:
       kind: openrouter                  # base_url defaults to https://openrouter.ai/api/v1
       api_key_env: OPENROUTER_API_KEY
+    # local OmniRoute gateway (start it with `omniroute`; key from its dashboard -> Endpoints)
+    omniroute:
+      kind: openai_compatible
+      base_url: http://localhost:20128/v1
+      api_key_env: OMNIROUTE_API_KEY
+      assume_structured_output: true  # its /models does not list parameters; output is still validated
+      # owner assertion (2026-11-24): its free router lists no price; traces mark it declared_by=owner
+      free_models: ["auto/best-free"]
     # An owner-configured OpenAI-compatible provider (https, or http on loopback only):
     # acme:
     #   kind: openai_compatible
@@ -27,6 +35,9 @@ cloud:
   allowed_models:
     - "openrouter/openrouter/free"       # OpenRouter's documented free router (only admitted if the catalog lists it at zero price)
     - "openrouter/*:free"
+    # OmniRoute: under free_only only models its catalog declares at zero price
+    # (or the provider's owner-declared free_models) are admitted
+    - "omniroute/auto/best-free"
   # Optional labels for registry records (selection still goes through the router).
   roles:
     reasoning: ["openrouter/*:free"]

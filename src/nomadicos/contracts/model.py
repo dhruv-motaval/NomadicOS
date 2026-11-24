@@ -53,6 +53,9 @@ class Pricing(Contract):
     request: str | None = None
     image: str | None = None
     internal_reasoning: str | None = None
+    #: who declared these prices: the provider's catalog, or the OWNER (a
+    #: provider ``free_models`` entry for a model the catalog prices nowhere)
+    declared_by: Literal["catalog", "owner"] = "catalog"
 
 
 class CloudModelMeta(Contract):

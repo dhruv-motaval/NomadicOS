@@ -11,6 +11,7 @@ import asyncio
 import json
 import re
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -30,7 +31,7 @@ from nomadicos.contracts.model import (
 )
 from nomadicos.inference import ChatMessage, EngineHealth, GenerationRequest
 from nomadicos.inference.cloud import CloudEngine, OpenAICompatProvider, OpenRouterProvider, admit
-from nomadicos.inference.cloud.policy import free_for_request
+from nomadicos.inference.cloud.policy import declared_pricing, free_for_request
 from nomadicos.inference.cloud.schema import SchemaError, validate
 from nomadicos.inference.structured import EngineStructuredGenerator
 from nomadicos.kernel.config import AppConfig, CloudConfig, CloudProviderConfig
@@ -316,6 +317,50 @@ async def test_custom_provider_normalization_without_pricing_is_unknown_not_free
     with pytest.raises(FreeOnlyExcluded):
         await engine.generate(greq("acme/acme-large"))
     assert fake.chat_calls == []
+
+
+async def test_per_million_pricing_gateway_admits_only_declared_zero() -> None:
+    """OmniRoute-style catalogs declare USD per MILLION tokens as input/output."""
+    fake = FakeCloud(
+        [
+            {"id": "groq/free", "context_length": 8192, "pricing": {"input": 0, "output": 0}},
+            {"id": "kiro/paid", "context_length": 8192, "pricing": {"input": 3, "output": 15}},
+            {"id": "half", "context_length": 8192, "pricing": {"input": 0}},
+            {
+                "id": "think",
+                "context_length": 8192,
+                "pricing": {"input": 0, "output": 0, "reasoning": 2},
+            },
+        ]
+    )
+    engine, _ = await make_engine(fake, acme_cfg())
+    meta = engine.catalog
+    assert admit(meta["acme/groq/free"], acme_cfg(), now=NOW).ok
+    for paid in ("acme/kiro/paid", "acme/half", "acme/think"):
+        assert not admit(meta[paid], acme_cfg(), now=NOW).ok, paid
+    pricing = meta["acme/kiro/paid"].pricing
+    assert pricing is not None  # $3 / MTok -> per token
+    assert Decimal(pricing.prompt or "") == Decimal("0.000003")
+
+
+async def test_owner_declared_free_model_admitted_only_where_catalog_is_silent() -> None:
+    cfg = acme_cfg()
+    cfg.providers["acme"] = cfg.providers["acme"].model_copy(
+        update={"free_models": ["auto/best-free", "paid"]}
+    )
+    fake = FakeCloud(
+        [
+            {"id": "auto/best-free", "context_length": 8192},
+            {"id": "paid", "context_length": 8192, "pricing": {"input": 1, "output": 2}},
+            {"id": "other", "context_length": 8192},
+        ]
+    )
+    engine, _ = await make_engine(fake, cfg)
+    free = engine.catalog["acme/auto/best-free"]
+    assert admit(free, cfg, now=NOW).ok
+    assert declared_pricing(free)["declared_by"] == "owner"  # traces show who said free
+    assert not admit(engine.catalog["acme/paid"], cfg, now=NOW).ok  # a declared price wins
+    assert not admit(engine.catalog["acme/other"], cfg, now=NOW).ok
 
 
 async def test_custom_provider_used_when_free_only_off() -> None:

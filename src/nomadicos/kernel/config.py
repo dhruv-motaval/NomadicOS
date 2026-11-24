@@ -87,6 +87,11 @@ class CloudProviderConfig(_Contract):
     #: owner assertion that this endpoint honours ``response_format`` JSON
     #: schemas when its catalog does not say so. Output is still validated.
     assume_structured_output: bool = False
+    #: owner assertion: provider model ids (fnmatch patterns) that are free
+    #: although the catalog declares no price (e.g. a gateway's free router).
+    #: Applied ONLY when the catalog is silent; a declared price always wins.
+    #: Traces record these prices as ``declared_by: owner``.
+    free_models: list[str] = Field(default_factory=list)
 
     @field_validator("api_key_env")
     @classmethod

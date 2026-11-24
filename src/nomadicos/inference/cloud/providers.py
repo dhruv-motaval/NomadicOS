@@ -17,6 +17,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
+from fnmatch import fnmatchcase
 from typing import Any
 
 import httpx
@@ -85,6 +86,30 @@ def _price(value: Any) -> str | None:
         return str(Decimal(str(value)))
     except InvalidOperation:
         return None
+
+
+def _per_million(value: Any) -> str | None:
+    price = _price(value)
+    return None if price is None else str(Decimal(price) / 1_000_000)
+
+
+def _pricing(raw: dict[str, Any]) -> Pricing:
+    """OpenRouter declares USD per token (``prompt``/``completion``); gateways
+    such as OmniRoute declare USD per MILLION tokens (``input``/``output``/
+    ``reasoning``). Both normalize to per token; an undeclared field stays None."""
+
+    def pick(per_token: str, per_million: str) -> str | None:
+        if per_token in raw:
+            return _price(raw.get(per_token))
+        return _per_million(raw.get(per_million))
+
+    return Pricing(
+        prompt=pick("prompt", "input"),
+        completion=pick("completion", "output"),
+        request=_price(raw.get("request")),
+        image=_price(raw.get("image")),
+        internal_reasoning=pick("internal_reasoning", "reasoning"),
+    )
 
 
 def _int(value: Any) -> int | None:
@@ -193,17 +218,9 @@ class OpenAICompatProvider:
         if not isinstance(entry, dict) or not isinstance(entry.get("id"), str) or not entry["id"]:
             return None
         raw_price = entry.get("pricing")
-        pricing = (
-            Pricing(
-                prompt=_price(raw_price.get("prompt")),
-                completion=_price(raw_price.get("completion")),
-                request=_price(raw_price.get("request")),
-                image=_price(raw_price.get("image")),
-                internal_reasoning=_price(raw_price.get("internal_reasoning")),
-            )
-            if isinstance(raw_price, dict)
-            else None
-        )
+        pricing = _pricing(raw_price) if isinstance(raw_price, dict) else None
+        if pricing is None and any(fnmatchcase(entry["id"], p) for p in self.cfg.free_models):
+            pricing = Pricing(prompt="0", completion="0", declared_by="owner")
         raw_params = entry.get("supported_parameters")
         params = (
             [p for p in raw_params if isinstance(p, str)] if isinstance(raw_params, list) else []

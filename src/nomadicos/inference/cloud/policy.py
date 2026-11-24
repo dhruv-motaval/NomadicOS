@@ -80,7 +80,10 @@ def free_for_request(pricing: Pricing | None, *, images: bool = False) -> Admiss
 def declared_pricing(meta: CloudModelMeta) -> dict[str, str]:
     if meta.pricing is None:
         return {}
-    return {k: v for k, v in meta.pricing.model_dump().items() if v is not None}
+    declared = {k: v for k, v in meta.pricing.model_dump().items() if v is not None}
+    if declared.get("declared_by") == "catalog":  # the default; only an owner claim is noted
+        del declared["declared_by"]
+    return declared
 
 
 def admit(
