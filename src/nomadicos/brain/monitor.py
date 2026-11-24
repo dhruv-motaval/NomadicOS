@@ -5,7 +5,9 @@ Purpose: *is the proposed action valid for the current state?*
 
 1. ``StructuralMonitor`` — DETERMINISTIC and model-independent: schema,
    candidate identity, subgoal binding, capability existence (against
-   the state's declared capabilities), bounded arguments. It can reject
+   the state's declared capabilities), bounded arguments, and no web
+   read (OBSERVE/QUERY with a URL) for a local-app goal while the brain
+   has no open information need. It can reject
    malformed candidates with no model involved, ever.
 2. ``SemanticMonitor`` — model-backed consistency/relevance checks,
    reachable ONLY through the ``StructuredGenerator`` protocol. Its
@@ -21,6 +23,7 @@ flows exclusively through Action IR -> authority -> executor.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
@@ -34,6 +37,7 @@ from nomadicos.brain.cognition import (
     parse_model_json,
 )
 from nomadicos.brain.decomposer import _model_output_rejected
+from nomadicos.brain.information import identify_information_needs
 from nomadicos.brain.planner.task_graph import is_safe_node_id
 from nomadicos.brain.schemas import (
     MAX_ARGUMENTS_JSON_CHARS,
@@ -46,9 +50,32 @@ from nomadicos.brain.schemas import (
     Subgoal,
 )
 from nomadicos.brain.state import BrainState
-from nomadicos.contracts.core import Contract
+from nomadicos.contracts.core import Contract, GoalPredicate
 
 MAX_VERDICTS = 16
+
+#: goal predicates proven from local desktop/process evidence (SPEC §26, §29):
+#: no fetched web page can satisfy them
+_LOCAL_APP_PREDICATES = frozenset({"window_present", "ui_element_present", "process_started"})
+_URL = re.compile(r"https?://", re.IGNORECASE)
+
+
+def _predicate_types(pred: GoalPredicate) -> list[str]:
+    if pred.predicate is not None:
+        return [pred.predicate.type]
+    children = pred.group.children if pred.group is not None else []
+    return [t for child in children for t in _predicate_types(child)]
+
+
+def _web_reads_unneeded(state: BrainState) -> bool:
+    """True when a web read cannot serve the mission: the brain has identified
+    no information need (no UNKNOWN fact, no unsupported hypothesis) and every
+    goal predicate is checked against local application state. Goals without
+    predicates, or with content predicates, keep web reads (research goals)."""
+    if identify_information_needs(state):
+        return False
+    types = [t for p in state.goal.predicates for t in _predicate_types(p)]
+    return bool(types) and set(types) <= _LOCAL_APP_PREDICATES
 
 
 @runtime_checkable
@@ -83,6 +110,7 @@ class StructuralMonitor:
         results: list[MonitorResult] = []
         seen_ids: set[str] = set()
         declared = {cap.name for cap in state.capabilities}
+        web_reads_unneeded = _web_reads_unneeded(state)
         for candidate in proposal.candidates:
             result = self._evaluate_one(
                 candidate,
@@ -90,6 +118,7 @@ class StructuralMonitor:
                 iteration=iteration,
                 seen_ids=seen_ids,
                 declared_capabilities=declared,
+                web_reads_unneeded=web_reads_unneeded,
             )
             seen_ids.add(candidate.id)
             results.append(result)
@@ -103,6 +132,7 @@ class StructuralMonitor:
         iteration: int,
         seen_ids: set[str],
         declared_capabilities: set[str],
+        web_reads_unneeded: bool = False,
     ) -> MonitorResult:
         def reject(reason: str) -> MonitorResult:
             return MonitorResult(
@@ -146,6 +176,15 @@ class StructuralMonitor:
             return reject("STRUCTURAL SCHEMA: arguments are not JSON-serializable")
         if len(arguments_json) > MAX_ARGUMENTS_JSON_CHARS:
             return reject("STRUCTURAL SCHEMA: arguments exceed the size bound")
+        if (
+            web_reads_unneeded
+            and candidate.kind in (CandidateKind.OBSERVE, CandidateKind.QUERY)
+            and _URL.search(arguments_json)
+        ):
+            return reject(
+                "STRUCTURAL INFORMATION: web read with no open information need; "
+                "the goal is checked against local application state, so act on it locally"
+            )
         return MonitorResult(
             candidate_id=candidate.id,
             decision=MonitorDecision.ACCEPTED,
