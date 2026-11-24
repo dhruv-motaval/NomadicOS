@@ -62,3 +62,7 @@ orchestration:
   # NomadicBrain: set true to let the brain plan (planner) and propose actions (actor)
   brain_planner: true
   brain_actor: true
+  brain_adaptive: true        # memory, attention, beliefs, metacognition, effort
+  brain_deliberation: true    # predict + evaluate accepted candidates, then select
+  brain_search_depth: 1       # 0 = roots only; each level adds model calls
+  brain_role_routing: true    # monitor/predictor/evaluator use their routed model

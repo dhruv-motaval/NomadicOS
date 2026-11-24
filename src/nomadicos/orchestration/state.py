@@ -100,6 +100,15 @@ class TaskState(TypedDict, total=False):
     #   JSON so checkpoints round-trip without brain-class coupling;
     #   invalid payloads are reconstructed from authoritative data.
     brain_state: str | None
+    #: prediction deliberation chose the pending proposal by; OBSERVE
+    #: measures it against the real result, then clears it
+    brain_selected_prediction: str | None
+    #: open unknown facts the pending action says it reads; OBSERVE turns
+    #: them into observed facts when the action succeeds, then clears it
+    brain_info_keys: list[str]
+    #: bounded BrainEvent capture (JSON dicts, oldest first) so a finished
+    #: or restored mission can rebuild its brain trace (spec §38)
+    brain_events: list[dict[str, Any]]
 
     # — Phase 2 outcome classification: set by RECOVERY when the previous
     #   execution outcome cannot be proven from durable records; recovery

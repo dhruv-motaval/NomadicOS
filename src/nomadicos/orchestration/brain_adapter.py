@@ -31,20 +31,48 @@ Safety properties (fail closed):
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import Any
 
 from nomadicos.action_ir.parser import ParsedProposal, parse_model_output
 from nomadicos.brain.actor import ModelActor
+from nomadicos.brain.adaptive import AdaptiveController
+from nomadicos.brain.cognition import CognitiveRole, StructuredGenerator
+from nomadicos.brain.deliberation import (
+    AdaptiveSearchPolicy,
+    DeliberationCoordinator,
+    DeliberationOutcome,
+    ModelEvaluator,
+    ModelPredictor,
+)
+from nomadicos.brain.events import BrainEvent, BrainEventType
 from nomadicos.brain.loop import ActorMonitorLoop, LoopConfig, PlanningOutcome, PlanningStatus
+from nomadicos.brain.memory import MemoryController, MemoryRetriever
 from nomadicos.brain.monitor import ChainedMonitor, Monitor, SemanticMonitor, StructuralMonitor
 from nomadicos.brain.planner.task_graph import TaskGraph, TaskNode
-from nomadicos.brain.schemas import ActionCandidate, CandidateKind, Subgoal
+from nomadicos.brain.prediction_error import measure_prediction_error
+from nomadicos.brain.schemas import (
+    MAX_EVALUATIONS,
+    MAX_MONITOR_RESULTS,
+    MAX_PLAN_CANDIDATES,
+    MAX_PREDICTIONS,
+    ActionCandidate,
+    CandidateKind,
+    Subgoal,
+    WorldFact,
+    WorldFactKind,
+    WorldState,
+)
 from nomadicos.brain.state import BRAIN_STATE_SCHEMA_VERSION, BrainState
+from nomadicos.brain.uncertainty import apply_observation
 from nomadicos.contracts.action import CompletionClaim, ProposalKind
 from nomadicos.contracts.core import Goal, PlanStep
 from nomadicos.contracts.execution import Observation
 from nomadicos.inference.base import InferenceEngine
 from nomadicos.inference.structured import EngineStructuredGenerator
 from nomadicos.kernel.errors import InvalidProposal
+from nomadicos.orchestration.page_text import best_window
 from nomadicos.tools.base import ToolRegistry
 
 #: bounded feedback kept in the BrainState mirror (bounded memory, §14)
@@ -93,9 +121,44 @@ def brain_state_for(
     )
 
 
+#: newest event refs kept in a persisted mirror (the full capture lives in
+#: TaskState.brain_events; history is only the reducer's recent tail)
+MAX_PERSISTED_HISTORY = 256
+#: BrainEvents kept in TaskState.brain_events for trace reconstruction
+MAX_CAPTURED_EVENTS = 1500
+
+
+def compact_brain_state(brain: BrainState) -> BrainState:
+    """Keep only the newest entries of every growing list so a long mission
+    never persists a mirror that fails its own bounds on reload (a failed
+    load silently restarts cognition from scratch)."""
+    caps = {
+        "history": MAX_PERSISTED_HISTORY,
+        "action_candidates": MAX_PLAN_CANDIDATES,
+        "monitor_results": MAX_MONITOR_RESULTS,
+        "planning_decisions": MAX_PLAN_CANDIDATES,
+        "predictions": MAX_PREDICTIONS,
+        "evaluations": MAX_EVALUATIONS,
+    }
+    trimmed = {
+        name: getattr(brain, name)[-cap:]
+        for name, cap in caps.items()
+        if len(getattr(brain, name)) > cap
+    }
+    return brain.model_copy(update=trimmed) if trimmed else brain
+
+
 def dump_brain_state(brain: BrainState) -> str:
     """Canonical serialization for graph/checkpoint state (data only)."""
-    return brain.to_canonical_json()
+    return compact_brain_state(brain).to_canonical_json()
+
+
+def append_brain_events(
+    previous: list[dict[str, Any]] | None, events: list[BrainEvent]
+) -> list[dict[str, Any]]:
+    """Bounded JSON capture of brain events, oldest first."""
+    fresh = [e.model_dump(mode="json") for e in events]
+    return [*(previous or []), *fresh][-MAX_CAPTURED_EVENTS:]
 
 
 def load_brain_state(raw: str | None) -> BrainState | None:
@@ -127,6 +190,82 @@ def feed_observation(brain: BrainState, observation: Observation) -> BrainState:
     """
     kept = [*brain.observations, observation][-MAX_FED_OBSERVATIONS:]
     return brain.model_copy(update={"observations": kept, "state_version": brain.state_version + 1})
+
+
+#: characters of a fetch's output kept as the resolved fact's value
+MAX_ANSWER_CHARS = 1000
+
+
+def open_unknowns(brain: BrainState) -> list[str]:
+    """Keys of facts still UNKNOWN (the brain's open information needs)."""
+    return [k for k, f in brain.world.facts.items() if f.kind is WorldFactKind.UNKNOWN]
+
+
+def needs_answered_by(brain: BrainState, candidate: ActionCandidate) -> list[str]:
+    """Open unknowns this candidate says it reads (its key appears in what it
+    expects or why it runs, as the actor prompt asks)."""
+    text = f"{candidate.expected_effect} {candidate.rationale}"
+    return [key for key in open_unknowns(brain) if key in text]
+
+
+def _resolve_unknowns(brain: BrainState, keys: list[str], observation: Observation) -> BrainState:
+    """A successful read turns the unknowns it targeted into OBSERVED facts
+    (kind FACT, never VERIFIED) holding what it returned."""
+    if str(observation.data.get("status", "")).upper() != "SUCCEEDED":
+        return brain
+    data = observation.data
+    text = str(data.get("stdout_head") or data.get("content_head") or observation.summary)
+    facts = dict(brain.world.facts)
+    resolved = False
+    for key in keys:
+        fact = facts.get(key)
+        if fact is not None and fact.kind is WorldFactKind.UNKNOWN:
+            # an UNKNOWN fact's value is its question: keep the part that answers it
+            answer = best_window(text, str(fact.value), MAX_ANSWER_CHARS)
+            facts[key] = WorldFact(key=key, value=answer, kind=WorldFactKind.FACT)
+            resolved = True
+    if not resolved:
+        return brain
+    return brain.model_copy(
+        update={
+            "world": WorldState(version=brain.world.version + 1, facts=facts),
+            "state_version": brain.state_version + 1,
+        }
+    )
+
+
+def observe_into_brain(
+    brain: BrainState,
+    observation: Observation,
+    *,
+    selected_prediction: str | None = None,
+    update_beliefs: bool = False,
+    answers: list[str] | None = None,
+) -> tuple[BrainState, list[BrainEvent]]:
+    """Feed one REAL execution observation back into the brain (data only):
+    always the bounded observation list; with ``update_beliefs`` its data
+    also becomes observed world facts; and when the executed action was a
+    brain-selected candidate with a prediction, the prediction error is
+    measured (by its prediction id) and recorded as an event."""
+    brain = feed_observation(brain, observation)
+    if update_beliefs:
+        brain = apply_observation(brain, observation)
+    if answers:
+        brain = _resolve_unknowns(brain, answers, observation)
+    if not selected_prediction:
+        return brain, []
+    brain, error = measure_prediction_error(brain, selected_prediction, observation)
+    if error is None:
+        return brain, []
+    event = BrainEvent(
+        mission_id=brain.mission_id,
+        timestamp=datetime.now(UTC),
+        event_type=BrainEventType.BRAIN_PREDICTION_ERROR_MEASURED,
+        actor="prediction_error",
+        parent_event_id=brain.history[-1].event_id if brain.history else None,
+        payload=error.model_dump(mode="json"),
+    )
+    return brain.with_event(event), [event]
 
 
 def without_empty_optional_args(candidate: ActionCandidate, tools: ToolRegistry) -> ActionCandidate:
@@ -247,6 +386,120 @@ async def brain_propose_for_step(
     return await runner.run(brain, subgoal, ModelActor(generator), monitor)
 
 
+@dataclass
+class BrainStep:
+    """Everything one brain step produced (data only)."""
+
+    brain: BrainState
+    outcome: PlanningOutcome
+    #: the candidate to run: deliberation's selection, else the first accepted
+    candidate: ActionCandidate | None
+    #: prediction deliberation selected ``candidate`` by (None when the
+    #: first accepted candidate stands): what OBSERVE scores reality against
+    prediction_id: str | None = None
+    events: list[BrainEvent] = field(default_factory=list)
+    deliberation: DeliberationOutcome | None = None
+
+
+async def brain_step(
+    brain: BrainState,
+    subgoal: Subgoal,
+    *,
+    engine: InferenceEngine,
+    model_id: str,
+    adaptive: bool = False,
+    memory: MemoryRetriever | None = None,
+    deliberate: bool = False,
+    search_depth: int = 1,
+    role_generators: dict[CognitiveRole, StructuredGenerator] | None = None,
+) -> BrainStep:
+    """One full brain step for the current subgoal, every stage bounded:
+
+    adaptive pass (memory -> attention -> beliefs -> metacognition ->
+    information needs -> effort) -> Actor<->Monitor loop -> deliberation
+    (predict -> evaluate -> bounded search -> deterministic selection).
+
+    The actor always uses the step's routed ``model_id`` (escalation keeps
+    working); ``role_generators`` may serve monitor/predictor/evaluator.
+    Adaptive data and deliberation only CHOOSE among monitor-accepted
+    candidates; the result still goes through the untrusted parser,
+    validation, authority and the executor. Deliberation failure is
+    fail-safe: the first accepted candidate is kept and the failure stays
+    in the captured events.
+    """
+    events: list[BrainEvent] = []
+    generator = EngineStructuredGenerator(engine, model_id, temperature=0.0)
+    roles = role_generators or {}
+    brain = brain.model_copy(update={"active_subgoal": subgoal})
+    loop_config = LoopConfig()
+    memory_notes: list[str] = []
+    if adaptive:
+        controller = MemoryController(memory) if memory is not None else None
+        brain = AdaptiveController(memory=controller, events=events).run(brain)
+        if controller is not None:
+            try:
+                memory_notes = [
+                    text
+                    for hit in controller.retrieve_for_state(brain)
+                    if (text := getattr(hit.record, "content", "") or "").strip()
+                ]
+            except Exception:  # noqa: BLE001 - memory is fail-safe by contract
+                memory_notes = []
+        if brain.effort_plan is not None:
+            # effort can lower the per-step model budget, never raise it
+            loop_config = LoopConfig(
+                max_iterations=min(loop_config.max_iterations, brain.effort_plan.max_iterations)
+            )
+            search_depth = min(search_depth, brain.effort_plan.search_depth)
+    actor = ModelActor(generator, memory_notes=memory_notes)
+    monitor: Monitor = ChainedMonitor(
+        StructuralMonitor(), SemanticMonitor(roles.get(CognitiveRole.MONITOR, generator))
+    )
+    parent = brain.history[-1].event_id if brain.history else None
+    brain, outcome = await ActorMonitorLoop(loop_config, events=events).run(
+        brain, subgoal, actor, monitor, parent_event_id=parent
+    )
+    candidate = first_accepted_candidate(brain, outcome)
+    deliberation: DeliberationOutcome | None = None
+    prediction_id: str | None = None
+    if deliberate and candidate is not None:
+        coordinator = DeliberationCoordinator(
+            actor,
+            monitor,
+            ModelPredictor(roles.get(CognitiveRole.PREDICTOR, generator)),
+            ModelEvaluator(roles.get(CognitiveRole.EVALUATOR, generator)),
+            events=events,
+        )
+        try:
+            brain, deliberation = await coordinator.deliberate(
+                brain,
+                subgoal,
+                outcome,
+                parent_event_id=brain.history[-1].event_id if brain.history else None,
+                policy=AdaptiveSearchPolicy(max_depth=search_depth),
+            )
+        except Exception:  # noqa: BLE001 - deliberation advises; the accepted candidate stands
+            deliberation = None
+        if deliberation is not None and deliberation.decision is not None:
+            chosen = deliberation.decision.candidate_id
+            selected = next((c for c in reversed(brain.action_candidates) if c.id == chosen), None)
+            if selected is not None and chosen in outcome.accepted_candidate_ids:
+                candidate = selected
+                node_id = deliberation.decision.factors.get("node_id")
+                prediction_id = next(
+                    (n.prediction_id for n in deliberation.search.nodes if n.node_id == node_id),
+                    None,
+                )
+    return BrainStep(
+        brain=brain,
+        outcome=outcome,
+        candidate=candidate,
+        prediction_id=prediction_id,
+        events=events,
+        deliberation=deliberation,
+    )
+
+
 def first_accepted_candidate(brain: BrainState, outcome: PlanningOutcome) -> ActionCandidate | None:
     """The FIRST accepted candidate of the outcome (deterministic order).
 
@@ -263,7 +516,11 @@ def first_accepted_candidate(brain: BrainState, outcome: PlanningOutcome) -> Act
 
 
 __all__ = [
+    "BrainStep",
+    "append_brain_events",
     "brain_propose_for_step",
+    "brain_step",
+    "compact_brain_state",
     "brain_state_for",
     "candidate_to_parsed",
     "without_empty_optional_args",
@@ -271,5 +528,8 @@ __all__ = [
     "dump_brain_state",
     "feed_observation",
     "first_accepted_candidate",
+    "needs_answered_by",
+    "observe_into_brain",
+    "open_unknowns",
     "load_brain_state",
 ]

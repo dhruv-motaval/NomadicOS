@@ -29,6 +29,7 @@ from nomadicos.brain.schemas import (
     MAX_INFO_REQUESTS,
     MAX_MONITOR_RESULTS,
     MAX_PLAN_CANDIDATES,
+    MAX_PREDICTION_ERRORS,
     MAX_PREDICTIONS,
     MAX_PROVENANCE_REFS,
     ActionCandidate,
@@ -46,6 +47,7 @@ from nomadicos.brain.schemas import (
     MetacognitiveAssessment,
     MonitorResult,
     Prediction,
+    PredictionError,
     SearchResult,
     Subgoal,
     WorkingMemoryView,
@@ -106,6 +108,8 @@ class BrainState(Contract):
     metacognition: MetacognitiveAssessment | None = None
     effort_plan: EffortPlan | None = None
     information_requests: list[InformationRequest] = Field(default_factory=list)
+    #: measured prediction vs reality for selected actions (data only)
+    prediction_errors: list[PredictionError] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _coherent(self) -> BrainState:
@@ -141,6 +145,8 @@ class BrainState(Contract):
             raise ValueError(f"evaluations exceed {MAX_EVALUATIONS}")
         if len(self.information_requests) > MAX_INFO_REQUESTS:
             raise ValueError(f"information requests exceed {MAX_INFO_REQUESTS}")
+        if len(self.prediction_errors) > MAX_PREDICTION_ERRORS:
+            raise ValueError(f"prediction errors exceed {MAX_PREDICTION_ERRORS}")
         return self
 
     @classmethod

@@ -463,6 +463,20 @@ def task_status(task_id: str = typer.Argument(help="task id printed by a previou
         typer.echo(f"{key:>12}: {value}")
 
 
+@app.command("trace")
+def brain_trace(task_id: str = typer.Argument(help="task id printed by a previous run")) -> None:
+    """Print a task's reconstructed NomadicBrain trace as canonical JSON."""
+    from nomadicos.brain.errors import InvalidTrace
+    from nomadicos.orchestration.app import NomadicApp
+
+    try:
+        trace = NomadicApp(_config()).brain_trace(task_id)
+    except (ValueError, InvalidTrace) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(2) from exc
+    typer.echo(trace.to_canonical_json())
+
+
 @app.command("tasks")
 def tasks() -> None:
     """List durable tasks (Phase 13C discovery)."""

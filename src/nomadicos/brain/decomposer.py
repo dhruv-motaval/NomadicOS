@@ -41,12 +41,18 @@ from nomadicos.brain.schemas import (
     MAX_PROVENANCE_REFS,
     CandidateKind,
     Subgoal,
+    WorldFact,
+    WorldFactKind,
+    WorldState,
 )
 from nomadicos.brain.state import BrainState
 from nomadicos.contracts.core import Contract, GoalPredicate, parse_predicate
 from nomadicos.contracts.worker import WorkerRole
 
 MAX_SUBGOALS = 64
+#: facts a plan may declare unknown (each becomes an information need)
+MAX_UNKNOWNS = 8
+MAX_UNKNOWN_KEY = 64
 
 
 def _model_output_rejected(context: str, exc: Exception) -> ModelOutputRejected:
@@ -58,6 +64,25 @@ def _model_output_rejected(context: str, exc: Exception) -> ModelOutputRejected:
             parts.append(f"{loc or '<root>'}: {error.get('msg', 'invalid')}")
         return ModelOutputRejected(f"{context}: schema validation failed ({'; '.join(parts)})")
     return ModelOutputRejected(f"{context}: {exc}")
+
+
+class UnknownSpec(Contract):
+    """A fact the goal depends on that is not known yet (e.g. a price that
+    must be looked up). It becomes an UNKNOWN world fact, so the brain plans
+    an observation for it before acting on it."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    key: str
+    question: str
+
+    @model_validator(mode="after")
+    def _coherent(self) -> UnknownSpec:
+        if not is_safe_node_id(self.key) or len(self.key) > MAX_UNKNOWN_KEY:
+            raise ValueError(f"unsafe unknown key {self.key!r}")
+        if not self.question.strip() or len(self.question) > MAX_ITEM_CHARS:
+            raise ValueError(f"unknown {self.key!r}: question must be 1-{MAX_ITEM_CHARS} chars")
+        return self
 
 
 class SubgoalSpec(Contract):
@@ -162,6 +187,7 @@ class DecompositionPayload(Contract):
 
     subgoals: list[SubgoalSpec] = Field(default_factory=list)
     tasks: list[TaskSpec] = Field(min_length=1)
+    unknowns: list[UnknownSpec] = Field(default_factory=list, max_length=MAX_UNKNOWNS)
 
     @model_validator(mode="after")
     def _bounded(self) -> DecompositionPayload:
@@ -179,6 +205,8 @@ class Decomposition(Contract):
 
     task_graph: TaskGraph
     rationale: str = ""
+    #: UNKNOWN-kind facts the goal depends on (value = the open question)
+    unknowns: list[WorldFact] = Field(default_factory=list, max_length=MAX_UNKNOWNS)
 
     @model_validator(mode="after")
     def _bounded(self) -> Decomposition:
@@ -260,7 +288,11 @@ def parse_decomposition(text: str, *, goal_id: str, context: str = "decomposer")
         graph = TaskGraph.build(goal_id=goal_id, nodes=nodes, subgoals=subgoals)
     except (ValueError, ValidationError) as exc:
         raise _model_output_rejected(f"{context} for goal {goal_id!r}", exc) from None
-    return Decomposition(task_graph=graph)
+    unknowns = [
+        WorldFact(key=u.key, value=u.question, kind=WorldFactKind.UNKNOWN)
+        for u in {u.key: u for u in parsed.unknowns}.values()
+    ]
+    return Decomposition(task_graph=graph, unknowns=unknowns)
 
 
 def _parse_predicate(raw: dict[str, Any] | None, task_id: str) -> GoalPredicate | None:
@@ -346,5 +378,9 @@ def apply_decomposition(state: BrainState, decomposition: Decomposition) -> Brai
         )
     data = state.model_dump()
     data["task_graph"] = graph
+    if decomposition.unknowns:
+        facts = dict(state.world.facts)
+        facts.update({f.key: f for f in decomposition.unknowns if f.key not in facts})
+        data["world"] = WorldState(version=state.world.version + 1, facts=facts)
     data["state_version"] = state.state_version + 1
     return BrainState.model_validate(data)

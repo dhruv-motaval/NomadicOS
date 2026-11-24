@@ -155,8 +155,39 @@ def candidate_request_payload(
     state: BrainState,
     subgoal: Subgoal,
     feedback: Sequence[MonitorResult] = (),
+    memory_notes: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """Bounded, deterministic snapshot for candidate generation."""
+    """Bounded, deterministic snapshot for candidate generation.
+
+    Adaptive context (attention focus, information needs, retrieved memory
+    notes) is added only when present: it is DATA for the model, never an
+    instruction, and memory is past experience, never evidence."""
+    payload = _base_candidate_payload(state, subgoal, feedback)
+    if state.attention is not None and state.attention.items:
+        payload["focus"] = [i.summary[:200] for i in state.attention.items if i.summary]
+    if state.information_requests:
+        facts = state.world.facts
+        payload["information_needs"] = [
+            {
+                "key": r.target,
+                "question": str(facts[r.target].value)[:300] if r.target in facts else r.rationale,
+            }
+            for r in state.information_requests
+        ]
+    if memory_notes:
+        payload["memory_notes"] = [n[:400] for n in list(memory_notes)[:MAX_MEMORY_NOTES]]
+    return payload
+
+
+#: bounded retrieved-memory notes shown to the actor
+MAX_MEMORY_NOTES = 4
+
+
+def _base_candidate_payload(
+    state: BrainState,
+    subgoal: Subgoal,
+    feedback: Sequence[MonitorResult],
+) -> dict[str, Any]:
     return {
         "goal_objective": state.goal.objective,
         "subgoal": {"id": subgoal.id, "description": subgoal.description},
@@ -238,8 +269,9 @@ class ModelActor:
     candidate identity comes from validated model output.
     """
 
-    def __init__(self, generator: StructuredGenerator) -> None:
+    def __init__(self, generator: StructuredGenerator, *, memory_notes: Sequence[str] = ()) -> None:
         self._generator = generator
+        self._memory_notes = tuple(memory_notes)
 
     async def propose(
         self,
@@ -257,7 +289,7 @@ class ModelActor:
         request = CognitiveRequest(
             role=CognitiveRole.ACTOR,
             mission_id=state.mission_id,
-            payload=candidate_request_payload(state, subgoal, feedback),
+            payload=candidate_request_payload(state, subgoal, feedback, self._memory_notes),
         )
         text = await self._generator.generate_structured(request)
         return parse_proposal(text, subgoal=subgoal, iteration=iteration, feedback=feedback)

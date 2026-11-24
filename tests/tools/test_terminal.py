@@ -27,6 +27,7 @@ from nomadicos.tools.paths import PathDenied
 from nomadicos.tools.terminal import (
     MAX_STREAM_CHARS,
     CommandProblem,
+    ExecuteArgs,
     ProcessSupervisor,
     TerminalTool,
     resolve_command,
@@ -398,3 +399,12 @@ def test_supervisor_ledger_is_per_application() -> None:
     assert supervisor.kill_owned("task_missing") == []
     assert supervisor.kill_all() == []
     assert stranger == 1
+
+
+def test_string_args_split_like_the_command_line() -> None:
+    """A model sending args as one string gets one argv item per token."""
+    assert ExecuteArgs(command="curl", args='-sL "https://x.test/a b"').args == [
+        "-sL",
+        "https://x.test/a b",
+    ]
+    assert ExecuteArgs(command="curl", args="").args == []

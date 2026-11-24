@@ -384,6 +384,17 @@ class OrchestrationConfig(_Contract):
     brain_actor: bool = False
     #: NomadicBrain decomposes the goal into the mission plan
     brain_planner: bool = False
+    #: before each brain proposal: memory retrieval, attention, beliefs,
+    #: metacognition, information needs and effort (no extra model calls)
+    brain_adaptive: bool = False
+    #: predict + evaluate the accepted candidates and select by search
+    #: (extra model calls per step, bounded by brain_search_depth)
+    brain_deliberation: bool = False
+    #: deliberation child-expansion depth for real tasks (0 = roots only)
+    brain_search_depth: int = Field(default=1, ge=0, le=2)
+    #: monitor/predictor/evaluator use the model routed for their role
+    #: (the actor keeps the step's routed model, so escalation still applies)
+    brain_role_routing: bool = False
     #: goals ``run_many`` executes at once. Only DESKTOP work is serialized
     #: (exclusive lease); coding/research/etc. missions run independently.
     max_concurrent_missions: int = Field(default=3, ge=1, le=16)

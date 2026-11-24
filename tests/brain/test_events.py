@@ -64,6 +64,8 @@ def test_event_type_vocabulary_is_closed() -> None:
         "BRAIN_METACOGNITION_PRODUCED",
         "BRAIN_INFO_GATHERING_REQUESTED",
         "BRAIN_EFFORT_DECIDED",
+        # prediction vs reality on real missions
+        "BRAIN_PREDICTION_ERROR_MEASURED",
     }
 
 

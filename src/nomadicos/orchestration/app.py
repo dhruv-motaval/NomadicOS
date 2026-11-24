@@ -21,6 +21,8 @@ from nomadicos.action_ir.validation import ProposalValidator
 from nomadicos.authority.authorization import AuthorizationService
 from nomadicos.authority.policy import CapabilityPolicy
 from nomadicos.authority.store import AuthorityStore
+from nomadicos.brain.events import BrainEvent
+from nomadicos.brain.trace import BrainTrace, reconstruct_trace
 from nomadicos.contracts.benchmark import BenchmarkRecord, BenchmarkTask
 from nomadicos.contracts.core import Goal, TaskStatus
 from nomadicos.contracts.execution import ExecutionStatus
@@ -727,6 +729,15 @@ class NomadicApp:
         self._record_durable_task(summary, final)
         self._persist(summary)
         return summary
+
+    def brain_trace(self, task_id: str, *, thread_prefix: str = "nomadic") -> BrainTrace:
+        """Rebuild a task's brain trace from the events its run captured
+        (durable checkpoint state, so it works after a restart too)."""
+        config = {"configurable": {"thread_id": f"{thread_prefix}:{task_id}"}}
+        raw = self.graph.get_state(config).values.get("brain_events") or []
+        if not raw:
+            raise ValueError(f"task {task_id!r} has no captured brain events")
+        return reconstruct_trace([BrainEvent.model_validate(e) for e in raw])
 
     def status(self, task_id: str) -> dict[str, Any] | None:
         path = self._run_dir / f"{task_id}.json"

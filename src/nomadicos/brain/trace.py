@@ -35,6 +35,17 @@ _FAILURE_TYPES = frozenset(
 )
 
 
+_ADAPTIVE_TYPES = frozenset(
+    {
+        BrainEventType.BRAIN_ATTENTION_FOCUSED,
+        BrainEventType.BRAIN_BELIEFS_ASSESSED,
+        BrainEventType.BRAIN_METACOGNITION_PRODUCED,
+        BrainEventType.BRAIN_INFO_GATHERING_REQUESTED,
+        BrainEventType.BRAIN_EFFORT_DECIDED,
+    }
+)
+
+
 class TraceCycle(Contract):
     """One cognitive cycle (spec §38): propose -> monitor -> deliberate."""
 
@@ -47,6 +58,11 @@ class TraceCycle(Contract):
     predictions: list[dict[str, Any]] = Field(default_factory=list)
     evaluations: list[dict[str, Any]] = Field(default_factory=list)
     selected_action: dict[str, Any] | None = None
+    #: adaptive pass before proposing (attention/beliefs/metacognition/
+    #: information/effort), keyed by event type
+    adaptive: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    #: measured prediction vs reality for the executed selection
+    prediction_errors: list[dict[str, Any]] = Field(default_factory=list)
     event_ids: list[str] = Field(default_factory=list)
 
 
@@ -172,12 +188,18 @@ def _group(
     preamble: list[str] = []
     cycles: list[TraceCycle] = []
     failures: list[dict[str, Any]] = []
+    adaptive_open = False  # current cycle was opened by an adaptive pass
     for event in ordered:
         kind, payload = event.event_type, event.payload
-        starts_cycle = kind is BrainEventType.BRAIN_CANDIDATES_GENERATED or (
-            kind is BrainEventType.BRAIN_SEARCH_STARTED and not cycles
-        )
+        if kind is BrainEventType.BRAIN_ATTENTION_FOCUSED:
+            starts_cycle = True
+        elif kind is BrainEventType.BRAIN_CANDIDATES_GENERATED:
+            # the adaptive pass and the proposals that follow are one cycle
+            starts_cycle = not (adaptive_open and cycles and not cycles[-1].candidate_ids)
+        else:
+            starts_cycle = kind is BrainEventType.BRAIN_SEARCH_STARTED and not cycles
         if starts_cycle:
+            adaptive_open = kind is BrainEventType.BRAIN_ATTENTION_FOCUSED
             cycles.append(
                 TraceCycle(cycle=len(cycles) + 1, subgoal_id=str(payload.get("subgoal_id", "")))
             )
@@ -202,4 +224,8 @@ def _group(
             current.evaluations.append(dict(payload))
         elif kind is BrainEventType.BRAIN_ACTION_SELECTED:
             current.selected_action = dict(payload)
+        elif kind in _ADAPTIVE_TYPES:
+            current.adaptive[kind.value] = dict(payload)
+        elif kind is BrainEventType.BRAIN_PREDICTION_ERROR_MEASURED:
+            current.prediction_errors.append(dict(payload))
     return preamble, cycles, failures

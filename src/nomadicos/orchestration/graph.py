@@ -40,8 +40,10 @@ from nomadicos.action_ir.parser import PROPOSAL_RESPONSE_SCHEMA, parse_model_out
 from nomadicos.action_ir.validation import ValidationContext
 from nomadicos.agents.critic import CriticRequest, critic_feedback_lines, implementation_revision
 from nomadicos.authority.conflicts import OwnerConflictRequest
+from nomadicos.brain.cognition import CognitiveRole, StructuredGenerator
 from nomadicos.brain.decomposer import apply_decomposition
 from nomadicos.brain.loop import PlanningStatus
+from nomadicos.brain.models import parse_role_selection, role_profile
 from nomadicos.brain.planner.task_graph import TaskNodeStatus
 from nomadicos.brain.schemas import ActionCandidate, CandidateKind, Capability
 from nomadicos.brain.state import BrainState
@@ -78,13 +80,16 @@ from nomadicos.kernel.events import EventType
 from nomadicos.orchestration.adaptive_decision import AdaptiveDecisionOrchestrator
 from nomadicos.orchestration.boundaries import NoGoalVerifier, NoStepVerifier
 from nomadicos.orchestration.brain_adapter import (
-    brain_propose_for_step,
+    append_brain_events,
     brain_state_for,
+    brain_step,
     candidate_to_parsed,
     dump_brain_state,
     feed_observation,
-    first_accepted_candidate,
     load_brain_state,
+    needs_answered_by,
+    observe_into_brain,
+    open_unknowns,
     without_empty_optional_args,
 )
 from nomadicos.orchestration.brain_planner import (
@@ -94,6 +99,7 @@ from nomadicos.orchestration.brain_planner import (
     task_eligible,
 )
 from nomadicos.orchestration.outcomes import OutcomeClass, classify_last_outcome
+from nomadicos.orchestration.page_text import is_html, readable_text
 from nomadicos.orchestration.runtime import TaskRuntime
 from nomadicos.orchestration.state import TaskState
 from nomadicos.orchestration.worker import WorkerAssignment, WorkerResult, bounded_objective
@@ -101,6 +107,7 @@ from nomadicos.orchestration.worker_runner import run_worker_bounded
 from nomadicos.orchestration.workers import repo_context_for, worker_for_role
 from nomadicos.persistence.errors import PersistenceError
 from nomadicos.router.analyzer import analyze_goal
+from nomadicos.router.cognitive import CognitiveRoleRouter
 from nomadicos.tools.context import ExecutionContext
 
 _OBS_TEXT_CHARS = 500
@@ -108,6 +115,10 @@ _OBS_TEXT_CHARS = 500
 #: model's view of the screen, so it gets room for its control list
 _OBS_SUMMARY_CHARS = 300
 _UI_OBS_SUMMARY_CHARS = 2000
+#: a fetched web page's visible text is the data the mission asked for, so
+#: it keeps more (an unknown fact then takes its best-matching window)
+_PAGE_TEXT_CHARS = 8000
+_PAGE_SUMMARY_CHARS = 2000
 
 
 def _summary_budget(tool: str, operation: str) -> int:
@@ -124,6 +135,38 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
     """
     cfg = runtime.config
     log = runtime.logger
+
+    def _brain_memory_retriever() -> Any:
+        """The memory brick's synchronous lexical retriever (the brain's
+        MemoryRetriever seam is sync; the hybrid retriever wraps one)."""
+        retriever = getattr(runtime.memory, "retriever", None)
+        return getattr(retriever, "_lexical", retriever)
+
+    def _brain_role_generators() -> dict[CognitiveRole, StructuredGenerator]:
+        """Measured-capability models for the brain's judging roles. A role
+        with no qualified model keeps the step's model (fail safe)."""
+        router = CognitiveRoleRouter(runtime.selector, runtime.registry)
+        chosen: dict[CognitiveRole, StructuredGenerator] = {}
+        for role in (CognitiveRole.MONITOR, CognitiveRole.PREDICTOR, CognitiveRole.EVALUATOR):
+            profile = role_profile(role, latency_mode=cfg.routing.mode)
+            try:
+                selection = parse_role_selection(router.select_for_role(profile), profile=profile)
+                if selection.available and selection.model_id:
+                    engine = runtime.engine_for(selection.model_id)
+                    chosen[role] = EngineStructuredGenerator(
+                        engine, selection.model_id, temperature=0.0
+                    )
+            except Exception:  # noqa: BLE001 - routing advises; the step model stands
+                continue
+        return chosen
+
+    def _effective_role(brain: BrainState, node: Any) -> WorkerRole:
+        """The role a task really runs as. The research worker has no tools,
+        so while the plan still has UNKNOWN facts research is done by the
+        actor through real reads (validated, authorized, executed)."""
+        if node.worker_role is WorkerRole.RESEARCH and open_unknowns(brain):
+            return WorkerRole.EXECUTE
+        return node.worker_role
 
     def current_step_id(state: TaskState) -> str | None:
         if state.get("brain_planner_enabled"):
@@ -456,7 +499,7 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
             if cfg.budget.max_concurrent_workers <= 1:
                 return {"current_task_id": current}
             try:
-                current_role = brain.task_graph.node(current).worker_role
+                current_role = _effective_role(brain, brain.task_graph.node(current))
             except Exception:  # noqa: BLE001 - unknown task node
                 current_role = None
             if current_role not in (WorkerRole.RESEARCH, WorkerRole.TESTING):
@@ -479,7 +522,7 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
             readonly: list[str] = []
             for nid in eligible:
                 try:
-                    role = brain.task_graph.node(nid).worker_role
+                    role = _effective_role(brain, brain.task_graph.node(nid))
                 except Exception:  # noqa: BLE001 - unknown task node
                     continue
                 if role in (WorkerRole.RESEARCH, WorkerRole.TESTING):
@@ -997,12 +1040,28 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
             # plan - leaves the actor nothing to act on)
             # initialize or re-construct: the plan + prior observations are
             # authoritative runtime data; the brain mirror is cognition only
+            previous = brain if brain is not None and brain.mission_id == task_id else None
             brain = brain_state_for(
                 goal,
                 steps,
                 task_id=task_id,
                 observations=list(state.get("observations") or []),
             )
+            if previous is not None:
+                # a rebuilt graph must not forget what the mission learned:
+                # world facts (incl. open unknowns), predictions and their errors
+                brain = brain.model_copy(
+                    update={
+                        name: getattr(previous, name)
+                        for name in (
+                            "world",
+                            "history",
+                            "predictions",
+                            "evaluations",
+                            "prediction_errors",
+                        )
+                    }
+                )
         if not brain.capabilities:  # the actor can only name tools it is told exist
             brain = brain.model_copy(
                 update={
@@ -1031,13 +1090,21 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
                 "attempt": state.get("attempt", 1) + 1,
             }
         subgoal = subgoals[idx]
+        orch = cfg.orchestration
         try:
-            new_brain, outcome = await brain_propose_for_step(
+            result = await brain_step(
                 brain,
                 subgoal,
                 engine=runtime.engine_for(model_id),
                 model_id=model_id,
+                adaptive=orch.brain_adaptive,
+                memory=_brain_memory_retriever() if orch.brain_adaptive else None,
+                deliberate=orch.brain_deliberation,
+                search_depth=orch.brain_search_depth,
+                role_generators=_brain_role_generators() if orch.brain_role_routing else None,
             )
+            new_brain, outcome = result.brain, result.outcome
+            captured = append_brain_events(state.get("brain_events"), result.events)
         except Exception as exc:  # noqa: BLE001 - graph boundary: any model/monitor failure -> typed failure
             reason = getattr(exc, "message", str(exc))
             f = make_failure(state, Failure.MODEL_ERROR, f"brain actor failed: {reason}")
@@ -1066,9 +1133,10 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
                 "failures": [f],
                 "last_failure": f.model_dump(mode="json"),
                 "brain_state": dump_brain_state(new_brain),
+                "brain_events": captured,
                 "attempt": state.get("attempt", 1) + 1,
             }
-        candidate = first_accepted_candidate(new_brain, outcome)
+        candidate = result.candidate
         if candidate is not None:
             candidate = without_empty_optional_args(candidate, runtime.tools)
         if candidate is None:
@@ -1077,6 +1145,7 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
                 "failures": [f],
                 "last_failure": f.model_dump(mode="json"),
                 "brain_state": dump_brain_state(new_brain),
+                "brain_events": captured,
                 "attempt": state.get("attempt", 1) + 1,
             }
         try:
@@ -1101,6 +1170,7 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
                 "failures": [f],
                 "last_failure": f.model_dump(mode="json"),
                 "brain_state": dump_brain_state(new_brain),
+                "brain_events": captured,
                 "attempt": state.get("attempt", 1) + 1,
             }
         log.log(
@@ -1123,11 +1193,15 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
                 "attempt": 1,
                 "last_failure": None,
                 "brain_state": dump_brain_state(new_brain),
+                "brain_events": captured,
             }
         assert isinstance(parsed.value, ActionProposal)
         return {
             "proposals": [parsed.value],
             "brain_state": dump_brain_state(new_brain),
+            "brain_events": captured,
+            "brain_selected_prediction": result.prediction_id,
+            "brain_info_keys": needs_answered_by(new_brain, candidate),
             "last_failure": None,
         }
 
@@ -1265,7 +1339,7 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
                     node = None
                 if (
                     node is not None
-                    and node.worker_role is not WorkerRole.EXECUTE
+                    and _effective_role(brain, node) is not WorkerRole.EXECUTE
                     and not uncertain
                 ):
                     return await _run_worker_task(state, step, node.worker_role)
@@ -1524,31 +1598,61 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
             "terminal": ObservationKind.TERMINAL,
             "filesystem": ObservationKind.FILESYSTEM,
         }.get(execution.tool, ObservationKind.STEP_RESULT)
+        # what a read returned is data the next proposal needs (untrusted,
+        # bounded like stdout), not just "filesystem.read -> SUCCEEDED"
+        raw_content = str(execution.evidence.get("content") or "")
+        # a fetched page is its visible text, not the <head> markup a
+        # 500-char cut of raw HTML would leave
+        page = is_html(execution.stdout) or is_html(raw_content)
+        stdout = readable_text(execution.stdout)
+        content = readable_text(raw_content)
+        text_budget = _PAGE_TEXT_CHARS if page else _OBS_TEXT_CHARS
         summary = (
             execution.message
             or execution.stderr.strip()
-            or execution.stdout.strip()
+            or stdout.strip()
+            or content.strip()
             or f"{execution.tool}.{execution.operation} -> {execution.status.value}"
+        )
+        data: dict[str, Any] = {
+            "status": execution.status.value,
+            "exit_code": execution.exit_code,
+            "path": execution.evidence.get("path") or execution.evidence.get("directory"),
+            "stdout_head": stdout[:text_budget],
+            "stderr_head": execution.stderr[:_OBS_TEXT_CHARS],
+        }
+        if content:
+            data["content_head"] = content[:text_budget]
+        summary_budget = (
+            _PAGE_SUMMARY_CHARS if page else _summary_budget(execution.tool, execution.operation)
         )
         obs = Observation(
             task_id=state["task_id"],
             kind=kind,
-            summary=summary[: _summary_budget(execution.tool, execution.operation)],
-            data={
-                "status": execution.status.value,
-                "exit_code": execution.exit_code,
-                "path": execution.evidence.get("path") or execution.evidence.get("directory"),
-                "stdout_head": execution.stdout[:_OBS_TEXT_CHARS],
-                "stderr_head": execution.stderr[:_OBS_TEXT_CHARS],
-            },
+            summary=summary[:summary_budget],
+            data=data,
         )
-        update: dict[str, Any] = {"observations": [obs]}
+        update: dict[str, Any] = {
+            "observations": [obs],
+            "brain_selected_prediction": None,
+            "brain_info_keys": [],
+        }
         brain = load_brain_state(state.get("brain_state"))
         if brain is not None:
             # Phase 1 feedback seam (SPEC §8): the execution result flows
             # back into the Brain as DATA (bounded), never as authority
-            # and never as a success decision.
-            update["brain_state"] = dump_brain_state(feed_observation(brain, obs))
+            # and never as a success decision. The brain-selected action's
+            # prediction is scored against what really happened.
+            brain, events = observe_into_brain(
+                brain,
+                obs,
+                selected_prediction=state.get("brain_selected_prediction"),
+                update_beliefs=cfg.orchestration.brain_adaptive,
+                answers=state.get("brain_info_keys"),
+            )
+            update["brain_state"] = dump_brain_state(brain)
+            if events:
+                update["brain_events"] = append_brain_events(state.get("brain_events"), events)
         return update
 
     async def verify_step(state: TaskState) -> dict[str, Any]:
@@ -2144,7 +2248,7 @@ def build_graph(runtime: TaskRuntime, checkpointer: Any = None) -> Any:
             node = brain.task_graph.node(task_id)
         except Exception:  # noqa: BLE001 - unknown task node
             return "verify_goal"
-        if node.worker_role is not WorkerRole.EXECUTE:
+        if _effective_role(brain, node) is not WorkerRole.EXECUTE:
             return "worker_delegate"
         return "select_model"
 

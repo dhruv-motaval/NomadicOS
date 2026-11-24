@@ -164,8 +164,10 @@ class ExecuteArgs(BaseModel):
     @field_validator("args", mode="before")
     @classmethod
     def _coerce_args(cls, value: object) -> object:
+        # models often send "-sL https://x" as one string: split it by the
+        # same platform rules as `command`, never into one bogus argument
         if isinstance(value, str):
-            return [value]
+            return _tokenize(value)
         return value
 
     @field_validator("args")

@@ -49,6 +49,7 @@ MAX_MONITOR_RESULTS = 256
 MAX_PREDICTED_FACTS = 16
 MAX_PREDICTIONS = 64
 MAX_EVALUATIONS = 64
+MAX_PREDICTION_ERRORS = 32
 SEARCH_BRANCHING = 2  #: maximum child branches expanded from any search node (B)
 SEARCH_MAX_DEPTH = 2  #: maximum search depth (L)
 #: root + B children + B**L grandchildren for the Sprint 3 fixed limits
@@ -460,6 +461,28 @@ class Prediction(Contract):
                 if len(item) > MAX_ITEM_CHARS:
                     raise ValueError(f"prediction {label} item exceeds {MAX_ITEM_CHARS} chars")
         return self
+
+
+class PredictionError(Contract):
+    """How far one selected action's prediction was from what really
+    happened (spec §29 PREDICTION ERROR, §30). Measured from a REAL
+    execution observation; DATA only — it never verifies, never decides
+    success, and never authorizes anything."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    candidate_id: str
+    prediction_id: str
+    observation_id: str
+    #: the prediction's own confidence that its predicted world comes true
+    confidence: float = Field(ge=0.0, le=1.0)
+    #: 1.0 when the executed action succeeded, else 0.0
+    outcome: float = Field(ge=0.0, le=1.0)
+    #: |confidence - outcome| (absolute calibration error)
+    calibration_error: float = Field(ge=0.0, le=1.0)
+    #: predicted fact keys the observation reported, split by agreement
+    matched: list[str] = Field(default_factory=list)
+    mismatched: list[str] = Field(default_factory=list)
 
 
 class Evaluation(Contract):
