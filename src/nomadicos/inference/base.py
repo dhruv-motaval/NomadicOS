@@ -102,6 +102,15 @@ class GenerationResponse(Contract):
     trace: InferenceTrace | None = None
 
 
+def ttft_from_decode(latency_s: float, decode_s: float | None, tokens: int | None) -> float | None:
+    """Time to first token for a NON-streaming call: wall-clock latency minus
+    the server-reported decode time spent after the first token. None when the
+    server reports no decode timing — never the total latency (SPEC §12)."""
+    if decode_s is None or not tokens or tokens < 1:
+        return None
+    return max(latency_s - decode_s * (tokens - 1) / tokens, 0.0)
+
+
 class EngineHealth(Contract):
     status: ModelHealth
     detail: str = ""

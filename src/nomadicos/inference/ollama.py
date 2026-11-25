@@ -20,6 +20,7 @@ from nomadicos.inference.base import (
     GenerationRequest,
     GenerationResponse,
     InferenceEngine,
+    ttft_from_decode,
 )
 from nomadicos.kernel.errors import EngineUnavailable, ModelError
 
@@ -63,6 +64,7 @@ class OllamaEngine(InferenceEngine):
         message = body.get("message") or {}
         latency = time.monotonic() - started
         out_tokens = body.get("eval_count")
+        eval_ns = body.get("eval_duration")
         return GenerationResponse(
             engine_id=self.engine_id,
             model_id=request.model_id,
@@ -70,7 +72,9 @@ class OllamaEngine(InferenceEngine):
             input_tokens=body.get("prompt_eval_count"),
             output_tokens=out_tokens,
             latency_s=latency,
-            time_to_first_token_s=latency,
+            time_to_first_token_s=ttft_from_decode(
+                latency, eval_ns / 1e9 if eval_ns is not None else None, out_tokens
+            ),
             tokens_per_second=self._tps(body),
         )
 
