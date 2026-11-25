@@ -28,6 +28,7 @@ from nomadicos.inference.base import (
     GenerationRequest,
     GenerationResponse,
     InferenceEngine,
+    ttft_from_decode,
 )
 from nomadicos.kernel.errors import EngineUnavailable, ModelError
 
@@ -154,6 +155,8 @@ class LlamaCppEngine(InferenceEngine):
         body = resp.json()
         latency = max(time.monotonic() - started, 1e-6)
         usage = body.get("usage") or {}
+        timings = body.get("timings") or {}
+        predicted_ms = timings.get("predicted_ms")
         text = self._first_text(body)
         return GenerationResponse(
             engine_id=self.engine_id,
@@ -162,7 +165,11 @@ class LlamaCppEngine(InferenceEngine):
             input_tokens=usage.get("prompt_tokens"),
             output_tokens=usage.get("completion_tokens"),
             latency_s=latency,
-            time_to_first_token_s=latency,
+            time_to_first_token_s=ttft_from_decode(
+                latency,
+                predicted_ms / 1000.0 if predicted_ms is not None else None,
+                timings.get("predicted_n"),
+            ),
             tokens_per_second=self._tps(usage, latency),
         )
 

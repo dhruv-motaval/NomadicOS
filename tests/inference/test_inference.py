@@ -18,6 +18,7 @@ from nomadicos.inference import (
     MockEngine,
     OllamaEngine,
 )
+from nomadicos.inference.base import ttft_from_decode
 from nomadicos.kernel.errors import EngineUnavailable, ModelError
 
 
@@ -186,6 +187,38 @@ async def test_llamacpp_generate_and_tps() -> None:
     assert out.text == "hello back"
     assert out.engine_id == "llamacpp"
     assert out.tokens_per_second is not None
+    # no server timings: TTFT is unknown, never reported as total latency
+    assert out.time_to_first_token_s is None
+
+
+def test_ttft_from_decode_subtracts_post_first_token_decode() -> None:
+    assert ttft_from_decode(2.0, 1.0, 5) == pytest.approx(1.2)
+    assert ttft_from_decode(0.5, 0.4, 1) == pytest.approx(0.5)
+    assert ttft_from_decode(0.1, 5.0, 10) == 0.0  # clock skew clamps, never negative
+    assert ttft_from_decode(2.0, None, 5) is None
+    assert ttft_from_decode(2.0, 1.0, 0) is None
+
+
+async def test_generate_ttft_uses_server_decode_timings() -> None:
+    def llama(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"role": "assistant", "content": "x"}}],
+                "timings": {"predicted_ms": 0.0, "predicted_n": 1},
+            },
+        )
+
+    def ollama(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"message": {"content": "x"}, "eval_count": 1, "eval_duration": 0},
+        )
+
+    for engine in (LlamaCppEngine(client=transport(llama)), OllamaEngine(client=transport(ollama))):
+        out = await engine.generate(req())
+        # one token, no decode after it: TTFT equals the whole call
+        assert out.time_to_first_token_s == out.latency_s
 
 
 async def test_llamacpp_schema_request_sets_response_format() -> None:
