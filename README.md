@@ -118,16 +118,16 @@ NomadicBrain is the planning layer above the models, and it is **not a model**. 
 - [Tools](src/nomadicos/tools/) - Filesystem, terminal, process, desktop and docker bricks with workspace path confinement. Processes they start are marked so they cannot widen owner authority.
 - [Terminal](src/nomadicos/tools/terminal.py) - One-shot `execute` plus per-task interactive sessions (`open`, `send`, `read`, `close`) that only the opening task can see. Launched GUI programs no longer hold a step until timeout.
 - [Process](src/nomadicos/tools/process.py) - `list`, `launch` (detached app) and `stop`, which refuses NomadicOS itself, its host, other users' and core Windows processes.
-- [Desktop](src/nomadicos/desktop/) - Screenshots, mouse and keyboard, window listing, and Windows UI Automation (`ui_tree`, `ui_find`, `ui_invoke`, `ui_set_value`, `ui_focus`) so a task acts on a control by name or automation id instead of by pixel. Password fields never report their value. Needs the `desktop` extra.
+- [Desktop](src/nomadicos/desktop/) - Screenshots, mouse and keyboard, window listing, and Windows UI Automation (`ui_tree`, `ui_find`, `ui_invoke`, `ui_set_value`, `ui_focus`) so a task acts on a control by name or automation id instead of by pixel. Raw keyboard and mouse input is refused unless the window in front is the exact window the task observed, or the one it names in `window`, so a popup that steals focus never receives the keystrokes. Password fields never report their value. Needs the `desktop` extra.
 - [Verification](src/nomadicos/verification/) - Evidence collection, step verification and goal verification across 14 completion predicate types, with a vision seam. A step whose expected evidence has not shown yet keeps working on the same step (up to `budget.max_attempts_per_step`) without spending a recovery.
 
 ### Planning & Models
 
-- [NomadicBrain](src/nomadicos/brain/) - Cognitive-control layer: state, task graph, decomposer, actor, two-stage monitor, deliberation, reality loop, attention, effort budgets and metacognition. Deterministic plan-quality checks reject plans that cannot plausibly reach the goal and feed the problems back for a bounded repair, then fail closed. Off in code defaults, on in `config/config.yaml` (`orchestration.brain_planner` / `brain_actor`).
+- [NomadicBrain](src/nomadicos/brain/) - Cognitive-control layer: state, task graph, decomposer, actor, two-stage monitor, deliberation, reality loop, attention, effort budgets and metacognition. Deterministic plan-quality checks reject plans that cannot plausibly reach the goal and feed the problems back for a bounded repair, then fail closed. Plans declare the facts they don't know yet; the actor reads them from real sources (fetched pages arrive as text, as data), and successful reads become observed facts. A desktop goal with nothing to look up never triggers a web read. In real missions the propose step can also run adaptive control, deliberation (predict, evaluate, select) and per-role model routing. `nomadicos trace <task>` rebuilds a run's per-cycle brain trace. Off in code defaults, all on in `config/config.yaml` (`orchestration.brain_planner`, `brain_actor`, `brain_adaptive`, `brain_deliberation`, `brain_role_routing`).
 - [Agents](src/nomadicos/agents/) - Planning, repository inspection, coding worker and critic (`ACCEPT` / `IMPROVE` / `REJECT`) with bounded context and structured reports.
 - [Router](src/nomadicos/router/) - Deterministic model selection from task requirements, capability fit and health, with bounded escalation.
-- [Registry](src/nomadicos/registry/) - Scans `models/` and the Ollama store, tracks health and quality, and handles canary and promotion.
-- [Inference](src/nomadicos/inference/) - One engine contract for llama.cpp (primary), Ollama (fallback), opt-in cloud (OpenRouter or any OpenAI-compatible endpoint) and a deterministic mock, with schema-validated structured output.
+- [Registry](src/nomadicos/registry/) - Uses `models/` as the only local model inventory (Ollama models get there through `models --sync-ollama`), adds admitted cloud models when cloud is on, tracks health, latency and quality, and handles canary and promotion. Time-to-first-token comes from the server's own decode timings, and is left empty when the server reports none. A cloud fallback's outcome is credited to the model that actually answered.
+- [Inference](src/nomadicos/inference/) - One engine contract for llama.cpp (primary), Ollama (fallback), opt-in cloud (OpenRouter, a local OmniRoute gateway, or any OpenAI-compatible endpoint) and a deterministic mock, with schema-validated structured output.
 
 ### Runtime & Memory
 
@@ -138,7 +138,7 @@ NomadicBrain is the planning layer above the models, and it is **not a model**. 
 
 ### Owner Surfaces
 
-- [CLI](src/nomadicos/cli/) - The `nomadicos` command: health, models, permissions, run, run-many, code, tasks, task, resume.
+- [CLI](src/nomadicos/cli/) - The `nomadicos` command: health, models, permissions, run, run-many, code, tasks, task, trace, resume.
 - [Owner API](src/nomadicos/api/) - FastAPI surface on loopback, behind a per-process owner token. Refuses to start inside a task process.
 - [Owner console](frontend/) - React + Vite web console: launch goals, follow runs, answer conflicts, manage authority, inspect models.
 
@@ -158,6 +158,7 @@ NomadicBrain is the planning layer above the models, and it is **not a model**. 
 - `nomadicos run-many goals.json` - Run independent goals at once (`--parallel N`).
 - `nomadicos code "<goal>"` - Coding task through the CodingWorker: `--repo`, `--test-command`, `--require-file`, `--require-contains path:text`, `--critic <model>`.
 - `nomadicos tasks` / `nomadicos task <id>` / `nomadicos resume <id>` - List durable tasks, show one, or resume one (including `WAITING_OWNER`).
+- `nomadicos trace <id>` - Print a task's reconstructed NomadicBrain trace as canonical JSON.
 
 `permissions` is the owner surface: model and automation code must not call it, and a process started by a NomadicOS task is refused `grant-full` and `answer`.
 
@@ -188,23 +189,25 @@ Settings live in `config/config.yaml`, overridden in this order: `built-in defau
 - `persistence.persistence_backend` / `NOMADICOS_PERSISTENCE_BACKEND` - `file` (default) or `postgres`.
 - `POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` - default `localhost:5433`, database and user `nomadicos`.
 - `orchestration.max_concurrent_missions` - parallel mission cap (default `3`).
+- `orchestration.brain_*` - NomadicBrain switches (planner, actor, adaptive, deliberation, role routing); all off in code, on in the committed config.
+- `cloud.*` - Opt-in cloud inference; off in code, **on** in the committed config (free models only).
 
-> **Heads up:** the committed `config/config.yaml` sets `llama_server_bin: C:/Ai/llama.cpp/llama-server.exe`, a path from the author's machine. Override it with `NOMADICOS_LLAMA_SERVER_BIN`. A missing binary is reported, never silently substituted.
+> **Heads up:** the committed `config/config.yaml` is the author's development setup. It sets `llama_server_bin: C:/Ai/llama.cpp/llama-server.exe` (override it with `NOMADICOS_LLAMA_SERVER_BIN`; a missing binary is reported, never silently substituted) and turns cloud inference on for OpenRouter and a local OmniRoute gateway. Set `cloud.enabled: false` to stay local-only.
 
-Model roles (`reasoning`, `coding_worker`, `worker`) map to GGUF files in the `models:` section; a role that points at a missing file is reported, never swapped. Copy `.env.example` to `.env` for local overrides; real secrets belong in the OS credential store.
+Optional model roles (`tiny`, `worker`, `coding_worker`, `reasoning`, `coding_escalation`, `critic`) can pin GGUF files in the `models:` section; the committed config leaves it empty, so the router picks from whatever is in `models/`. A role that points at a missing file is reported, never swapped. Copy `.env.example` to `.env` for local overrides; real secrets belong in the OS credential store.
 
 ### Running Models
 
 - **llama.cpp** (primary) - Serves GGUF files from `models/` directly.
 - **Ollama** (fallback) - `ollama pull nomic-embed-text` for semantic-memory embeddings. `nomadicos models --sync-ollama --apply` links existing Ollama models into `models/`.
-- **Cloud** (opt-in, development) - Put `OPENROUTER_API_KEY` in the environment, copy the `cloud:` block from [`config/config.cloud.example.yaml`](config/config.cloud.example.yaml), set `enabled: true` and list `allowed_models` (empty allows nothing). `free_only` (default on) admits only models whose current catalog prices are zero, with no paid fallback. Cloud models get no tool or authority access. Tested against fakes only.
+- **Cloud** (opt-in, development) - Put `OPENROUTER_API_KEY` (and `OMNIROUTE_API_KEY` for the gateway) in the environment or `.env`. The committed config already has a `cloud:` block with `enabled: true`; elsewhere, copy it from [`config/config.cloud.example.yaml`](config/config.cloud.example.yaml), set `enabled: true` and list `allowed_models` (empty allows nothing). `free_only` (default on) admits only models whose current catalog prices are zero, with no paid fallback; a provider's `free_models` lets the owner declare free ids its catalog leaves unpriced (traces mark them `declared_by=owner`). Cloud models get no tool or authority access, and their proposals pass the same gates as local ones. Lightly exercised live with free OpenRouter models; the OmniRoute gateway is wired but not yet proven on a live mission.
 - **Mock** - Deterministic tests.
 
 Hardware guidance: 16 GB+ RAM and an 8 GB+ VRAM NVIDIA GPU recommended (8 GB RAM practical minimum); real needs depend on model size, quantization and context length.
 
 ### Running Missions in Parallel
 
-`nomadicos run-many goals.json` takes a list of `{"goal": "...", "constraints": [], "predicates": []}`. Missions are isolated by task ID; only desktop actions are serialized through an exclusive lease (`budget.desktop_lease_timeout_s`). A mission that needs an owner decision stops as `WAITING_OWNER`; answer it with `nomadicos resume`. Use PostgreSQL for parallel runs. Tested with fakes; no live parallel run yet.
+`nomadicos run-many goals.json` takes a list of `{"goal": "...", "constraints": [], "predicates": []}`. Missions are isolated by task ID; only desktop actions are serialized through an exclusive lease (`budget.desktop_lease_timeout_s`). A mission that needs an owner decision stops as `WAITING_OWNER`; answer it with `nomadicos resume`. Use PostgreSQL for parallel runs. Tested mainly with fakes; in one live two-mission run on free cloud models, the desktop mission reached `SUCCESS` and the coding mission did not finish in the captured log.
 
 ### Using the Development Database
 
@@ -224,6 +227,8 @@ It listens on host port `5433`, keeps data in the `postgres-data` volume, and ne
 
 **Least privilege.** A sensitive action needs both a capability inside the configured ceiling (`autonomy.capabilities`) and an explicit, persistent owner grant; configuration alone authorizes nothing. The default ceiling, in code and in the committed config, is `FULL_PC_AUTONOMY` (`filesystem.*`, `terminal.*`, `git.*`, `process.*`, `desktop.*`), and a missing YAML does not narrow it, so set `autonomy.capabilities` explicitly to restrict it.
 
+**Input lands where it was aimed.** Desktop keystrokes, clicks and scrolls go to the window Windows has in front, so the desktop brick checks that window first. It must be the same window instance (handle, process id and process start time) the task last observed, or match the title the proposal names, and a click must land on that app's own windows. Anything else fails the step instead of typing into whatever took focus.
+
 ## Verification
 
 <p align="center">
@@ -235,10 +240,10 @@ Task status is one of `CREATED`, `RUNNING`, `RECOVERING`, `WAITING_OWNER`, `SUCC
 ## Status
 
 <p align="center">
-  <img width="1200" alt="Status v0.2.0. Implemented and tested: contracts, Action IR, owner authority; inference, registry, routing; filesystem, terminal, process tools; executor with durable ledger; LangGraph orchestration and recovery; goal verification with 14 predicates; coding worker and critic; durable restart on PostgreSQL 16; NomadicBrain planning and MAP loop; skills and security-research lane; owner API and console; multi-agent missions; plan-quality checks; append-only scrubbed audit log. Partial: cloud inference and parallel missions (fakes only); brain deliberation (partly tested); docker tool (no dedicated tests); desktop control (Windows foundation); semantic memory and object graph; vision verification (seam only); evaluation-driven routing. Not yet: brain trace reconstruction; CI on Linux and Windows." src="assets/diagrams/status.svg">
+  <img width="1200" alt="Status v0.2.0. Implemented and tested: contracts, Action IR, owner authority; inference, registry, routing; filesystem, terminal, process tools; executor with durable ledger; LangGraph orchestration and recovery; goal verification with 14 predicates; coding worker and critic; durable restart on PostgreSQL 16; NomadicBrain planning, MAP loop and trace reconstruction; skills and security-research lane; owner API and console; multi-agent missions; plan-quality checks; append-only scrubbed audit log; CI on Linux and Windows. Partial: cloud inference (free models only, lightly live); parallel missions (one live run); brain deliberation (partly tested); docker tool (no dedicated tests); desktop control (Windows foundation); semantic memory and object graph; vision verification (seam only); evaluation-driven routing. Not yet: measured live reliability; images sent to vision models." src="assets/diagrams/status.svg">
 </p>
 
-Latest live result: a brain-planned research → write code → run → save output goal with two content predicates reached `SUCCESS` on an 8B local model over llama.cpp (one run, three recoveries; reliability not yet measured). Durable restart evidence is in the [Phase 13 Qualification Report](Phase_13_Qualification_Report.md). Vision is a seam only: the engines don't forward images and the vision verifier has no tests. Validated mainly on one Windows machine.
+Latest live result: a brain-planned research → write code → run → save output goal with two content predicates reached `SUCCESS` on an 8B local model over llama.cpp. Across 11 repeated runs it succeeded about 6 times in 10; that sample is too small to call reliability measured, and the remaining failure is the model checking for `output.txt` instead of writing it. Durable restart evidence is in the [Phase 13 Qualification Report](Phase_13_Qualification_Report.md). On the desktop, a live run wrote text into a Notepad window through UI Automation (`PARTIAL`, since that goal had no completion check), and the input guard refused raw keystrokes while another app was in front. Vision is a seam only: the engines don't forward images and the vision verifier has no tests. Validated mainly on one Windows machine.
 
 ## Testing
 
@@ -248,7 +253,7 @@ uv run ruff check . && uv run ruff format --check .
 uv run mypy src/nomadicos
 ```
 
-About 1,500 test functions across 22 test packages. Markers split the suite by what it needs:
+About 1,700 tests across 21 test packages; CI runs lint and types on Windows and the unit suite on Linux and Windows, plus PostgreSQL integration tests on Linux. Markers split the suite by what it needs:
 
 - *(none)* / `security` / `slow` - Nothing external.
 - `integration` - Live PostgreSQL.
@@ -301,4 +306,4 @@ Proprietary. The source is visible, but reuse is governed by [LICENSE](LICENSE).
 
 ---
 
-**Note**: NomadicOS runs local-first by default. Cloud inference is opt-in, and every model, local or cloud, is an untrusted proposal source with no tool or authority access.
+**Note**: NomadicOS runs local-first by default. Cloud inference is opt-in (off in code; the committed development config turns it on), and every model, local or cloud, is an untrusted proposal source with no tool or authority access.
